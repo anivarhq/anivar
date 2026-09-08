@@ -1,0 +1,65 @@
+/* v28: Review "History" view — full-height column: back bar + player + timeline. */
+
+.root {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-base, var(--bg-base));
+  animation: fade-in 160ms ease-out;
+}
+
+/* ── Back bar ── */
+.topbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgb(var(--ink) / 0.07);
+}
+.backBtn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 12px;
+  font-size: 13px; font-weight: 600; color: #fff;
+  border-radius: 10px;
+  border: 1px solid rgb(var(--ink) / 0.16);
+  background: rgb(var(--ink) / 0.07);
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+.backBtn:hover { background: rgb(var(--ink) / 0.15); }
+.title {
+  font-size: 13px; font-weight: 600; color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+.spacer { margin-left: auto; }
+
+/* ── Player — fills the remaining space; ClipOverlay is absolute inset:0 ── */
+.playerArea {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: #000;
+}
+.placeholder,
+.offOverlay {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; text-align: center; padding: 24px;
+  color: rgb(var(--ink) / 0.5);
+  font-size: 13px;
+}
+.offOverlay strong { color: var(--status-warn); font-size: 15px; font-weight: 700; }
+.offOverlay span { color: rgb(var(--ink) / 0.55); max-width: 320px; }
+
+/* ── Timeline drawer (HistoryDrawer renders its own filter bar + timeline) ── */
+.timelineArea {
+  flex-shrink: 0;
+  border-top: 1px solid rgb(var(--ink) / 0.07);
+  background: var(--bg-base);
+}
+
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }

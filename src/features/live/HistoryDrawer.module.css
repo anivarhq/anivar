@@ -1,0 +1,72 @@
+/* v16: timeline-only History drawer. The HorizontalTimeline sets its own
+ * intrinsic height (~108px). No transport, no thumbnail rail. */
+
+.drawer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: rgba(11, 11, 15, 0.65);
+}
+
+/* v19: severity filter row — same chips NVR uses.
+ * Sits flush above the HorizontalTimeline. */
+.filterBar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-bottom: 1px solid rgb(var(--ink) / 0.05);
+}
+.filterChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: rgb(var(--ink) / 0.65);
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgb(var(--ink) / 0.04);
+  border: 1px solid rgb(var(--ink) / 0.08);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast, 140ms) var(--ease-out, ease-out),
+    color var(--dur-fast, 140ms) var(--ease-out, ease-out),
+    border-color var(--dur-fast, 140ms) var(--ease-out, ease-out);
+}
+.filterChip:hover { color: #fff; background: rgb(var(--ink) / 0.08); }
+/* A 2% background lift was the entire active state. Now that the chip's border
+ * colour actually renders (it was `var(--status-alert)99` - invalid CSS, so the
+ * browser dropped it), give the selected filter a real presence. */
+.filterChipActive {
+  background: rgb(var(--ink) / 0.12);
+  font-weight: 800;
+}
+
+/* Moved out of the timeline track, where it painted over the events. */
+.hint {
+  margin-left: auto;
+  font-size: 9px;
+  color: rgb(var(--ink) / 0.3);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.filterDot {
+  width: 6px; height: 6px; border-radius: 999px;
+}
+
+/* v19: empty-state pill — overlays the timeline center when neither
+ * segments nor events fall inside the selected day. */
+.empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgb(var(--ink) / 0.55);
+  letter-spacing: 0.04em;
+}

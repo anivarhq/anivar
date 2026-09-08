@@ -1,0 +1,61 @@
+# Keeps dependencies from rotting. Without this, a project sits on whatever
+# versions it happened to have on day one — which is how a security fix goes
+# unnoticed for a year.
+#
+# Grouped on purpose: ~200 crates and ~40 npm packages would otherwise open a
+# wall of individual PRs every week, and a review queue nobody reads is the same
+# as no review at all. Patch + minor bumps arrive as ONE PR per ecosystem; majors
+# come separately because they are the ones that actually need reading.
+#
+# CI gates every PR: clippy with `-D warnings`, cargo check, cargo test, plus the
+# frontend typecheck and tests. A bump that breaks something cannot land silently.
+version: 2
+
+updates:
+  # ── Rust ────────────────────────────────────────────────────────────────────
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      rust-patch-minor:
+        patterns: ["*"]
+        update-types: ["patch", "minor"]
+    ignore:
+      # Pinned deliberately — `ort` release candidates change EP wiring between
+      # RCs, and the TensorRT lane is tied to this exact build. Bump it as a
+      # considered change, not automatically.
+      - dependency-name: "ort"
+      - dependency-name: "ort-sys"
+    commit-message:
+      prefix: "deps"
+
+  # ── Frontend ────────────────────────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      npm-patch-minor:
+        patterns: ["*"]
+        update-types: ["patch", "minor"]
+    commit-message:
+      prefix: "deps"
+
+  # ── CI actions ──────────────────────────────────────────────────────────────
+  # Actions pinned to a major (checkout@v4 etc.) still drift; this catches the
+  # deprecations that otherwise surface as a red build on an unrelated PR.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"

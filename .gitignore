@@ -1,0 +1,96 @@
+# ─── Node / Vite ─────────────────────────────────────────────────────────────
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnp.*
+
+# ─── Rust / Cargo / Tauri ────────────────────────────────────────────────────
+src-tauri/target/
+src-tauri/Cargo.lock.bak
+target/
+**/*.rs.bk
+*.pdb
+
+# Tauri-generated bundles
+src-tauri/gen/
+src-tauri/WixTools/
+
+# ─── Mobile (Capacitor / Android) ────────────────────────────────────────────
+mobile/node_modules/
+mobile/dist/
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/local.properties
+mobile/android/.idea/
+mobile/android/*.iml
+mobile/ios/build/
+mobile/ios/Pods/
+mobile/ios/DerivedData/
+
+# ─── Secrets / runtime data (never commit) ───────────────────────────────────
+.env
+.env.local
+.env.*.local
+secrets.json
+*.pem
+*.key
+*.crt
+*.p12
+
+# Local ONNX model weights (users download via the Skills UI)
+src-tauri/models/*.onnx
+src-tauri/models/*.pt
+src-tauri/models/*.engine
+
+# SQLite databases that may end up checked out by mistake
+*.db
+*.db-journal
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# ─── IDE / editor ────────────────────────────────────────────────────────────
+.vscode/
+!.vscode/extensions.json
+!.vscode/launch.json.example
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ─── Logs and ad-hoc scratch ─────────────────────────────────────────────────
+*.log
+logs/
+tmp/
+scratch/
+*.orig
+*.rej
+
+# ─── Claude Code / agent state (user-specific, contains absolute paths) ──────
+.claude/
+
+# Internal competitive gap analysis — names other products throughout, which is the
+# whole point of the document, so it can't be scrubbed without becoming meaningless.
+# Kept locally, not published.
+docs/SOTA_ANALYSIS.md
+
+# Bundled first-run assets — fetched by CI (release.yml), not committed (137MB+).
+src-tauri/resources/ffmpeg.exe
+src-tauri/resources/ffmpeg-linux
+src-tauri/resources/skills/
+
+# ONNX Runtime execution-provider DLLs. Bundled as resources by
+# tauri.windows.conf.json but NOT committed: onnxruntime_providers_cuda.dll alone
+# is 92 MB, past GitHub's 50 MB recommendation, and a blob that big is permanent.
+# They need no download — `ort` (download-binaries + copy-dylibs) already puts them
+# in target/<profile>/ during the Rust build; scripts/sync-ort-dlls.ps1 stages them,
+# and scripts/app-build.bat --bundle does that automatically.
+src-tauri/binaries/onnx/*.dll

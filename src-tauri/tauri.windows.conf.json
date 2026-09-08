@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "binaries/onnx/onnxruntime_providers_shared.dll": "onnxruntime_providers_shared.dll",
+      "binaries/onnx/onnxruntime_providers_cuda.dll": "onnxruntime_providers_cuda.dll",
+      "binaries/onnx/onnxruntime_providers_tensorrt.dll": "onnxruntime_providers_tensorrt.dll",
+      "binaries/onnx/onnxruntime_providers_nv_tensorrt_rtx.dll": "onnxruntime_providers_nv_tensorrt_rtx.dll"
+    }
+  }
+}

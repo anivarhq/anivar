@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+
+  <!--
+    Windows application manifest. It exists for ONE line: dpiAwareness.
+
+    WebView2 requires PerMonitorV2. Without it the process ends up
+    PER_MONITOR_AWARE (v1) — tao calls the older `SetProcessDpiAwareness`, which
+    cannot express V2 — and WebView2 then treats the window's PHYSICAL client size
+    as its CSS viewport while still rasterising at devicePixelRatio. On any
+    display above 100% the page is laid out dpr times too large for its window.
+    Measured on a 125% display:
+
+        native client   1280 x 800 device px
+        page laid out   1280 x 800 CSS px  ->  1600 x 1000 device px
+        cut off         320 px right, 200 px bottom
+
+    Every screen silently lost its right and bottom fifth. In the Review player
+    that is precisely where the Timeline / Bookmark / Export buttons and the whole
+    scrubbable timeline live, so they rendered off-window and were unreachable.
+    The timeline was never broken — it could not be seen.
+
+    Why a manifest and not a runtime call: a process's DPI awareness is locked by
+    whoever sets it first, and tao sets v1 during its own startup. Calling
+    `SetProcessDpiAwarenessContext` from `main` loses that race (verified: the
+    import is in the binary, the window still came up v1). A manifest is applied
+    at process creation, before any code runs, so tao's call simply fails.
+
+    Why ONLY dpiAwareness, with no <dpiAware> sibling: with both present Windows
+    took `true/pm` — plain per-monitor v1 — and ignored PerMonitorV2, leaving the
+    exact bug this file is here to fix. The 2005 element is for pre-Windows-10
+    hosts, and this app needs WebView2, which is Windows 10+. Do not add it back.
+
+    Verify after touching this file, do not assume:
+      * GetAwarenessFromDpiAwarenessContext on the main window -> PER_MONITOR_AWARE_V2
+      * in the page, innerWidth * devicePixelRatio == native client width
+      * devicePixelRatio stays > 1 (dpr 1 means Windows is bitmap-upscaling and
+        the whole UI has gone soft — that is a different failure, not a fix)
+  -->
+
+  <!-- Visual styles. Tauri's default manifest carries this; replacing the
+       manifest means carrying it too, or common controls render unthemed. -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+
+  <!-- PerMonitorV2 is only honoured when the app declares Windows 10 support. -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/> <!-- 10 / 11 -->
+    </application>
+  </compatibility>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+    </windowsSettings>
+  </application>
+
+</assembly>

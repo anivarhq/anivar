@@ -1,0 +1,528 @@
+/**
+ * Anivar — design system.
+ *
+ * Colour method (this is the part that matters):
+ *   1. ROLE, not hue. A token says what a colour is FOR. Nothing in a component
+ *      should ever name a colour.
+ *   2. Hold luminance, cut saturation. "Classic, not bright" is a SATURATION
+ *      property, not a darkness one — a true heritage red (#A6192E) is 2.62:1 on
+ *      this canvas and simply illegible. The accent below is 4.94:1 at 50%
+ *      saturation, against the 84% of the neon it replaces.
+ *   3. ONE accent. Every accent-dependent value is DERIVED from `--accent` via
+ *      color-mix, so it is structurally impossible for a second colour to leak
+ *      back in (the old multi-accent themes left green everywhere).
+ *   4. Colour is never the only signal. Severity always ships an icon/label too.
+ *
+ * Every value here is contrast-checked against --bg-canvas; the ratio is noted
+ * where it constrains the choice.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+:root {
+  /* ── Ink — the white that lifts a surface ─────────────────────────────
+   * On this graphite canvas the only way to raise something is to add white.
+   * Every hairline, hover fill and scrim is written `rgb(var(--ink) / <alpha>)`
+   * — ~300 call sites — so the amount of lift is the only variable. Kept as a
+   * space-separated triplet so each site applies its own alpha.
+   *
+   * Shadows and video scrims are NOT written against this: they are black, and
+   * live in --shadow-* below. */
+  --ink: 255 255 255;
+
+  /* ── Highlight — white, in portions ───────────────────────────────────
+   * The colour of SELECTION. Before this, `--accent-glow` (red at 12%) filled
+   * every selected row, tab and chip while the accent also tinted the mark on
+   * top and threw a red drop-shadow behind it — three reds for one signal, in
+   * ~20 places. An identity colour used that liberally stops signifying
+   * anything.
+   *
+   * So: white lifts, red marks. The surface under a selection is neutral; the
+   * accent stays for the icon on it, links, focus rings and alerts — the iOS
+   * tab-bar / macOS sidebar split. --bg-hover / --bg-active remain for OPAQUE
+   * rows; these two are translucent so they also work over glass and video. */
+  --hl:      rgb(var(--ink) / 0.10);
+  --hl-edge: rgb(var(--ink) / 0.22);
+
+  /* ── Backgrounds — warm graphite, elevation via luminosity ────────────
+   * Genuinely warm (hue ~25-30°, sat 4-6%). The previous ramp claimed to be
+   * warm but was violet (hue 250°, sat up to 22%), which is what made every
+   * warm accent read muddy on top of it. */
+  --bg-canvas:   #0D0C0B;   /* the ALWAYS-opaque bottom layer (App root) */
+  --bg-base:     #0D0C0B;   /* canvas */
+  --bg-surface:  #151312;   /* panels, sidebar */
+  --bg-elevated: #1E1B19;   /* cards, popovers */
+  --bg-card:     #1E1B19;   /* alias — was USED but never defined */
+  --bg-hover:    #262220;   /* interactive rows (declared exactly once) */
+  --bg-active:   #2F2A27;   /* pressed */
+  --bg-glass:    rgba(30, 27, 25, 0.70);
+  --bg-overlay:  rgba(5, 4, 4, 0.88);   /* modal backdrop */
+  --bg:          var(--bg-base);        /* alias — was used with a fallback */
+
+  /* ── Borders / separators ────────────────────────────────────────────── */
+  --border:        rgb(var(--ink) / 0.06);
+  --border-strong: rgb(var(--ink) / 0.12);
+  --border-accent: color-mix(in srgb, var(--accent) 30%, transparent);
+  --border-focus:  var(--accent);
+  --border-green:  color-mix(in srgb, var(--status-ok) 34%, transparent);
+
+  /* ── Accent — one red, TWO roles ──────────────────────────────────────
+   * `--accent` is for marks ON the background: icons, links, focus rings,
+   * selection, hairlines. 4.94:1.
+   * `--accent-fill` is for fills BEHIND text. The accent itself cannot do this
+   * job — white on it is only 3.95:1 — which is exactly why the old primary
+   * button had to hardcode a dark ink and shipped GREEN ink on every theme.
+   * White on --accent-fill is 9.34:1. */
+  --accent:       #C9605C;
+  --accent-light: #D97F7A;   /* hover */
+  --accent-dim:   #A94B48;   /* pressed */
+  --accent-fill:  #7E2A28;   /* filled buttons/badges */
+  --on-accent:    #FFFFFF;   /* ink on --accent-fill */
+  --accent-glow:  color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-ring:  color-mix(in srgb, var(--accent) 22%, transparent);
+
+  /* ── Semantic status — four colours, dark-tuned (low sat, high luminance)
+   * Alert IS the brand red: in a security appliance the identity colour and the
+   * alarm colour being one thing is coherent, and it keeps the palette small.
+   * Severity must always carry an icon or label as well. */
+  --status-ok:    #6FA97C;   /* 7.11:1 — normal / healthy / recognised */
+  --status-warn:  #C9A25E;   /* 8.20:1 — monitor / detection */
+  --status-alert: var(--accent);  /* 4.94:1 — alert / critical */
+  --status-idle:  #8C99A8;   /* 6.74:1 — offline / unknown */
+  --danger:       var(--accent);
+  --warn:         var(--status-warn);
+  --risk-border:  color-mix(in srgb, var(--status-alert) 34%, transparent);
+  --risk-glow:    color-mix(in srgb, var(--status-alert) 16%, transparent);
+
+  /* Legacy status aliases — kept so the ~37 var(--accent-red) call sites and
+   * friends resolve into the new system instead of a fifth palette. */
+  --accent-red:   var(--status-alert);
+  --accent-amber: var(--status-warn);
+  --accent-blue:  var(--status-idle);
+
+  /* ── Text — warm white hierarchy ────────────────────────────────────── */
+  --text-primary:   #F5F2EF;   /* 17.52:1 */
+  --text-secondary: #9A938C;   /*  6.45:1 */
+  --text-tertiary:  #7A736C;   /*  4.18:1 — smallest size that is still text */
+  --text-muted:     #5C5651;   /*  2.70:1 — DECORATIVE ONLY, never text */
+  --text:           var(--text-primary);  /* alias — was used, never defined */
+
+  /* ── Radius — generous, Benji-style ─────────────────────────────────── */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius:    12px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+  --radius-pill: 999px;
+
+  /* ── Shadows — warm-toned depth ─────────────────────────────────────── */
+  --shadow-xs:   0 1px 2px rgba(0,0,0,0.35);
+  --shadow-sm:   0 2px 8px rgba(0,0,0,0.45);
+  --shadow-md:   0 6px 20px rgba(0,0,0,0.55);
+  --shadow-lg:   0 16px 48px rgba(0,0,0,0.65);
+  --shadow-glow: 0 0 24px color-mix(in srgb, var(--accent) 18%, transparent);
+
+  /* ── Fluffy (the mascot) ────────────────────────────────────────────── */
+  --fluffy-body: #E8DCCF;
+  --fluffy-ink:  #241F1C;
+
+  /* ── Typography ──────────────────────────────────────────────────────── */
+  --font:      'Inter', -apple-system, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', monospace;
+
+  /* ── Motion — calibrated spring physics ─────────────────────────────── */
+  --spring:     cubic-bezier(0.34, 1.56, 0.64, 1);   /* characteristic overshoot — the Benji signature */
+  --ease-out:   cubic-bezier(0.16, 1, 0.3, 1);        /* snappy decelerate */
+  --ease-in:    cubic-bezier(0.55, 0, 1, 1);           /* fast snap on press */
+  --ease-std:   cubic-bezier(0.4, 0, 0.2, 1);
+  --ease:       cubic-bezier(0.16, 1, 0.3, 1);  /* alias — was used, never defined */
+  --dur-fast:   110ms;
+  --dur-base:   210ms;
+  --dur-slow:   340ms;
+}
+
+
+/* ── Reset ─────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Tell Chromium / WebView2 that we're a dark app. This makes ALL native
+ * form widgets — date/time pickers, file dialogs, autofill chrome, native
+ * scroll thumbs — render in their dark variant instead of the default light
+ * one. Specifically fixes the white calendar dropdown the date inputs open
+ * (NVR's date picker uses input.showPicker() which surfaces the OS widget). */
+:root { color-scheme: dark; }
+
+/* The little calendar/clock icon at the end of native date/time inputs is
+ * always rendered by the browser — invert it on dark so it's visible. */
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.85);
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity var(--dur-fast);
+}
+input[type="date"]::-webkit-calendar-picker-indicator:hover,
+input[type="time"]::-webkit-calendar-picker-indicator:hover,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}
+/* ── Scrollbars ─────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgb(var(--ink) / 0.07); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--ink) / 0.16); }
+
+/* ── Base ──────────────────────────────────────────────────────────────── */
+button, input, select, textarea { font-family: inherit; font-size: inherit; cursor: pointer; }
+input, textarea { cursor: text; }
+a { color: var(--accent); text-decoration: none; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Liquid Glass — Benji Taylor-inspired material.
+ *
+ *   .glass        — default surface for cards, panels, side strips
+ *   .glass-strong — heavier blur for floating dialogs / overlays
+ *   .glass-accent — green-tinted variant for highlight states
+ *
+ * Composition mirrors Apple's Liquid Glass + Family wallet's card aesthetic:
+ *   1. backdrop blur + saturation bump (real glass tints behind colour)
+ *   2. translucent tint so the underlying canvas is felt, not seen
+ *   3. inner-edge highlight stroke + soft drop shadow for depth
+ *   4. generous corner radius (24 px+) so it feels expensive
+ * Hardware-accelerated everywhere; degrades gracefully when backdrop-filter
+ * isn't supported (the tint alone still reads as a surface).
+ * ────────────────────────────────────────────────────────────────────────── */
+:root {
+  /* PERF-TONED (kept the material, cut the cost): backdrop-filter cost scales
+   * roughly with blur-radius² × area, so 22→12px / 40→20px reads nearly the same
+   * through a tint but composites at a fraction of the GPU price — the glass look
+   * stays, the compositor load drops sharply on a hybrid-GPU laptop. */
+  --glass-blur:    12px;
+  --glass-blur-lg: 20px;
+  --glass-tint:        rgba(30, 27, 25, 0.55);
+  --glass-tint-strong: rgba(21, 19, 18, 0.72);
+  --glass-tint-accent: color-mix(in srgb, var(--accent) 10%, transparent);
+  --glass-stroke:      inset 0 0 0 1px rgba(255, 255, 255, 0.07),
+                       inset 0 1px 0   rgba(255, 255, 255, 0.10);
+  --glass-shadow:      0 16px 40px rgba(0, 0, 0, 0.45),
+                       0  2px  6px rgba(0, 0, 0, 0.20);
+
+  /* How the glass edge is lit. On graphite a white rim reads as a lit pane; on
+   * an off-white ground the same rim is invisible, so light flips to a dark rim
+   * and leans on the shadow instead. See --gloss-blend below. */
+  --glass-rim-hi:  rgba(255, 255, 255, 0.32);
+  --glass-rim-lo:  rgba(0, 0, 0, 0.18);
+  --gloss-blend:   screen;
+  --gloss-opacity: 0.5;
+}
+
+.glass {
+  background: var(--glass-tint);
+  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--glass-stroke), var(--glass-shadow);
+}
+.glass-strong {
+  background: var(--glass-tint-strong);
+  backdrop-filter: blur(var(--glass-blur-lg)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--glass-blur-lg)) saturate(150%);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--glass-stroke), var(--glass-shadow);
+}
+/* Surface-aware retune of the SHARED glass tokens so every panel built on
+ * .glass / --glass-* switches uniformly with the chosen surface.
+ *   liquid  → brighter, thinner, refracted edges (where supported)
+ *   frosted → the default above
+ *   solid   → opaque */
+.surface-solid {
+  --glass-tint:        var(--bg-surface);
+  --glass-tint-strong: var(--bg-elevated);
+}
+.surface-solid .glass,
+.surface-solid .glass-strong {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   Liquid glass is scoped to BUTTONS + DROPDOWNS + the focus section only.
+   Panels / cards / lists / sidebar / settings stay SOLID (opaque) for efficiency
+   and a cleaner look — so we deliberately do NOT make --bg-surface / --bg-elevated
+   / --bg-base translucent here, and the [data-glass] panel blur is disabled.
+   Only --glass-tint / --glass-tint-strong (used by .lg / .glass dropdowns) are
+   retuned per surface, above.
+   ════════════════════════════════════════════════════════════════════════════ */
+/* No panel-level backdrop blur anymore (kept as an explicit no-op so any stray
+ * [data-glass] hooks don't reintroduce the full-screen blur that hurt perf). */
+[data-glass] {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.glass-accent {
+  background:
+    linear-gradient(180deg, var(--glass-tint-accent), transparent 80%),
+    var(--glass-tint);
+  backdrop-filter: blur(var(--glass-blur)) saturate(170%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(170%);
+  border-radius: var(--radius-xl);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent),
+    inset 0 1px 0   var(--glass-rim-hi),
+    var(--glass-shadow);
+}
+
+/* ── Real liquid glass (Apple WWDC-2025 style) ──────────────────────────────
+ * `.lg` is the refraction-capable material. Base: a light frosted backdrop +
+ * tint + top-lit specular rim (works everywhere). When the document has
+ * `.lg-refract` (Chromium / WebView2, set by LiquidGlassDefs), we ALSO route the
+ * backdrop through the SVG displacement filter so the edges bend the content
+ * behind the panel like a lens. A ::before paints the glossy specular highlight;
+ * a ::after paints a faint inner sheen so it reads as a thick pane, not a tint. */
+.lg {
+  position: relative;
+  isolation: isolate;
+  /* Lightly tinted frosted backdrop; the crisp edges + subtle sheen do the work.
+   * Tuned for CONTROL scale (buttons/segmented controls), not big panes — so the
+   * shadow is tight and the gloss restrained, reading as clean liquid glass. */
+  background: rgb(var(--ink) / 0.06);
+  border: 1px solid rgb(var(--ink) / 0.16);
+  border-radius: 13px;
+  -webkit-backdrop-filter: blur(3px) saturate(170%) brightness(1.04);
+  backdrop-filter: blur(3px) saturate(170%) brightness(1.04);
+  box-shadow:
+    /* crisp top rim */
+    inset 0 1px 0 var(--glass-rim-hi),
+    /* subtle bottom edge for thickness */
+    inset 0 -1px 0 var(--glass-rim-lo),
+    /* one tight ambient shadow — not a heavy floating pane */
+    0 4px 14px rgba(0, 0, 0, 0.30);
+}
+
+/* ── Surface: FROSTED — classic translucent glass, no refraction lens. ──────── */
+.surface-frosted .lg {
+  background: var(--glass-tint);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(145%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(145%);
+  border-color: rgb(var(--ink) / 0.10);
+  box-shadow:
+    inset 0 1px 0 var(--glass-rim-hi),
+    inset 0 0 0 1px rgb(var(--ink) / 0.06),
+    var(--glass-shadow);
+}
+.surface-frosted .lg::before { opacity: 0.4; }   /* tone the gloss down */
+.surface-frosted .lg::after  { opacity: 0.3; }
+
+/* ── Surface: SOLID — opaque, no blur (fast, minimal). ─────────────────────── */
+.surface-solid .lg {
+  background: var(--bg-elevated);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border-color: var(--border);
+  box-shadow: var(--shadow-md);
+}
+.surface-solid .lg::before,
+.surface-solid .lg::after { display: none; }
+/* Gentle specular sheen — a soft top-lit highlight, not a harsh white streak.
+ * Restrained so it reads as clean glass at control scale. */
+.lg::before {
+  content: "";
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(135deg,
+      rgba(255, 255, 255, 0.22) 0%,
+      rgba(255, 255, 255, 0.04) 18%,
+      rgba(255, 255, 255, 0) 40%),
+    radial-gradient(130% 90% at 50% -20%,
+      rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0) 65%);
+  mix-blend-mode: var(--gloss-blend);
+  opacity: var(--gloss-opacity);
+}
+/* Faint bottom counter-glow so the control reads as a thin lit pane. */
+.lg::after {
+  content: "";
+  position: absolute; left: 0; right: 0; bottom: 0; height: 45%;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(0deg,
+    rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0) 100%);
+  mix-blend-mode: var(--gloss-blend);
+  opacity: var(--gloss-opacity);
+}
+.lg > * { position: relative; z-index: 1; }
+
+/* ── Global button system ──────────────────────────────────────────────── */
+
+/* Primary */
+.btn-primary {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  /* Fill + ink, NOT the accent itself: white on --accent is 3.95:1 (fails), white
+   * on --accent-fill is 9.34:1. The old rule painted --accent with a hardcoded
+   * dark-GREEN ink, which survived every accent change. */
+  background: var(--accent-fill); color: var(--on-accent);
+  border: none; border-radius: var(--radius-pill);
+  padding: 9px 18px; font-size: 12px; font-weight: 700; letter-spacing: -0.01em;
+  transition: transform var(--dur-fast) var(--spring),
+              box-shadow var(--dur-base) var(--ease-out),
+              opacity var(--dur-fast);
+  box-shadow: 0 0 0 0 var(--accent-ring), 0 2px 8px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.btn-primary:hover {
+  transform: translateY(-1px) scale(1.01);
+  box-shadow: 0 0 0 4px var(--accent-ring), 0 4px 16px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.btn-primary:active { transform: scale(0.98); }
+
+/* Secondary */
+.btn-secondary {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  background: var(--bg-elevated); color: var(--text-secondary);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-pill);
+  padding: 8px 16px; font-size: 12px; font-weight: 600;
+  transition: background var(--dur-fast), color var(--dur-fast), transform var(--dur-fast) var(--spring);
+}
+.btn-secondary:hover { background: var(--bg-hover); color: var(--text-primary); transform: translateY(-1px); }
+.btn-secondary:active { transform: scale(0.98); }
+
+/* Ghost */
+.btn-ghost {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: none; color: var(--text-muted);
+  border: none; border-radius: var(--radius-sm);
+  padding: 6px 8px; font-size: 12px; font-weight: 500;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.btn-ghost:hover { background: var(--bg-elevated); color: var(--text-secondary); }
+
+/* Danger */
+.btn-danger {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: color-mix(in srgb, var(--status-alert) 8%, transparent); color: var(--accent-red);
+  border: 1px solid color-mix(in srgb, var(--status-alert) 18%, transparent); border-radius: var(--radius-pill);
+  padding: 8px 16px; font-size: 12px; font-weight: 600;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+}
+.btn-danger:hover { background: color-mix(in srgb, var(--status-alert) 15%, transparent); border-color: color-mix(in srgb, var(--status-alert) 30%, transparent); }
+
+/* Icon button */
+.btn-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--bg-elevated); color: var(--text-muted);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  width: 30px; height: 30px;
+  transition: background var(--dur-fast), color var(--dur-fast), transform var(--dur-fast) var(--spring);
+}
+.btn-icon:hover { background: var(--bg-hover); color: var(--text-primary); transform: scale(1.05); }
+
+/* NOTE: `.glass` is defined ONCE, further up with the other glass material
+ * tokens. A second definition used to live here and hardcoded
+ * `background: var(--bg-glass)` + a fixed 20px blur, which overrode the first —
+ * that is why the Settings "Solid" surface appeared to do nothing: its
+ * `--glass-tint` override was being ignored on every .glass element. */
+
+/* ── Pill badge ─────────────────────────────────────────────────────────── */
+.badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: var(--radius-pill);
+  font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+}
+.badge-green  { background: color-mix(in srgb, var(--status-ok) 12%, transparent);  color: var(--status-ok); }
+.badge-red    { background: color-mix(in srgb, var(--status-alert) 12%, transparent);  color: var(--accent-red); }
+.badge-amber  { background: rgba(255,149,0,0.12);  color: var(--accent-amber); }
+.badge-muted  { background: var(--bg-elevated);    color: var(--text-muted); border: 1px solid var(--border); }
+
+/* ── Universal panel header ─────────────────────────────────────────────────
+   One system. 44 px. Every panel. No exceptions.
+   ─────────────────────────────────────────────────────────────────────────── */
+.panelHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  height: 44px;
+  min-height: 44px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.panelTitle {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: -0.025em;
+  line-height: 1;
+  white-space: nowrap;
+}
+.panelActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* ── Utilities ─────────────────────────────────────────────────────────── */
+.text-accent    { color: var(--accent); }
+.text-muted     { color: var(--text-muted); }
+.text-secondary { color: var(--text-secondary); }
+.text-danger    { color: var(--accent-red); }
+.text-mono      { font-family: var(--font-mono); }
+
+/* ── Animations ─────────────────────────────────────────────────────────── */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes pop-in {
+  0%   { opacity: 0; transform: scale(0.94); }
+  60%  { transform: scale(1.02); }
+  100% { opacity: 1; transform: scale(1); }
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.fade-in  { animation: fade-in  var(--dur-base) var(--ease-out) both; }
+.slide-up { animation: slide-up var(--dur-base) var(--ease-out) both; }
+.pop-in   { animation: pop-in   var(--dur-slow) var(--spring) both; }
+
+/* v14: panel slide-from-bottom + slide-to-bottom for focus-mode Events/History
+ * panels. Pairs with a parent that animates its flex-basis so the video viewport
+ * smoothly resizes as the panel enters/exits. */
+@keyframes slide-in-bottom {
+  from { transform: translateY(8%); opacity: 0; }
+  to   { transform: translateY(0);  opacity: 1; }
+}
+@keyframes slide-out-bottom {
+  from { transform: translateY(0);  opacity: 1; }
+  to   { transform: translateY(8%); opacity: 0; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ACCENT
+   There is exactly ONE accent and it is not switchable. Every accent-dependent
+   value is derived from `--accent` at the top of this file with color-mix, so a
+   second colour cannot leak in. The previous system had five `html.accent-*`
+   classes each re-declaring seven tokens by hand — six other sites hardcoded the
+   green anyway, so picking "red" rendered a red-and-green app.
+   `applyTheme` still strips stale `accent-*` classes off <html> so existing
+   installs drop the old class cleanly.
+   ═══════════════════════════════════════════════════════════════════════════ */
+

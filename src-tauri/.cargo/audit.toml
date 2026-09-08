@@ -1,0 +1,68 @@
+# cargo-audit configuration.
+#
+# Every entry below is a documented decision, not a way to make the gate quiet.
+# The rule for adding one: the advisory must be either unreachable from this
+# codebase or unfixable from this codebase, and the reason must say WHICH, so a
+# later reader can re-check it instead of trusting this comment forever.
+#
+# Fixed rather than ignored, when the CI gate first ran for real:
+#   RUSTSEC-2026-0204  crossbeam-epoch 0.9.18 -> 0.9.20
+#   RUSTSEC-2026-0185  quinn-proto     0.11.14 -> 0.11.16
+# Both were semver-compatible bumps. Prefer that over an entry here, always.
+
+[advisories]
+ignore = [
+  # ── rsa 0.9.10 — Marvin Attack timing sidechannel ────────────────────────
+  # RUSTSEC-2023-0071. NO fixed version exists upstream; it cannot be bumped
+  # away.
+  #
+  # Unreachable here: `rsa` is pulled only by `sqlx-mysql`, and this project is
+  # SQLite-only. `sqlx` is declared with `default-features = false` precisely so
+  # the mysql and postgres drivers are never compiled — see the note in
+  # Cargo.toml. Cargo.lock still lists them because Cargo records a dependency's
+  # OPTIONAL dependencies whether or not any feature activates them, so the
+  # lockfile scan sees a crate that never reaches the binary.
+  #
+  # Re-check when: sqlx ships a version whose mysql driver drops `rsa`, or this
+  # project ever adds a non-SQLite backend — at which point this becomes live
+  # and the ignore must go.
+  "RUSTSEC-2023-0071",
+
+  # ── quick-xml 0.37.5 / 0.39.4 — two DoS advisories ───────────────────────
+  # RUSTSEC-2026-0194 (quadratic scan for duplicate attribute names) and
+  # RUSTSEC-2026-0195 (unbounded namespace-declaration allocation). Both are
+  # denial of service and both require ATTACKER-CONTROLLED XML.
+  #
+  # Not a direct dependency. It arrives through exactly two crates, neither of
+  # which parses untrusted input:
+  #   plist                     — macOS Info.plist, a file we generate
+  #   tauri-winrt-notification  — Windows toast XML, which we also generate
+  #
+  # Checked, because this is the one that would be dangerous if wrong: the
+  # ONVIF client is the only place this app parses XML from the network, and it
+  # does not use quick-xml. It scans camera responses with plain `str::find`
+  # (src/onvif.rs). quick-xml appears nowhere in our own source.
+  #
+  # Fix needs quick-xml >= 0.41, which is a semver-major bump owned by `plist`
+  # and `tauri-winrt-notification`. We cannot force it; Dependabot will pick it
+  # up when they release.
+  #
+  # Re-check when: either dependency bumps, or anything in this app starts
+  # parsing XML it did not create — an ONVIF rewrite onto a real parser would
+  # make 0194/0195 live and this entry wrong.
+  "RUSTSEC-2026-0194",
+  "RUSTSEC-2026-0195",
+]
+
+# NOTE: there is deliberately no `[output] deny = [...]` here.
+#
+# cargo-audit already fails on VULNERABILITIES, which is the gate we want.
+# Adding "unmaintained", "unsound" or "yanked" to a deny list would make the
+# build red today for 24 notices we cannot act on: the GTK3 bindings
+# (atk/gdk/gtk/…) are how Tauri renders on Linux, and `paste`,
+# `proc-macro-error*`, `ttf-parser`, the `unic-*` set, `anyhow`, `cxx`,
+# `event-listener`, `glib` and `spin` all arrive through the framework or the
+# toolchain. None is a vulnerability and none has an action available to us.
+#
+# A permanently red gate is one everybody learns to ignore, which costs more
+# than these notices do. They stay visible in the log where they can be read.

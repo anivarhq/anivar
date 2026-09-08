@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- macOS only (ignored on Windows/Linux). Tauri 2 merges this into the generated
+       Info.plist on both `dev` and bundle. REQUIRED so the app — and the ffmpeg
+       subprocess it spawns for server-side AVFoundation capture, which inherits the
+       app's TCC permission — is allowed to open the camera and microphone. Without
+       these usage strings macOS silently denies access and capture fails. -->
+  <key>NSCameraUsageDescription</key>
+  <string>Anivar uses your camera to record and monitor your security feeds.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Anivar uses the microphone to detect alarms, breaking glass, and other audio events on your cameras.</string>
+</dict>
+</plist>

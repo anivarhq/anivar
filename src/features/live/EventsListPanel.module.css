@@ -1,0 +1,11 @@
+/* v25: Wrapper-only styles. The card rendering is done by NVR's
+ * <ThumbnailStrip> which carries its own scoped CSS. */
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--ink) / 0.45);
+  font-size: 12px;
+  padding: 14px;
+}

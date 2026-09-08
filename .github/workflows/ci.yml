@@ -1,0 +1,239 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+
+jobs:
+  frontend:
+    name: Frontend (typecheck + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      # The frontend had NO test gate — `npm run build` only proves it compiles.
+      # vitest has existed in package.json the whole time and CI never ran it.
+      - run: npm run test
+      - run: npm run build
+
+  # ── Supply chain ──────────────────────────────────────────────────────────
+  # Dependabot raises version PRs, but nothing was checking whether the versions
+  # we currently pin have known vulnerabilities — so a CVE in a transitive
+  # dependency failed nothing and shipped quietly.
+  security:
+    name: Supply chain (advisories)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+
+      # Production dependencies only: a dev-only advisory cannot reach a user's
+      # machine, and failing the build on one trains people to ignore the gate.
+      #
+      # Blocks at `high` because production is CLEAN at high — 0 advisories. It
+      # briefly wasn't: `sharp` carries unfixed libvips CVEs and arrived through
+      # `@huggingface/transformers`, which existed only for a browser-side depth
+      # worker. That worker was doing anonymization in the wrong place anyway
+      # (see `get_camera_snapshot`), so removing it took the CVEs with it.
+      #
+      # Keep this strict. The moment it needs an exception, fix the dependency
+      # instead — a permanently red gate is one everybody learns to ignore.
+      - name: npm audit (production)
+        run: npm audit --omit=dev --audit-level=high
+
+      # Everything else is reported, never fatal: dev advisories are build-host
+      # risk, and the production `high` findings above still need to be SEEN.
+      - name: npm audit (full report, advisory only)
+        run: npm audit || true
+
+      - uses: dtolnay/rust-toolchain@1.97
+      # Prebuilt binary rather than `cargo install` — the latter compiles
+      # cargo-audit from source on every run, which costs minutes for nothing.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      # Fails on VULNERABILITIES. Unmaintained-crate notices are warnings by
+      # default and stay that way: "nobody has committed lately" is a thing to
+      # know, not a thing to block a security fix on.
+      - name: cargo audit
+        working-directory: src-tauri
+        run: cargo audit
+
+  backend:
+    name: Backend (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    env:
+      # This job lints and tests. It never bundles an installer — so it has no
+      # business validating bundle resources, and it used to fail doing exactly
+      # that, on Windows only, for two days.
+      #
+      # `tauri-build` does not merely CHECK `bundle.resources` at compile time,
+      # it copies them (tauri-build-2.6.1 src/lib.rs:88 `copy_resources`), and it
+      # canonicalises each path AFTER printing its rerun-if-changed line. That is
+      # why the log named a DLL and then died with a bare
+      # "The system cannot find the path specified. (os error 3)" — an io error
+      # with no context saying which path or why.
+      #
+      # It only affected Windows because the resource map lives in
+      # tauri.windows.conf.json; ubuntu and macOS declare none and passed.
+      #
+      # Rather than keep feeding it 0-byte placeholders — which is what the old
+      # "Placeholder bundle resources" step did, and which still broke — drop the
+      # requirement. TAURI_CONFIG is merged with json_patch (src/lib.rs:487), and
+      # under RFC 7386 merge-patch semantics a null value DELETES the key, so the
+      # resource map disappears and copy_resources never runs.
+      #
+      # Verified locally with src-tauri/binaries/onnx removed entirely: fails
+      # without this, exits 0 with it. release.yml does NOT set it, because that
+      # job really does bundle and must keep validating the real files.
+      TAURI_CONFIG: '{"bundle":{"resources":null}}'
+    steps:
+      - uses: actions/checkout@v4
+
+      # Linux Tauri prerequisites (webkit, libsoup, etc.)
+      - name: Install Linux Tauri prerequisites
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      # ── llama.cpp build prerequisites ────────────────────────────────────────
+      # `llama-cpp-sys-2` compiles llama.cpp from source and runs bindgen, so every
+      # platform needs cmake + ninja + libclang. Each of these cost a failed build
+      # to discover; see the notes in Cargo.toml next to the dependency.
+      - name: llama.cpp prerequisites (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get install -y cmake ninja-build libclang-dev clang
+
+      - name: llama.cpp prerequisites (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install cmake ninja llvm
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+
+      - name: llama.cpp prerequisites (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          choco install ninja -y --no-progress
+          # windows-latest ships LLVM; point bindgen at it explicitly rather than
+          # relying on PATH discovery.
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+
+      # cmake cannot find cl.exe from a plain cargo shell on Windows — the MSVC
+      # developer environment must be active for the whole build.
+      - name: MSVC developer environment (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # The Visual Studio generator fails on llama.cpp's `install` target; Ninja works.
+      - name: Select Ninja generator
+        shell: bash
+        run: echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
+
+      # PINNED, not `@stable`, specifically because the next step is
+      # `clippy -- -D warnings`. Clippy gains lints with every release, so a
+      # floating toolchain turns a green build red six weeks later with no code
+      # change — and it is unreproducible locally unless the developer happens to
+      # be on the same version. (That is exactly what happened: local clippy 1.90
+      # reported zero warnings on a tree that 1.97 rejected with 26 errors.)
+      #
+      # Bumping this is a deliberate act: change the version, run
+      #   scripts\cargo-env.bat +<version> clippy --lib --no-deps -- -D warnings
+      # locally, and fix whatever the new release added.
+      - uses: dtolnay/rust-toolchain@1.97
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      # NOTE: there is deliberately no `cargo fmt --check` gate.
+      #
+      # This codebase uses hand-aligned struct fields and trailing comments
+      # throughout, consistently and on purpose. rustfmt flattens all of it:
+      # a check run reports ~40 000 diff lines across ~2 400 hunks. Adopting
+      # rustfmt is a legitimate call, but it is a project-wide style decision
+      # and a single enormous commit — not something to smuggle in behind a
+      # green tick. Until that decision is made, CI should not assert a
+      # standard the code does not hold.
+      #
+      # To adopt it: run `cargo fmt --all`, commit it alone, and restore
+      #   - name: cargo fmt --check
+      #     run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        working-directory: src-tauri
+        # Library-only: binary linking on Windows can hit PDB-size limits in CI
+        # debug mode (LNK1318).
+        #
+        # `-D warnings` is on because the backlog is cleared: the lib reports zero
+        # clippy warnings. That is the whole value — a NEW lint fails the build
+        # instead of disappearing into 146 lines of existing noise.
+        #
+        # The five lints allowed crate-wide (and the handful allowed per-site) are
+        # justified individually at the top of src/lib.rs. If this step starts
+        # failing, fix the lint; only add an allow with a reason that survives
+        # review.
+        run: cargo clippy --lib --no-deps -- -D warnings
+
+      - name: cargo check
+        working-directory: src-tauri
+        run: cargo check --lib --all-targets
+
+      # Unit tests: log rotation bounds, the PE import parser that decides which
+      # NVIDIA runtime we need, pack-completeness, timezone/clip logic.
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test --lib
+
+      # ── Execution-provider smoke test ────────────────────────────────────────
+      # The ONLY automated proof that each platform's EP chain actually builds a
+      # session rather than merely compiling. macOS (CoreML) and Linux (CUDA lane
+      # → CPU on a GPU-less runner) have no hardware in this project, so the
+      # runners are where those paths get exercised at all.
+      - name: Fetch smoke-test model
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/smoke"
+          curl -fsSL -o "$RUNNER_TEMP/smoke/model.onnx" \
+            "https://huggingface.co/onnx-community/yolo26n-ONNX/resolve/main/onnx/model.onnx"
+          # A HuggingFace error page would be a few hundred bytes, not ~10 MB.
+          python3 -c "import os,sys; s=os.path.getsize(os.environ['RUNNER_TEMP']+'/smoke/model.onnx'); print(f'{s/1e6:.1f} MB'); sys.exit(0 if s > 1_000_000 else 1)"
+
+      - name: EP smoke test
+        working-directory: src-tauri
+        shell: bash
+        env:
+          SC_SMOKE_MODEL: ${{ runner.temp }}/smoke/model.onnx
+        run: cargo test --lib ep_smoke -- --nocapture

@@ -1,0 +1,444 @@
+/* v14: Focus-mode header strip + Export dropdown. Floats over the rounded
+ * camera viewport with a subtle gradient backdrop so the buttons stay legible
+ * regardless of the video frame underneath. */
+
+.root {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: linear-gradient(to bottom,
+    rgba(0, 0, 0, 0.55) 0%,
+    rgba(0, 0, 0, 0.25) 60%,
+    rgba(0, 0, 0, 0) 100%);
+  pointer-events: none;
+  border-radius: 0;   /* square — focus area is edge-to-edge, not a rounded tile */
+}
+
+.root > * { pointer-events: auto; }
+
+.left {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.backBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  color: #fff;
+  /* Match the transport bar's liquid recipe: thin tint + low blur so the lens
+   * refraction reads, bright rim doing the work. */
+  background: rgba(21,19,18, 0.26);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  backdrop-filter: blur(3px) saturate(190%) brightness(1.05);
+  -webkit-backdrop-filter: blur(3px) saturate(190%) brightness(1.05);
+  box-shadow:
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.5),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    inset 0 -6px 12px rgba(0, 0, 0, 0.22),
+    0 6px 18px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  transition: background var(--dur-fast, 140ms) var(--ease-out, ease-out);
+}
+.backBtn:hover { background: rgba(42,38,35, 0.75); }
+
+.name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pill {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.pillLive    { color: #fff; background: rgba(244, 63, 94, 0.85); }
+
+/* Live indicator: a bare pulsing red dot (no "LIVE" text). */
+.liveDot {
+  width: 9px; height: 9px; border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--status-alert);
+  box-shadow: 0 0 7px rgba(244, 63, 94, 0.9);
+  animation: liveDotPulse 2.2s ease-in-out infinite;
+}
+@keyframes liveDotPulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+.pillHistory { color: #1a1006; background: color-mix(in srgb, var(--status-warn) 90%, transparent); }
+.pillEvent   { color: #fff; background: rgba(139, 92, 246, 0.90); }
+.pillOff     { color: rgba(255,255,255,0.75); background: rgba(120,120,120,0.55); }
+
+/* v16: when the pill is a clickable "back to live" button. Inline-styled
+ * so reset the default <button> chrome and add a tiny hover affordance. */
+.pillClickable {
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  cursor: pointer;
+  transition: filter var(--dur-fast, 140ms) var(--ease-out, ease-out);
+}
+.pillClickable:hover { filter: brightness(1.1); }
+
+.right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ── v21: Apple-style date-nav cluster ───────────────────────────────
+ * Three segments: [‹ Today ›]  [Now]  [− 24h +]
+ * All share the same glass material and segmented shape. */
+.dateNav {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Segmented control body — multi-button group with a single shared
+ * background, hairline divider between buttons, matching corner radius. */
+.segGroup {
+  display: inline-flex;
+  align-items: stretch;
+  /* Unified liquid-glass tint — same material as .headerBtn / .backBtn so all
+   * focus-header controls read as one consistent glass. */
+  background: rgba(21,19,18, 0.26);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 10px;
+  overflow: hidden;
+  backdrop-filter: blur(3px) saturate(190%) brightness(1.05);
+  -webkit-backdrop-filter: blur(3px) saturate(190%) brightness(1.05);
+  box-shadow:
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -6px 12px rgba(0, 0, 0, 0.22),
+    0 6px 18px rgba(0, 0, 0, 0.4);
+}
+
+/* The icon-only end buttons of a segmented group. */
+.segBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 28px;
+  color: rgba(255, 255, 255, 0.85);
+  background: transparent;
+  border: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  transition: background var(--dur-fast, 140ms) var(--ease-out, ease-out),
+              color var(--dur-fast, 140ms) var(--ease-out, ease-out);
+}
+.segGroup > .segBtn:first-child,
+.segGroup > .segCenter:first-child > .segBtn {
+  border-left: 0;
+}
+.segBtn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.10);
+  color: #fff;
+}
+.segBtn:active:not(:disabled) {
+  background: rgba(255, 255, 255, 0.16);
+}
+.segBtn:disabled {
+  color: rgba(255, 255, 255, 0.25);
+  cursor: not-allowed;
+}
+
+/* Center "label" slot in the date segment — wraps a button so users can
+ * click the label to open the calendar. */
+.segCenter {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+}
+.segLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 78px;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: #fff;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--dur-fast, 140ms) var(--ease-out, ease-out);
+}
+.segLabel:hover { background: rgba(255, 255, 255, 0.10); }
+
+/* Zoom label sits inside the [− 24h +] group as a non-interactive readout. */
+.zoomLabel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 28px;
+  padding: 0 6px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.85);
+  font-variant-numeric: tabular-nums;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* "Now" button — separate from the segments so it stands out as a one-shot
+ * action. Blue tint to read as "jump to live". */
+.nowBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #fff;
+  background: rgba(10, 132, 255, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: filter var(--dur-fast, 140ms) var(--ease-out, ease-out);
+}
+.nowBtn:hover { filter: brightness(1.08); }
+.nowBtn:active { filter: brightness(0.95); }
+
+
+.headerBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #fff;
+  padding: 7px 11px;
+  border-radius: 10px;
+  /* Match the transport bar's liquid recipe: thin tint + low blur so the lens
+   * refraction reads, bright rim doing the work. */
+  background: rgba(21,19,18, 0.26);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  backdrop-filter: blur(3px) saturate(190%) brightness(1.05);
+  -webkit-backdrop-filter: blur(3px) saturate(190%) brightness(1.05);
+  box-shadow:
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.5),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    inset 0 -6px 12px rgba(0, 0, 0, 0.22),
+    0 6px 18px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  transition: background var(--dur-fast, 140ms) var(--ease-out, ease-out),
+              border-color var(--dur-fast, 140ms) var(--ease-out, ease-out);
+}
+.headerBtn:hover {
+  background: rgba(42,38,35, 0.65);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+.headerBtnActive {
+  background: color-mix(in srgb, var(--status-idle) 85%, transparent);
+  border-color: rgba(255, 255, 255, 0.30);
+}
+.headerBtnActive:hover { background: color-mix(in srgb, var(--status-idle) 95%, transparent); }
+
+/* ── Export dropdown ───────────────────────────────────────────────── */
+
+.dropdownRoot {
+  position: relative;
+}
+
+.dropdownMenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 220px;
+  padding: 6px;
+  border-radius: 14px;
+  /* Liquid glass — thin tint + strong blur so it reads as glass, not a solid
+   * card, while staying legible for menu text. */
+  background: rgba(23,21,19, 0.5);
+  backdrop-filter: blur(18px) saturate(185%) brightness(1.05);
+  -webkit-backdrop-filter: blur(18px) saturate(185%) brightness(1.05);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow:
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.45),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 16px 40px rgba(0, 0, 0, 0.55);
+  animation: pop-in var(--dur-fast, 140ms) var(--ease-out, ease-out);
+  z-index: 50;
+}
+
+.dropdownItem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.92);
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background var(--dur-fast, 140ms) var(--ease-out, ease-out);
+}
+.dropdownItem:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); }
+.dropdownItem:disabled { color: rgba(255, 255, 255, 0.35); cursor: not-allowed; }
+
+.dropdownSep {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 4px 6px;
+}
+
+/* v20: kebab menu — reuses the dropdown shell but adds an icon-prefixed
+ * row layout and a danger color for the destructive remove action. */
+.kebabRoot { position: relative; }
+.kebabMenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 200px;
+  padding: 6px;
+  border-radius: 14px;
+  background: rgba(23,21,19, 0.5);
+  backdrop-filter: blur(18px) saturate(185%) brightness(1.05);
+  -webkit-backdrop-filter: blur(18px) saturate(185%) brightness(1.05);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow:
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.45),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 16px 40px rgba(0, 0, 0, 0.55);
+  animation: pop-in var(--dur-fast, 140ms) var(--ease-out, ease-out);
+  z-index: 60;
+}
+.kebabItem {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.92);
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast, 140ms) var(--ease-out, ease-out),
+    color var(--dur-fast, 140ms) var(--ease-out, ease-out);
+}
+.kebabItem:hover { background: rgba(255, 255, 255, 0.08); }
+.kebabItemDanger { color: var(--status-alert); }
+.kebabItemDanger:hover { background: color-mix(in srgb, var(--status-alert) 14%, transparent); color: var(--status-alert); }
+.kebabSep {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 4px 6px;
+}
+.shareHeading {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.55);
+  padding: 6px 10px 4px;
+}
+
+.customPicker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px 10px;
+}
+.customLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.65);
+}
+.customLabel input {
+  font-size: 12px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 6px;
+  padding: 5px 7px;
+  color-scheme: dark;
+}
+.customActions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 2px; }
+.customCancel, .customSave {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.customCancel {
+  color: rgba(255,255,255,0.75);
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.10);
+}
+.customSave {
+  color: #fff;
+  background: color-mix(in srgb, var(--status-idle) 85%, transparent);
+}
+.customSave:hover { background: color-mix(in srgb, var(--status-idle) 95%, transparent); }
+
+/* ── Surface-aware glass for the focus-header controls ──────────────────────
+ * The top buttons sit over the video, so they keep a dark tint for legibility,
+ * but they follow the chosen surface like the rest of the app:
+ *   liquid (Chromium) → add the #lgFilter refraction lens
+ *   frosted           → plain heavier blur
+ *   solid             → opaque, no blur
+ * Targets all three shared glass surfaces + the popover menus. */
+:global(.lg-refract.surface-liquid) .backBtn,
+:global(.lg-refract.surface-liquid) .headerBtn,
+:global(.lg-refract.surface-liquid) .segGroup {
+  backdrop-filter: blur(6px) saturate(190%) brightness(1.05) url(#lgFilter);
+  -webkit-backdrop-filter: blur(6px) saturate(190%) brightness(1.05) url(#lgFilter);
+}
+:global(.lg-refract.surface-liquid) .kebabMenu,
+:global(.lg-refract.surface-liquid) .dropdownMenu {
+  backdrop-filter: blur(16px) saturate(185%) brightness(1.04) url(#lgFilter);
+  -webkit-backdrop-filter: blur(16px) saturate(185%) brightness(1.04) url(#lgFilter);
+}
+
+:global(.surface-frosted) .backBtn,
+:global(.surface-frosted) .headerBtn,
+:global(.surface-frosted) .segGroup {
+  background: rgba(21,19,18, 0.55);
+  backdrop-filter: blur(14px) saturate(180%);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+}
+
+:global(.surface-solid) .backBtn,
+:global(.surface-solid) .headerBtn,
+:global(.surface-solid) .segGroup,
+:global(.surface-solid) .kebabMenu,
+:global(.surface-solid) .dropdownMenu {
+  background: rgba(26, 25, 32, 0.96);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}

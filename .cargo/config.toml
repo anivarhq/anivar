@@ -1,0 +1,25 @@
+# Cap parallel rustc jobs. Cargo defaults to one job per CPU core (28 on this
+# host's i7-14700HX). Release compilation of the `windows` and `image` crates
+# each peaks at ~2-3 GB resident; 28 of them in parallel = instant OOM on a
+# 16 GB box. Four jobs keeps peak working-set under ~12 GB.
+[build]
+jobs = 4
+
+# NOTE: `rustflags = ["-C", "target-cpu=native"]` used to live here for free SIMD
+# in the motion/image hot loops. Removed, because it is wrong for a project that
+# ships installers, in two separate ways:
+#
+#   1. `native` targets the CPU that BUILT the binary. An installer produced on a
+#      modern machine can die with SIGILL on an older one — a crash the build
+#      machine can never reproduce.
+#   2. On aarch64-apple-darwin it makes the statically-known feature set diverge
+#      from the baseline `ring` asserts against, so the macOS build fails during
+#      const-eval inside ring:
+#        assertion failed: CAPS_STATIC == MIN_STATIC_FEATURES
+#
+# If you want the vectorisation back, choose a portable floor instead of `native`
+# — e.g. `-C target-cpu=x86-64-v2` (SSE4.2/POPCNT, ~2009+) or `v3` (AVX2, ~2015+)
+# — so you are deciding on purpose which CPUs you drop.
+#
+# For a local-only experiment, keep it out of the repo and use the environment:
+#   RUSTFLAGS="-C target-cpu=native" cargo build --release

@@ -1,0 +1,29 @@
+/* v18: Combined Events + History drawer. Two stacked sections, each with a
+ * tiny section label. No vertical scroll inside the drawer itself —
+ * events scrolls horizontally inside its own track, history's HorizontalTimeline
+ * has its own intrinsic height. */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  background: rgba(11, 11, 15, 0.55);
+  border-bottom: 1px solid rgb(var(--ink) / 0.05);
+  /* Events grid (3-per-row, vertical scroll) must not swallow the player —
+     cap the drawer section; the grid scrolls inside it. */
+  max-height: 44vh;
+}
+.section:last-child { border-bottom: none; }
+
+.sectionLabel {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: rgb(var(--ink) / 0.45);
+  padding: 6px 12px 0;
+}

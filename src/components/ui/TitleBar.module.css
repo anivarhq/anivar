@@ -1,0 +1,70 @@
+/* Custom window titlebar — thin top ribbon hosting the window controls. */
+
+.bar {
+  height: 34px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding-left: 12px;
+  user-select: none;
+  -webkit-user-select: none;
+  background: var(--bg-canvas);
+  border-bottom: 1px solid var(--border);
+  position: relative;
+  z-index: 50;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  pointer-events: none; /* let drags pass through to the bar */
+}
+.brandIcon { color: var(--accent); }
+.brandText {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary);
+}
+
+.spacer { flex: 1; }
+
+/* Window controls — Windows-native sizing: full-height, square, hover fill. */
+.controls {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+}
+
+.ctl {
+  width: 44px;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+  -webkit-app-region: no-drag;
+}
+.ctl:hover {
+  background: rgb(var(--ink) / 0.08);
+  color: var(--text-primary);
+}
+.ctl:active {
+  background: rgb(var(--ink) / 0.12);
+}
+
+/* Close gets the destructive red-fill hover, like every native titlebar. */
+.close:hover {
+  background: #e81123;
+  color: #fff;
+}
+.close:active {
+  background: #f1707a;
+  color: #fff;
+}

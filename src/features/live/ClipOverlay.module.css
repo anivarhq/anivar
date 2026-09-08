@@ -1,0 +1,340 @@
+/* v16/v17: clip <video> stacked over CameraView at the same rounded viewport.
+ * The transport bar floats on the bottom edge with proper liquid-glass styling
+ * and auto-hides after ~2.2s of mouse idle. */
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  /* Match CameraView: soft warm-dark glass, not hard black. */
+  background:
+    radial-gradient(120% 120% at 50% 30%,
+      rgba(38,34,31, 0.65) 0%,
+      rgba(14, 13, 18, 0.92) 70%,
+      rgba(10, 9, 13, 1) 100%);
+  border-radius: 0;     /* edge-to-edge with the focus area, not a floating tile */
+  overflow: hidden;
+  cursor: pointer;
+  /* Gentle fade-in on mount (no transparent-until-ready gate — that could leave
+   * events invisible if the ready signal was missed). */
+  animation: fade-in 200ms var(--ease-out, ease-out);
+}
+
+/* v24: drop the rounded corners when the player is full-screen — they read
+ * as a glitch against the all-black surrounding. */
+.overlay:fullscreen,
+.overlay:fullscreen .video,
+.overlay:fullscreen .frozenFrame {
+  border-radius: 0;
+}
+
+.video {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: var(--bg-base);  /* flat letterbox bars */
+}
+
+/* v23: frozen-frame canvas — painted with the last decoded video frame
+ * before src reload, sits BEHIND .video (well, above-but-z-indexed) so the
+ * black load gap is hidden. Crossfade out when canplay fires. */
+.frozenFrame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: transparent;
+  z-index: 3;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms var(--ease-out, ease-out);
+}
+.frozenVisible { opacity: 1; }
+
+/* v23: subtle spinner — only appears after SPINNER_DELAY_MS (500ms) of no
+ * canplay. Centered over the frozen frame so the user knows the load is
+ * still progressing. */
+.spinnerWrap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 6;
+  pointer-events: none;
+}
+.spinner {
+  color: rgba(255, 255, 255, 0.78);
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.6));
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Error overlay — surfaced when the <video> fails to load. */
+.errorOverlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 25;
+  pointer-events: none;
+  padding: 24px;
+}
+.errorBox {
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: rgba(21,19,18, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  backdrop-filter: blur(18px) saturate(180%);
+  -webkit-backdrop-filter: blur(18px) saturate(180%);
+  text-align: center;
+  color: #fff;
+}
+.errorBox strong { font-size: 13px; font-weight: 700; }
+.errorHint {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.4;
+}
+/* The overlay itself is pointer-events:none so it doesn't eat play/pause
+   clicks; re-enable pointer events on the button so it stays clickable. */
+.errorRetry {
+  margin-top: 10px;
+  align-self: center;
+  pointer-events: auto;
+  padding: 7px 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.10);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+.errorRetry:hover { background: rgba(255, 255, 255, 0.18); }
+
+/* ── standard glass transport bar ──────────────────────────────── */
+
+.controls {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  z-index: 10;  /* must sit above .video (z:2), .frozenFrame (z:3), .spinnerWrap (z:6) */
+  transform: translate(-50%, 8px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 14px;
+
+  /* Trending iOS-26 liquid glass: thin tint, bright rim, the actual refraction
+   * lens (added below under .lg-refract). A slight dark floor keeps the white
+   * control icons legible over bright video. */
+  background: rgba(21,19,18, 0.28);
+  backdrop-filter: blur(3px) saturate(190%) brightness(1.05);
+  -webkit-backdrop-filter: blur(3px) saturate(190%) brightness(1.05);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow:
+    0 16px 40px rgba(0, 0, 0, 0.5),
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.5),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.10),
+    inset 0 -12px 22px rgba(0, 0, 0, 0.28),
+    inset 0 10px 22px rgba(255, 255, 255, 0.10);
+
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 180ms var(--ease-out, ease-out),
+    transform 220ms var(--ease-out, ease-out);
+
+  cursor: default;
+  max-width: calc(100% - 28px);
+}
+/* Real liquid-glass refraction on the transport bar (Chromium/WebView2): bend
+ * the video behind the bar through the SVG displacement filter, on top of the
+ * frosting blur. Falls back to plain blur elsewhere. */
+:global(.lg-refract.surface-liquid) .controls {
+  backdrop-filter: blur(2px) saturate(190%) brightness(1.06) url(#lgFilter);
+  -webkit-backdrop-filter: blur(2px) saturate(190%) brightness(1.06) url(#lgFilter);
+}
+/* Frosted surface — classic blur, no lens. */
+:global(.surface-frosted) .controls {
+  background: rgba(18, 18, 22, 0.55);
+  backdrop-filter: blur(22px) saturate(180%);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+}
+:global(.surface-frosted) .controls::before { opacity: 0.4; }
+/* Solid surface — opaque, no blur. */
+:global(.surface-solid) .controls {
+  background: rgba(23,21,19, 0.96);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+:global(.surface-solid) .controls::before { display: none; }
+/* Glossy specular sweep across the top edge — the "wet" glass highlight. */
+.controls::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(135deg,
+      rgba(255, 255, 255, 0.5) 0%,
+      rgba(255, 255, 255, 0.10) 14%,
+      rgba(255, 255, 255, 0) 36%),
+    radial-gradient(120% 80% at 50% -10%,
+      rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 60%);
+  mix-blend-mode: screen;
+  opacity: 0.95;
+}
+
+.controlsVisible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+
+/* Buttons */
+.btn,
+.btnPlay,
+.btnSkip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;  /* above the .controls::before specular sweep */
+  z-index: 1;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 9px;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast, 140ms) var(--ease-out, ease-out),
+    border-color var(--dur-fast, 140ms) var(--ease-out, ease-out),
+    transform var(--dur-fast, 140ms) var(--ease-out, ease-out);
+}
+.btn { width: 28px; height: 28px; }
+.btnPlay {
+  width: 34px; height: 28px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+/* v25: skip buttons — wider than .btn to fit the rewind / fast-forward
+ * icon AND a tiny "10" label, so users see at a glance that ±10s is the
+ * jump amount. standard YouTube-style "rewind 10" labelling. */
+.btnSkip {
+  height: 28px;
+  padding: 0 8px;
+  gap: 4px;
+}
+.skipLabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.btn:hover, .btnPlay:hover, .btnSkip:hover {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.20);
+}
+.btn:active, .btnPlay:active, .btnSkip:active { transform: scale(0.94); }
+
+/* Volume group — speaker + slide-out slider on hover/focus.
+ * NOTE: an <input type="range"> has a large INTRINSIC width (~129px) that a
+ * plain `width: 0` doesn't reliably collapse — the flex layout can still give
+ * it min-content space, so the slider appeared permanently long. We pin every
+ * sizing axis to 0 in the collapsed state (flex-basis/min-width/max-width/
+ * width/padding/margin) and only grow them on hover. */
+.volGroup {
+  display: inline-flex;
+  align-items: center;
+  position: relative;             /* above the .controls::before specular sweep */
+  z-index: 1;
+  gap: 0;                         /* no leaked gap when the slider is collapsed */
+  padding-right: 0;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  overflow: hidden;              /* clip the slider while it animates open/closed */
+  transition:
+    background var(--dur-fast, 140ms) var(--ease-out, ease-out),
+    padding var(--dur-fast, 140ms) var(--ease-out, ease-out),
+    gap var(--dur-fast, 140ms) var(--ease-out, ease-out);
+}
+.volGroup:hover,
+.volGroup:focus-within {
+  background: rgba(255, 255, 255, 0.08);
+  gap: 6px;
+  padding-right: 8px;
+}
+.volGroup .btn {
+  background: transparent;
+  border: 0;
+  border-radius: 9px 0 0 9px;
+  flex: 0 0 auto;
+}
+
+.volSlider {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  flex: 0 0 0px;                  /* don't let flex give it intrinsic width */
+  width: 0;
+  min-width: 0;
+  max-width: 0;
+  padding: 0;
+  margin: 0;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    max-width var(--dur-fast, 140ms) var(--ease-out, ease-out),
+    width var(--dur-fast, 140ms) var(--ease-out, ease-out),
+    opacity var(--dur-fast, 140ms) var(--ease-out, ease-out);
+}
+.volGroup:hover .volSlider,
+.volGroup:focus-within .volSlider {
+  flex: 0 0 64px;
+  width: 64px;
+  max-width: 64px;
+  opacity: 1;
+}
+.volSlider::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+}
+.volSlider::-moz-range-thumb {
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+}
+
+
+/* The in-video scrubber and the scrub-preview layer lived here. Both are gone:
+ * the timeline below the player is the only scrub surface, the way Frigate's
+ * VideoControls carries buttons and a volume slider and nothing else. */
+

@@ -1,0 +1,200 @@
+[package]
+name = "anivar"
+version = "1.0.0"
+description = "Local-first, agentic AI security camera and NVR (Tauri desktop app)"
+authors = ["Ranjith Saila"]
+edition = "2021"
+rust-version = "1.78"
+readme = "../README.md"
+repository = "https://github.com/anivarhq/anivar"
+license = "Apache-2.0"
+publish = false
+keywords = ["nvr", "security-camera", "tauri", "onnx", "object-detection"]
+categories = ["multimedia::video"]
+
+[lib]
+name = "anivar_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[features]
+default = []
+# NVIDIA performance variant. `cargo build --features cuda` makes ort download the
+# CUDA build (cu12, which still includes DirectML), so the binary gets the CUDA EP
+# *in addition* to DirectML — the default build is untouched. The CUDA EP's runtime
+# (CUDA + cuDNN) is fetched on first launch by `cuda_runtime::ensure_cuda_runtime`
+# (the `zip` dep is only pulled into the cuda build).
+cuda = ["ort/cuda"]
+# Intel OpenVINO EP (NPU>GPU>CPU). Requires an ORT binary built with OpenVINO —
+# ort's prebuilt dists don't include it, so this is a source-build/power-user
+# variant (ORT_LIB_LOCATION). Runtime DLLs are downloaded by openvino_runtime.rs.
+openvino = ["ort/openvino"]
+# AMD ROCm EP (Linux). Needs a ROCm-built ORT + system ROCm. EXPERIMENTAL/UNVERIFIED.
+rocm = ["ort/rocm"]
+# GPU offload for the ON-DEVICE LANGUAGE MODEL (llama.cpp) — unrelated to the ONNX
+# execution providers above, which accelerate detection.
+#
+# Vulkan rather than CUDA: it needs no toolkit-version match and one binary serves
+# NVIDIA, AMD and Intel. It is NOT in `default` because building it requires the
+# Vulkan SDK (`glslc`) on the build host, and a missing SDK fails the build rather
+# than degrading — which would break every contributor's `cargo build` and CI.
+#
+#   winget install KhronosGroup.VulkanSDK   # then: scripts\app-build.bat --gpu
+#
+# At RUNTIME it degrades safely: `n_gpu_layers` falls back to CPU when no Vulkan
+# device is present, so one build still runs on a machine without a GPU.
+vulkan = ["llama-cpp-2/vulkan"]
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-updater = "2"
+# Single-instance guard: a 2nd launch focuses the running app instead of starting a
+# rival process that fights over port 8882 / the DB / the cameras (the "crashing" +
+# duplicate-instance bug). Must be the FIRST plugin registered.
+tauri-plugin-single-instance = "2"
+# Only compiled into the `cuda` build variant (extracts NVIDIA runtime wheels).
+zip = { version = "2" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Hardware introspection + auto-pick recommendations.
+# Used by `recommend.rs` to detect RAM/VRAM/GPU backend so the UI can suggest
+# the right face-recognition tier (Small vs Large) without the user guessing.
+# In-process host/telemetry probing (mature NVRs reads psutil in-process; these are the
+# Rust equivalents). sysinfo = CPU/RAM via OS APIs; nvml-wrapper = NVIDIA GPU
+# util/VRAM via nvml.dll — NO subprocesses (no nvidia-smi, no PowerShell), so
+# telemetry can't flash console windows and can't break on locale/parsing.
+sysinfo = "0.32"
+
+# On-device language model — llama.cpp compiled INTO the binary (no daemon, no
+# Ollama, nothing for the user to install). This is the architecture on-device assistants's
+# The chosen shape: a small GGUF loaded in-process, so the model's lifetime is ours and
+# an orphaned server holding 6 GB can never happen again.
+#
+# BUILD REQUIREMENTS (this crate compiles llama.cpp from source):
+#   • LLVM/libclang  — llama-cpp-sys-2 runs bindgen (set LIBCLANG_PATH)
+#   • a VS developer environment on Windows — cmake cannot find cl.exe otherwise
+#   • CMAKE_GENERATOR=Ninja — the MSBuild generator fails on the install target
+# See `docs/` and the CI workflow; a plain `cargo build` outside vcvars will fail
+# at the cmake step.
+# `mtmd` = llama.cpp's multimodal path, which is what lets the Vision tier
+# actually LOOK at a frame (MtmdContext + a projector GGUF). Part of llama.cpp's
+# own source, so it needs no SDK and no extra system dependency — unlike the
+# `vulkan` feature above, which is why that one is opt-in and this is not.
+llama-cpp-2 = { version = "0.1.153", features = ["mtmd"] }
+# Incremental UTF-8 decoding of generated tokens (a token can end mid-codepoint).
+# Already in the tree via llama-cpp-2; declared because local_llm.rs uses it directly.
+encoding_rs = "0.8"
+nvml-wrapper = "0.10"
+
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["io"] }
+
+axum = { version = "0.7", features = ["ws"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "fs", "timeout"] }
+hyper = { version = "1", features = ["full"] }
+futures = "0.3"
+async-stream = "0.3"
+
+image = { version = "0.25", features = ["jpeg"] }
+imageproc = "0.25"           # Agies-style frame annotation: bounding boxes + text labels
+ab_glyph = "0.2"             # Font renderer used by imageproc for label text
+dejavu = "2.37"              # Embeds DejaVu Sans (public domain) — no external font file needed
+base64 = "0.22"
+
+# default-features = false deliberately. The defaults include `any`, which drags
+# in sqlx-mysql and sqlx-postgres — two database drivers this project never uses
+# (it is SQLite-only, by design; see docs/ARCHITECTURE.md). They were not merely
+# dead weight: sqlx-mysql pulls `rsa`, which carries RUSTSEC-2023-0071 (Marvin
+# timing sidechannel) with NO fixed version available upstream. Nothing here can
+# reach it, but it fails `cargo audit` and it would sit in the tree forever.
+#
+# Dropped with the defaults and confirmed unused: `migrate` (schema is
+# CREATE TABLE IF NOT EXISTS in db.rs, not sqlx migrations), `json` (no
+# sqlx::types::Json), `any` (no AnyPool).
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio", "macros", "chrono"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+
+local-ip-address = "0.6"
+
+urlencoding = "2"
+hostname = "0.3"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+sha2 = "0.10"
+# Argon2id password hashing for the desktop login gate (OWASP-recommended KDF;
+# salted PHC strings) — far stronger than the legacy SHA-256 of the remote login.
+argon2 = "0.5"
+hmac = "0.12"
+aes-gcm = "0.10"
+rand = "0.8"
+mdns-sd = "0.11"
+socket2 = { version = "0.5", features = ["all"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart", "stream", "blocking"] }
+
+# ONNX inference — full Microsoft ONNX Runtime, complete operator support for YOLO26
+# download-binaries: fetches prebuilt ORT libs at build time (no system install needed)
+# copy-dylibs: places the DLL next to the executable automatically
+ort   = { version = "=2.0.0-rc.12", features = ["download-binaries", "copy-dylibs"] }
+# HuggingFace tokenizer for the Jina-CLIP text tower (semantic event search).
+# `unstable_wasm` selects the pure-Rust `fancy-regex` SysRegex instead of the
+# oniguruma C path (`mod onig` is gated `not(feature="unstable_wasm")`), so this
+# builds with no C compiler / no oniguruma. The feature also pulls `getrandom/js`,
+# which is inert on Windows native (the js backend only activates on wasm32).
+# We only use `Tokenizer::from_file` + `encode` on the packaged tokenizer.json.
+tokenizers = { version = "0.19", default-features = false, features = ["unstable_wasm"] }
+
+usearch = "2.25.3"
+apalis = { version = "0.7.4", default-features = false, features = ["limit", "retry"] }
+apalis-sql = { version = "0.7.4", features = ["sqlite"] }
+
+[target.'cfg(windows)'.dependencies]
+nokhwa = { version = "0.10", features = ["input-msmf"] }
+# Windows execution providers. `cuda`+`tensorrt` switch the pyke prebuilt to the
+# cu12 package, which carries the CUDA + classic-TensorRT + NVRTX provider DLLs
+# in ONE build (ort-sys resolve.rs: "CUDA builds include NVRTX"). DirectML stays
+# the zero-dependency fallback (any DX12 GPU); the NVIDIA providers dlopen their
+# runtimes from the managed pack at session build and fall through cleanly when
+# absent. TensorRT pairing for ORT 1.24: TRT 10.9 + CUDA 12 + cuDNN 9.
+ort = { version = "=2.0.0-rc.12", features = ["directml", "cuda", "tensorrt", "nvrtx"] }
+# DXGI adapter enumeration — so DirectML can be pinned to the DISCRETE GPU (NVIDIA/
+# AMD) by adapter index instead of defaulting to adapter 0 (the Intel iGPU on hybrid
+# laptops). Version matches the copy already pulled in transitively by Tauri.
+windows = { version = "0.61", features = ["Win32_Graphics_Dxgi", "Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security", "Win32_System_Recovery", "Win32_System_Registry", "Win32_UI_HiDpi"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+nokhwa = { version = "0.10", features = ["input-avfoundation"] }
+# CoreML execution provider — runs ONNX inference on the Apple Neural Engine + GPU.
+# Built into macOS, so NO extra runtime dependency. Features union with base ort.
+ort = { version = "=2.0.0-rc.12", features = ["coreml"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nokhwa = { version = "0.10", features = ["input-v4l"] }
+# Linux has no DirectML, so CUDA is the GPU lane. The runtime libraries are NOT
+# bundled — cuda_runtime.rs downloads NVIDIA's redistributable wheels on first
+# launch and dlopens them (LD_LIBRARY_PATH cannot be set from inside the process;
+# see the note there). Falls back to the CPU provider whenever anything is missing.
+ort = { version = "=2.0.0-rc.12", features = ["cuda"] }
+# dlopen for the managed CUDA libraries. Windows uses the DLL search path instead.
+libloading = "0.8"
+
+[profile.dev]
+debug = false  # no debug symbols — avoids MSVC LNK1318 PDB size limit with many crates
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true

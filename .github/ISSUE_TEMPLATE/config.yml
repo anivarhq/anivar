@@ -1,0 +1,16 @@
+blank_issues_enabled: false
+contact_links:
+  # FIRST, deliberately: a public issue for a vulnerability discloses it to
+  # everyone before there is a fix. This is a security camera system — it holds
+  # footage, biometric data and network credentials.
+  - name: 🔒 Report a security vulnerability (private)
+    url: https://github.com/anivarhq/anivar/security/advisories/new
+    about: |
+      Do NOT open a public issue for a security bug. This form is private to
+      the maintainers. See SECURITY.md for scope and what to expect.
+
+  - name: General questions / discussion
+    url: https://github.com/anivarhq/anivar/discussions
+    about: |
+      Please use Discussions for general questions, design proposals, or "is
+      this a bug or am I holding it wrong?" conversations.

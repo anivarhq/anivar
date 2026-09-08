@@ -1,0 +1,534 @@
+.root {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-base);
+}
+
+/* Header */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  gap: 10px;
+  flex-shrink: 0;
+  min-height: 44px;
+}
+
+.headerLeft { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; overflow: hidden; }
+.headerRight { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+
+
+
+.deviceSelect {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  outline: none;
+}
+
+.sourceChip {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.sourceLabel {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.ctrlBtn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-focus);
+  background: var(--accent-glow);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  transition: background 0.12s var(--ease);
+}
+.ctrlBtn:hover { background: color-mix(in srgb, var(--status-ok) 20%, transparent); }
+.ctrlBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.ctrlBtnIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px; height: 30px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.ctrlBtnIcon:hover { background: var(--bg-hover); color: var(--text-primary); border-color: rgba(255,255,255,0.12); }
+
+/* Feed */
+.feedWrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+  /* Apple-style: no hard black. A soft, slightly-warm dark glass with a gentle
+   * radial vignette so any letterbox area reads as an intentional surface, not
+   * a dead black bar. The blurred-frame-fill layer (.videoBlurBg) sits on top
+   * of this and is what you actually see behind contain-fit media. */
+  background:
+    radial-gradient(120% 120% at 50% 30%,
+      rgba(38,34,31, 0.65) 0%,
+      rgba(14, 13, 18, 0.92) 70%,
+      rgba(10, 9, 13, 1) 100%);
+}
+
+/* Blurred, dimmed copy of the live frame that fills the whole viewport behind
+ * the contain-fit media — Apple TV / Photos letterbox treatment. Driven by
+ * CameraView painting the latest frame into this element (img clone / canvas).
+ * pointer-events:none so it never eats clicks. */
+.videoBlurBg {
+  position: absolute;
+  inset: -8%;                 /* overscan so blur edges never show a seam */
+  width: 116%;
+  height: 116%;
+  object-fit: cover;
+  filter: blur(34px) saturate(135%) brightness(0.55);
+  transform: scale(1.06);
+  opacity: 0.9;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* v14: applied to .root when CameraView is rendered inside focus mode.
+ * Rounds the entire viewport edge and adds a soft shadow so the camera
+ * reads as a discrete card against the focus background. */
+.cornered {
+  /* Focus-mode variant: FILL the parent box absolutely so the live feed is the
+   * exact same size as the event ClipOverlay (which is also position:absolute
+   * inset:0). Without this, .root's `flex:1` collapsed because .focusCamInner
+   * isn't a flex container — that's why the live video looked smaller. The
+   * rounding + shadow now live on .focusCamInner (the shared card), so we only
+   * need to fill + inherit the clip here. */
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  overflow: hidden;
+}
+/* The feed area must clip to the same rounding so the blurred-fill layer and
+ * video corners follow the card edge. */
+.cornered .feedWrap {
+  border-radius: inherit;
+}
+
+.offState, .errorMsg {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 40px;
+}
+
+.retryBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.startBigBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 28px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-green);
+  background: var(--accent-glow);
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+  transition: background 0.12s;
+}
+.startBigBtn:hover { background: color-mix(in srgb, var(--accent) 25%, transparent); }
+
+.videoContainer {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.video {
+  width: 100%;
+  height: 100%;
+  /* contain = never crop the frame; the blurred-fill layer behind handles the
+   * letterbox area so there are no hard black bars. */
+  object-fit: contain;
+  display: block;
+  position: relative;
+  z-index: 1;
+}
+
+.overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+/* Scan line */
+
+/* HUD elements */
+.hudTL {
+  position: absolute;
+  top: 12px;
+  left: 14px;
+  pointer-events: none;
+}
+.hudTR {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  pointer-events: none;
+}
+.hudBL {
+  position: absolute;
+  bottom: 12px;
+  left: 14px;
+  pointer-events: none;
+}
+
+.hudText {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: color-mix(in srgb, var(--accent) 70%, transparent);
+  letter-spacing: 0.08em;
+  text-shadow: 0 0 8px color-mix(in srgb, var(--accent) 40%, transparent);
+  font-weight: 600;
+}
+
+/* ── Camera Setup Panel ─────────────────────────────────────────────── */
+.setupPanel {
+  width: 100%;
+  max-width: 480px;
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.setupHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 18px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+}
+.setupTitle {
+  font-size: 14px;
+  font-weight: 700;
+  flex: 1;
+}
+.setupSub {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  font-family: var(--font-mono);
+  color: var(--accent);
+}
+
+.setupTabs {
+  display: flex;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+}
+.setupTab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 10px;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border-bottom: 2px solid transparent;
+  transition: color 0.12s, border-color 0.12s;
+  cursor: pointer;
+}
+.setupTab:hover { color: var(--text-secondary); }
+.setupTabActive { color: var(--accent) !important; border-bottom-color: var(--accent) !important; }
+
+.setupBody {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 160px;
+}
+
+.setupEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 28px 16px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  flex: 1;
+}
+
+.setupRefreshBtn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.setupSectionLabel {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+/* Device list */
+.deviceList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.deviceCard {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+  width: 100%;
+}
+.deviceCard:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+.deviceCardIcon {
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius);
+  background: var(--accent-glow);
+  border: 1px solid var(--border-green);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.deviceCardIconNet {
+  background: color-mix(in srgb, var(--status-idle) 10%, transparent);
+  border-color: color-mix(in srgb, var(--status-idle) 30%, transparent);
+  color: var(--status-idle);
+}
+.deviceCardInfo {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.deviceCardName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.deviceCardSub {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.camKindBadge {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--status-idle) 12%, transparent);
+  color: var(--status-idle);
+  border: 1px solid color-mix(in srgb, var(--status-idle) 25%, transparent);
+  flex-shrink: 0;
+}
+
+/* Network scan */
+.networkToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.scanBtn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.scanBtn:hover { background: var(--bg-hover); }
+.scanBtn:disabled { opacity: 0.6; cursor: not-allowed; }
+.scanProgress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.spinnerSm {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+.spinnerMd {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+/* Manual URL */
+.manualInputRow {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.manualInput {
+  flex: 1;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  outline: none;
+}
+.manualInput:focus { border-color: var(--accent); }
+.manualInput::placeholder { color: var(--text-muted); font-family: var(--font-mono); }
+
+.urlExamples {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.urlExamplesTitle {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 4px;
+}
+.urlExample {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.urlExampleLabel {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.urlExampleCode {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  padding: 3px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-green);
+  cursor: pointer;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.urlExampleCode:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── AI status chip ──────────────────────────────────────────────────────────── */
+
+

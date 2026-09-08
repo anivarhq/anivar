@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Anivar</title>
+    <script>
+      // Apply the saved surface BEFORE first paint. React only mounts and calls
+      // applyTheme() a beat later, so without this the window paints once with
+      // no surface class and then reflows into it — a visible flash on every
+      // launch. Kept tiny, inline and failure-tolerant: it runs before anything
+      // else exists, so it must never be able to throw.
+      try {
+        var s = localStorage.getItem("sc-surface");
+        document.documentElement.classList.add("surface-" + (s === "solid" ? "solid" : "frosted"));
+      } catch (e) { document.documentElement.classList.add("surface-frosted"); }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

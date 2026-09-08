@@ -1,0 +1,478 @@
+.root { flex: 1; display: flex; flex-direction: column; overflow: clip; background: var(--bg-base); position: relative; }
+
+/* No header tile in grid view — the controls float as glass buttons in the
+ * top-right corner, overlaying the camera grid. */
+/* "+N hidden" pill. Same z-band as .floatingActions for the same reason: the
+   grid renders after it, so anything lower gets its clicks swallowed by
+   .tileOverlay. */
+.hiddenCamsPill {
+  position: absolute;
+  top: 12px; left: 12px;
+  z-index: 30;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--hl-edge, var(--border));
+  background: var(--hl, rgb(var(--ink) / 0.06));
+  color: var(--text-secondary);
+  font-size: 11px; font-weight: 700;
+  cursor: pointer;
+}
+.hiddenCamsPill:hover { color: var(--text-primary); }
+
+.floatingActions {
+  position: absolute;
+  top: 12px; right: 12px;
+  /* MUST outrank the tiles' own overlays (.tileOverlay, z:7) — the grid renders
+     AFTER this element, so an equal z-index let the tiles paint on top and
+     swallow every click on the layout picker ("stuck on 1"). App chrome always
+     sits above tile content. */
+  z-index: 30;
+  display: flex; align-items: center; gap: 8px;
+}
+
+/* ── Header (legacy, unused now — kept for reference) ───────────────────── */
+.header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 14px;
+  background: var(--bg-surface); border-bottom: 1px solid var(--border);
+  flex-shrink: 0; height: 48px;
+}
+.backBtn {
+  display: flex; align-items: center; gap: 5px;
+  background: var(--bg-elevated); border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 5px 12px; cursor: pointer; font-size: 11px; font-weight: 600;
+  color: var(--text-secondary);
+  transition: background var(--dur-fast), color var(--dur-fast), transform var(--dur-fast) var(--spring);
+}
+.backBtn:hover { background: var(--bg-hover); color: var(--text-primary); transform: scale(1.02); }
+
+/* Glass segmented control (layout picker) + glass Add-Camera button. */
+.layoutPicker {
+  display: flex; gap: 3px; padding: 3px;
+  border-radius: 12px;
+  background: var(--glass-tint-strong);
+  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 6px 18px rgba(0, 0, 0, 0.4);
+}
+.layoutBtn {
+  background: none; border: none;
+  border-radius: 8px; padding: 5px 11px; cursor: pointer;
+  font-size: 10px; color: rgba(255, 255, 255, 0.6); font-weight: 700;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.layoutBtn:hover { color: #fff; }
+.layoutBtnActive {
+  color: #fff !important;
+  background: rgba(255, 255, 255, 0.15) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* ── Grid ────────────────────────────────────────────────────────────────── */
+.grid {
+  flex: 1;
+  display: grid;
+  gap: 2px;
+  background: #000;
+  overflow: hidden;
+  /* Every cell gets an equal share of the available space */
+  min-height: 0;
+}
+
+.tile {
+  position: relative;
+  background: var(--bg-base);
+  overflow: hidden;
+  /* No aspect-ratio — the grid row/col fractions enforce uniform sizing */
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* CameraView sits inside — fills the tile completely */
+.tileInner {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none; /* overlay handles clicks */
+}
+/* Force CameraView's root div to fill the tile */
+.tileInner > div {
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 0 !important;
+}
+
+.tileOverlay {
+  position: absolute; inset: 0; padding: 8px 10px;
+  display: flex; align-items: flex-end; /* name sits at bottom-left */
+  /* Above CameraView's internal layers (depth canvas z:5, anonymize buttons
+     z:6) so the name is never painted over — but BELOW app chrome
+     (.floatingActions z:30), which must stay clickable over the grid.
+     Pointer events stay ON — this layer owns double-click-to-focus. */
+  z-index: 7;
+}
+
+.tileName {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 700; color: #fff;
+  letter-spacing: -0.01em;
+  /* Glass pill over live video — the feed is the colour the blur refracts */
+  padding: 5px 10px;
+  border-radius: var(--radius-pill);
+  background: rgba(21,19,18, 0.45);
+  backdrop-filter: blur(14px) saturate(180%);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    inset 0 1px 0   rgba(255, 255, 255, 0.10),
+    0 2px 6px rgba(0, 0, 0, 0.25);
+}
+/* (tileLiveDot removed — the red pulsing dot was decoration, not signal;
+   camera-offline states surface via toasts + Telegram alerts instead.) */
+
+/* Empty grid slot — shown when grid has more slots than configured cameras */
+.emptySlot {
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.015);
+  border: 1px dashed rgba(255,255,255,0.08);
+  cursor: pointer;
+  transition: background 0.15s;
+  /* Fill cell completely */
+  width: 100%; height: 100%; min-width: 0; min-height: 0;
+}
+.emptySlot:hover { background: rgba(255,255,255,0.04); }
+
+/* ── Onboarding ──────────────────────────────────────────────────────────── */
+/* ── Empty grid ─────────────────────────────────────────────────────
+ * The first thing a new user sees, so it carries the product's character
+ * rather than apologising for having no data. A ghosted 2x2 of camera tiles
+ * shows the shape of what they are about to build; the three ways in are
+ * cards, not a caption plus a button.
+ * ───────────────────────────────────────────────────────────────────── */
+.empty {
+  flex: 1;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 40px 24px;
+  animation: fade-in var(--dur-slow) var(--ease-out);
+}
+
+/* The ghost grid. Deliberately small and low-contrast — it sets the scene and
+   then gets out of the way of the type. */
+.emptyStage {
+  display: grid;
+  grid-template-columns: repeat(2, 46px);
+  grid-template-rows:    repeat(2, 30px);
+  gap: 7px;
+  margin-bottom: 30px;
+}
+.emptyTile {
+  border-radius: 7px;
+  border: 1px solid rgb(var(--ink) / 0.09);
+  background: linear-gradient(150deg, rgb(var(--ink) / 0.05), rgb(var(--ink) / 0.015));
+  opacity: 0;
+  animation: emptyTileIn 620ms var(--ease-out) forwards;
+}
+/* One tile is "live" — a single accent breath, so the composition has a focal
+   point without becoming decorative. One red, per the palette. */
+.emptyTile:nth-child(1) {
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+  background: linear-gradient(150deg,
+    color-mix(in srgb, var(--accent) 13%, transparent),
+    color-mix(in srgb, var(--accent) 3%, transparent));
+}
+@keyframes emptyTileIn {
+  from { opacity: 0; transform: translateY(7px) scale(0.95); }
+  to   { opacity: 1; transform: none; }
+}
+
+.emptyTitle {
+  margin: 0 0 26px;
+  font-size: 25px; font-weight: 700;
+  letter-spacing: -0.035em;
+  color: var(--text-primary);
+}
+
+/* Three equal paths. No primary/secondary hierarchy: which one is right
+   depends entirely on the hardware the user owns, and we do not know it. */
+.emptyPaths {
+  display: flex; flex-wrap: wrap; gap: 10px;
+  justify-content: center;
+}
+.emptyPath {
+  display: flex; flex-direction: column;
+  align-items: flex-start; gap: 2px;
+  width: 156px; padding: 15px 16px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border-strong);
+  background: rgb(var(--ink) / 0.025);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    transform var(--dur-fast) var(--spring),
+    border-color var(--dur-base) var(--ease-out),
+    background   var(--dur-base) var(--ease-out);
+}
+.emptyPath:hover {
+  transform: translateY(-2px);
+  border-color: var(--border-accent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.emptyPath:active { transform: translateY(0) scale(0.985); }
+.emptyPath:focus-visible {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.emptyPathIcon {
+  display: flex; margin-bottom: 9px;
+  color: var(--accent);
+}
+.emptyPathLabel {
+  font-size: 13px; font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+.emptyPathSub {
+  font-size: 11px; line-height: 1.35;
+  color: var(--text-secondary);
+}
+
+/* The staggered tile entrance is charm, not information — the first thing to
+   drop for anyone who has asked the OS for less motion. Everything still
+   arrives, it just arrives at once. */
+@media (prefers-reduced-motion: reduce) {
+  .empty { animation: none; }
+  .emptyTile { animation: none; opacity: 1; }
+  .emptyPath { transition: border-color var(--dur-base) var(--ease-out); }
+  .emptyPath:hover, .emptyPath:active { transform: none; }
+}
+
+.onboarding {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 10px;
+  padding: 48px;
+  animation: fade-in var(--dur-slow) var(--ease-out);
+}
+.onboardingTitle {
+  font-size: 22px; font-weight: 800; color: var(--text-primary);
+  margin: 0; letter-spacing: -0.03em;
+}
+.onboardingDesc  {
+  font-size: 14px; color: var(--text-secondary);
+  margin: 0 0 12px; text-align: center; line-height: 1.6;
+}
+.onboardingBtn {
+  display: flex; align-items: center; gap: 7px;
+  background: var(--accent-fill); color: var(--on-accent); border: none; border-radius: var(--radius-pill);
+  padding: 11px 24px; cursor: pointer;
+  font-size: 13px; font-weight: 800; color: var(--on-accent);
+  letter-spacing: -0.01em;
+  transition: transform var(--dur-fast) var(--spring), box-shadow var(--dur-base);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.onboardingBtn:hover { transform: translateY(-2px) scale(1.02); box-shadow: 0 6px 24px color-mix(in srgb, var(--accent) 40%, transparent); }
+.onboardingBtn:active { transform: scale(0.97); }
+
+/* ── Focus mode (v14) ────────────────────────────────────────────────────
+ * Vertical flex column: the rounded camera viewport grows to fill, the
+ * optional BottomPanel claims a fixed flex-basis below. When the panel
+ * mounts/unmounts the viewport shrinks/grows via the flex transition, so
+ * the slide animation lands without layout jank. */
+.focusView {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  /* Edge-to-edge like the NVR section: no padding gutter, no gap. The video
+   * fills the focus area flush to the panel edges. The bottom drawer (events/
+   * timeline) butts directly against the video. */
+  gap: 0;
+  padding: 0;
+  /* clip (not hidden): the ambient glow can still overhang but must NEVER make
+   * this a scrollable container — `hidden` still allows focus auto-scroll, which
+   * slid the app left when the rightmost event was selected. `clip` forbids it. */
+  overflow: clip;
+  min-height: 0;
+}
+.focusCam {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  /* Edge-to-edge: NO rounded corners — the focus area should blend into the
+   * screen, not read as a separate floating tile. Both the live CameraView and
+   * the event ClipOverlay fill it (inset:0), so they stay pixel-identical. */
+  border-radius: 0;
+  overflow: visible; /* allow the ambient glow to bleed into the surrounding padding */
+  transition: flex-basis var(--dur-slow) var(--spring);
+}
+/* Clip the actual media to the rounded card while letting the glow escape.
+ * IMPORTANT: no dark DROP shadow here — a drop shadow paints a dark halo in the
+ * exact padding ring where the ambient glow needs to show through, which made
+ * the padding look dark. Keep ONLY the subtle inner hairline (the glass edge);
+ * the glow itself provides the depth/separation around the card. */
+.focusCamInner {
+  position: absolute;
+  inset: 0;
+  border-radius: 0;       /* square edges — no floating-tile look */
+  overflow: hidden;
+  z-index: 1;
+  /* No card-edge hairline — the tile outline is what made it look detached. */
+}
+
+/* Ambient color-bleed glow — a blurred, scaled-up copy of the live frame
+ * painted behind the card so the scene's colors refract into the padding
+ * (Apple-TV / TV-backlight ambient effect). Driven by an offscreen sample
+ * canvas in LivePanel; updated a few times a second. */
+.ambientGlow {
+  position: absolute;
+  inset: -3%;
+  width: 106%;
+  height: 106%;
+  z-index: 0;
+  object-fit: cover;
+  border-radius: var(--radius-xl, 24px);
+  filter: blur(46px) saturate(170%) brightness(0.95);
+  opacity: 0.6;
+  pointer-events: none;
+  transform: scale(1.04);
+  transition: opacity var(--dur-slow, 320ms) var(--ease-out, ease-out);
+  will-change: filter, opacity;
+}
+
+/* v26: explicit "camera was off" overlay shown during history scrubs that
+ * land in a recording gap. Sits ABOVE the live CameraView (z:20) so it
+ * blocks the previous frame from showing through. Same rounded edge as
+ * the clip overlay so the geometry feels consistent. */
+.cameraOffOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8,7,7, 0.96);
+  border-radius: 0;
+  padding: 24px;
+  animation: fade-in 180ms var(--ease-out, ease-out);
+}
+.cameraOffBox {
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: rgba(21,19,18, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  backdrop-filter: blur(18px) saturate(180%);
+  -webkit-backdrop-filter: blur(18px) saturate(180%);
+  text-align: center;
+  color: #fff;
+}
+.cameraOffBox strong {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: color-mix(in srgb, var(--status-warn) 95%, transparent); /* amber — matches the HISTORY pill */
+}
+.cameraOffBox span {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.4;
+}
+
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* ── Add Camera — glass button ───────────────────────────────────────────── */
+.addCamHeaderBtn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 13px; border-radius: 11px; cursor: pointer;
+  font-size: 12px; font-weight: 700; color: #fff;
+  background: var(--glass-tint-strong);
+  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 6px 18px rgba(0, 0, 0, 0.4);
+  flex-shrink: 0;
+  transition: background 140ms ease;
+}
+.addCamHeaderBtn:hover { background: rgba(255, 255, 255, 0.14); }
+
+/* ── Modal backdrop ──────────────────────────────────────────────────────── */
+.modalBackdrop {
+  position: absolute; inset: 0; z-index: 100;
+  background: var(--bg-overlay);
+  display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(8px) saturate(180%);
+  -webkit-backdrop-filter: blur(8px) saturate(180%);
+  animation: fade-in var(--dur-fast) var(--ease-out);
+}
+
+.modal {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  width: 520px; max-width: calc(100vw - 40px);
+  max-height: 82vh;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(255,255,255,0.04) inset;
+  animation: pop-in var(--dur-slow) var(--spring);
+}
+
+.modalHeader {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 18px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.modalTitle { font-weight: 800; font-size: 15px; color: var(--text-primary); letter-spacing: -0.02em; }
+.modalClose {
+  background: var(--bg-hover); border: none; cursor: pointer;
+  color: var(--text-muted); padding: 0;
+  width: 26px; height: 26px; border-radius: var(--radius-pill);
+  display: flex; align-items: center; justify-content: center;
+  transition: background var(--dur-fast), color var(--dur-fast), transform var(--dur-fast) var(--spring);
+}
+.modalClose:hover { background: var(--bg-elevated); color: var(--text-primary); transform: scale(1.1); }
+
+.modalBody { flex: 1; overflow-y: auto; padding: 16px; }
+.configForm { display: flex; flex-direction: column; gap: 10px; }
+.cfgLbl { display: flex; flex-direction: column; gap: 4px; font-size: 11px; font-weight: 600; color: var(--text-secondary); }
+.cfgIn {
+  background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: var(--radius);
+  padding: 10px 12px; color: var(--text-primary); font-size: 13px; outline: none;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+}
+.cfgIn:focus { border-color: var(--accent-ring); box-shadow: 0 0 0 3px var(--accent-glow); }
+.cfgRow { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.generatedUrl {
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px 12px;
+}
+.generatedUrlLbl { font-size: 9px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; display: block; margin-bottom: 4px; }
+.generatedUrlCode { font-family: var(--font-mono); font-size: 10px; color: var(--accent); word-break: break-all; }
+.addBtn {
+  background: var(--accent-fill); color: var(--on-accent); border: none; border-radius: var(--radius-pill);
+  padding: 11px; cursor: pointer; font-size: 13px; font-weight: 800; color: var(--on-accent);
+  letter-spacing: -0.01em;
+  margin-top: 4px;
+  transition:
+    transform var(--dur-fast) var(--spring),
+    box-shadow var(--dur-base) var(--ease-out),
+    opacity var(--dur-fast);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.addBtn:hover { transform: translateY(-1px); box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 35%, transparent); }
+.addBtn:active { transform: scale(0.98); }
+.addBtn:disabled { opacity: 0.3; cursor: default; transform: none; box-shadow: none; }

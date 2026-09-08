@@ -1,0 +1,482 @@
+.root {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* header + anchor nav are fixed; only .content scrolls */
+  background: var(--bg-base);
+  position: relative;
+}
+
+/* Floating glass header stack — sits ABOVE the scroller so as you switch
+ * tabs and scroll, the form sections move under it and the backdrop-filter
+ * actually has live content to refract. */
+.glassStack {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  z-index: 10;
+  background: var(--glass-tint);
+  backdrop-filter: blur(var(--glass-blur)) saturate(170%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(170%);
+  border-bottom: 1px solid rgb(var(--ink) / 0.06);
+  box-shadow:
+    inset 0 1px 0 rgb(var(--ink) / 0.08),
+    0 6px 18px rgba(0, 0, 0, 0.18);
+}
+/* The global panel header lives inside the glass stack — its solid bg would
+ * obscure the material. Make it transparent in this context. */
+.glassStack :global(.panelHeader) {
+  background: transparent !important;
+  border-bottom: 1px solid rgb(var(--ink) / 0.04) !important;
+}
+
+/* .header kept for legacy references — actual header uses .panelHeader global class */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.title {
+  font-weight: 800;
+  font-size: 16px;
+  color: var(--text-primary);
+  letter-spacing: -0.025em;
+}
+
+/* ── Scroll content — only this scrolls, everything above is locked ──────── */
+.content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Top padding leaves room for the absolutely-positioned glass stack:
+   * panelHeader (~48) + navRow (~40) = ~88. The old 134px budgeted for a
+   * subTabBar that no longer exists — it left a dead ~46px gap between the
+   * anchor ribbon and the first section. */
+  padding: 96px 20px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+/* When the General tab is hidden, anchorNav doesn't render — give the content
+ * its own data-attribute hook for a shorter top padding. */
+.content[data-no-anchor="true"] {
+  padding-top: 98px;
+}
+
+/* ── Section card ────────────────────────────────────────────────────────────── */
+/* Premium glass card — matches the app's liquid-glass language (People,
+ * Guardian) instead of the old flat bordered box that read as "cheap". */
+.section {
+  background: linear-gradient(180deg, rgb(var(--ink) / 0.045), rgb(var(--ink) / 0.015));
+  border: 1px solid rgb(var(--ink) / 0.08);
+  border-radius: 16px;
+  box-shadow:
+    inset 0 1px 0 rgb(var(--ink) / 0.07),
+    0 10px 30px rgba(0,0,0,0.20);
+  /* overflow: hidden removed — was clipping field content in flex containers */
+  flex-shrink: 0;
+  width: 100%;
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+}
+.section:hover {
+  border-color: rgb(var(--ink) / 0.13);
+  box-shadow:
+    inset 0 1px 0 rgb(var(--ink) / 0.09),
+    0 14px 36px rgba(0,0,0,0.26);
+}
+.section > *:first-child { border-radius: 16px 16px 0 0; }
+.section > *:last-child  { border-radius: 0 0 16px 16px; }
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 18px;
+  background: transparent;
+  border-bottom: 1px solid rgb(var(--ink) / 0.05);
+}
+
+.sectionTitle {
+  font-size: 12.5px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  text-transform: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Section icons render as accent-tinted chips — the premium card cue used
+ * across People/Guardian, achieved purely in CSS (no markup change). */
+.sectionTitle svg {
+  opacity: 1;
+  width: 26px;
+  height: 26px;
+  padding: 6px;
+  border-radius: 9px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+/* ── Field row ───────────────────────────────────────────────────────────────── */
+.field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px 18px;
+  border-bottom: 1px solid rgb(var(--ink) / 0.045);
+  transition: background 0.15s ease;
+}
+.field:hover { background: rgb(var(--ink) / 0.018); }
+.field:last-child { border-bottom: none; }
+
+.fieldLabel {
+  flex: 1;
+  min-width: 100px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.fieldName {
+  font-size: 12.5px;
+  font-weight: 620;
+  letter-spacing: -0.005em;
+  color: var(--text-primary);
+}
+
+.fieldHint {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 400;
+  line-height: 1.55;
+  max-width: 560px;
+}
+
+.fieldControl {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+/* ── Inputs ──────────────────────────────────────────────────────────────────── */
+.range {
+  width: 160px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.rangeVal {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  min-width: 40px;
+  text-align: right;
+}
+
+/* Unified control: numbers, selects and time inputs all share this class —
+ * one height, one radius, one focus treatment (the old mix looked ad-hoc). */
+.numInput {
+  width: 90px;
+  height: 30px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgb(var(--ink) / 0.10);
+  color: var(--text-primary);
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-family: var(--font-mono);
+  outline: none;
+  text-align: center;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.25);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.numInput:hover { border-color: rgb(var(--ink) / 0.18); }
+.numInput:focus {
+  border-color: var(--accent);
+  box-shadow:
+    inset 0 1px 2px rgba(0,0,0,0.25),
+    0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+/* Selects reuse .numInput but read left-aligned with room for the arrow. */
+select.numInput { text-align: left; padding-right: 22px; cursor: pointer; }
+
+/* ── Toggle ──────────────────────────────────────────────────────────────────── */
+.toggle {
+  width: 44px;
+  height: 25px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgb(var(--ink) / 0.10);
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.35);
+  position: relative;
+  transition: background 0.2s, border-color 0.2s;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.toggleOn {
+  background: color-mix(in srgb, var(--accent) 30%, transparent) !important;
+  border-color: var(--accent) !important;
+}
+.toggleThumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), background 0.2s;
+  pointer-events: none;
+}
+.toggleOn .toggleThumb {
+  transform: translateX(19px);
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.45), 0 0 8px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────────── */
+.ghostBtn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 13px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--ink) / 0.10);
+  background: rgb(var(--ink) / 0.04);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  cursor: pointer;
+}
+.ghostBtn:hover {
+  background: rgb(var(--ink) / 0.08);
+  border-color: rgb(var(--ink) / 0.16);
+  color: var(--text-primary);
+}
+.ghostBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.saveBtn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 16px; border-radius: var(--radius-pill);
+  border: none; background: var(--accent-fill); color: var(--on-accent);
+  color: var(--on-accent); font-size: 12px; font-weight: 800;
+  letter-spacing: -0.01em; cursor: pointer;
+  transition: transform var(--dur-fast) var(--spring), box-shadow var(--dur-base);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.saveBtn:hover { transform: translateY(-1px); box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 35%, transparent); }
+.saveBtn:active { transform: scale(0.97); }
+.saveBtn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; box-shadow: none; }
+
+.dangerBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--status-alert) 35%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--status-alert) 10%, transparent), color-mix(in srgb, var(--status-alert) 4%, transparent));
+  color: var(--accent-red);
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+  box-shadow: inset 0 1px 0 rgb(var(--ink) / 0.04);
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+  cursor: pointer;
+}
+.dangerBtn:hover {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--status-alert) 16%, transparent), color-mix(in srgb, var(--status-alert) 8%, transparent));
+  border-color: color-mix(in srgb, var(--status-alert) 55%, transparent);
+  box-shadow: inset 0 1px 0 rgb(var(--ink) / 0.05), 0 4px 14px color-mix(in srgb, var(--status-alert) 15%, transparent);
+}
+.dangerBtn:hover { background: color-mix(in srgb, var(--status-alert) 14%, transparent); }
+.dangerBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Storage info ────────────────────────────────────────────────────────────── */
+.storageGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--border);
+}
+
+.statCell {
+  background: var(--bg-elevated);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.statLabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.statValue {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.statSub {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.storageEmpty {
+  padding: 24px 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.storageActions {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.modelName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* ── Add camera wizard ───────────────────────────────────────────────────── */
+.wizard { flex: 1; display: flex; flex-direction: column; overflow: hidden; border-top: 1px solid var(--border); }
+
+/* ── Config form ─────────────────────────────────────────────────────────── */
+.configForm { display: flex; flex-direction: column; gap: 10px; }
+.cfgRow { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.generatedUrl { background: var(--bg-base); border: 1px solid var(--border); border-radius: 5px; padding: 8px 10px; }
+.generatedUrlCode { font-family: var(--font-mono); font-size: 10px; color: var(--accent); word-break: break-all; }
+
+/* ── Anchor navigation ───────────────────────────────────────────────────── */
+/* Row holding the section nav (left, scrollable) + the Advanced slider (right). */
+.navRow {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid rgb(var(--ink) / 0.04);
+}
+.navRow .anchorNav {
+  flex: 1;
+  min-width: 0;            /* let the chip strip shrink + scroll instead of pushing */
+  border-bottom: none;    /* the row owns the divider now */
+}
+
+/* Advanced toggle — a proper slider switch (reuses the Toggle component), pinned
+ * to the right of the section bar so it reads as "below Save". */
+.advToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  flex-shrink: 0;
+  padding: 0 14px 0 13px;
+  border-left: 1px solid rgb(var(--ink) / 0.06);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+  cursor: default;
+}
+.advToggle:hover { color: var(--text-secondary); }
+.advToggle span { letter-spacing: -0.01em; }
+
+.anchorNav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 16px;
+  height: 36px;
+  min-height: 36px;
+  background: transparent; /* glass parent paints the material */
+  border-bottom: 1px solid rgb(var(--ink) / 0.04);
+  overflow-x: auto;
+  flex-shrink: 0;
+  scrollbar-width: none;
+}
+.anchorNav::-webkit-scrollbar { display: none; }
+
+.anchorBtn {
+  display: inline-flex;
+  align-items: center;
+  background: none;
+  border: none;
+  border-radius: var(--radius-pill);
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast), transform var(--dur-fast) var(--spring);
+  letter-spacing: -0.01em;
+}
+.anchorBtn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  transform: scale(1.04);
+}
+.anchorBtn:active { transform: scale(0.97); }
+
+/* ── Sliding selection capsule (Apple liquid-glass) ─────────────────────────────
+ * A lightweight, GPU-composited glass capsule that slides under the active chip.
+ * Deliberately NOT the heavy `.lg` SVG-refraction material — that janks when
+ * animated every frame. The accent tint + bright specular rim + soft gloss are the
+ * "tell" of the material; transform is composited and width is one out-of-flow
+ * element, so the move stays smooth. The overshoot easing gives the Apple spring. */
+.anchorPill {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 26px;
+  margin-top: -13px;            /* vertical-centre without a translateY in transform */
+  border-radius: 999px;
+  pointer-events: none;
+  z-index: 0;                   /* behind the chips (which sit at z-index:1) */
+  background:
+    linear-gradient(180deg, rgb(var(--ink) / 0.20), rgb(var(--ink) / 0.04) 46%, rgb(var(--ink) / 0) 78%),
+    var(--hl);
+  border: 1px solid var(--hl-edge);
+  box-shadow:
+    inset 0 1px 0 rgb(var(--ink) / 0.40),   /* top specular rim */
+    inset 0 -1px 0 rgba(0, 0, 0, 0.10),
+    0 2px 12px rgba(0, 0, 0, 0.18);            /* soft lift */
+  -webkit-backdrop-filter: blur(6px) saturate(160%);
+  backdrop-filter: blur(6px) saturate(160%);
+  will-change: transform, width;
+  transition:
+    transform 0.42s cubic-bezier(0.34, 1.56, 0.64, 1),   /* spring overshoot */
+    width     0.42s cubic-bezier(0.34, 1.56, 0.64, 1),
+    opacity   0.18s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .anchorPill { transition: opacity 0.18s ease; }
+}

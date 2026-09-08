@@ -1,0 +1,346 @@
+/* standard Review feed — liquid-glass styled to match the app. */
+
+.root {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-base);
+}
+
+/* ── Header ── */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  flex-shrink: 0;
+}
+/* Segmented control (Alerts / Detections) — sits on the refined .lg glass. */
+.segTabs {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 12px;
+}
+.segTab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 13px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgb(var(--ink) / 0.62);
+  background: transparent;
+  border: none;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+.segTab:hover { color: #fff; }
+/* Active segment = a clean raised lozenge that reads ON the glass (not the flat
+ * white fill that muddied it). The per-severity colour comes from an inline style. */
+.segTabActive {
+  color: #fff;
+  background: rgb(var(--ink) / 0.15);
+  box-shadow:
+    inset 0 1px 0 rgb(var(--ink) / 0.4),
+    inset 0 0 0 1px rgb(var(--ink) / 0.08),
+    0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.count {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgb(var(--ink) / 0.14);
+  font-variant-numeric: tabular-nums;
+}
+
+.headerRight { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
+.glassBtn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 13px;
+  font-size: 12px; font-weight: 600; color: #fff;
+  border-radius: 11px; cursor: pointer;
+  transition: background 140ms ease;
+}
+.glassBtn:hover { background: rgb(var(--ink) / 0.13); }
+.iconBtn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: 11px; color: #fff; cursor: pointer;
+  transition: background 140ms ease;
+}
+.iconBtn:hover { background: rgb(var(--ink) / 0.13); }
+.iconBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ── Filters ── */
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 0 16px 10px;
+  flex-shrink: 0;
+}
+
+/* ── Whole-archive search — centered in the top toolbar row (VS Code-ish) ──── */
+.searchRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;                   /* fills the middle of the row (tabs left · date right) */
+  min-width: 0;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 11px;
+  transition: box-shadow 160ms ease;
+}
+.searchRow:focus-within {
+  box-shadow: 0 0 0 1.5px var(--accent-glow, rgb(var(--ink) / 0.22));
+}
+.searchIcon { color: rgb(var(--ink) / 0.55); flex-shrink: 0; }
+.searchInput {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+}
+.searchInput::placeholder { color: rgb(var(--ink) / 0.4); }
+.searchStatus {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgb(var(--ink) / 0.5);
+  white-space: nowrap;
+}
+.searchClear {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: 7px;
+  color: rgb(var(--ink) / 0.6); cursor: pointer; flex-shrink: 0;
+  transition: background 140ms ease, color 140ms ease;
+}
+.searchClear:hover { color: #fff; background: rgb(var(--ink) / 0.13); }
+
+.chip {
+  font-size: 11px; font-weight: 600;
+  padding: 5px 11px; border-radius: 999px; cursor: pointer;
+  text-transform: capitalize;
+  color: rgb(var(--ink) / 0.6);
+  background: rgb(var(--ink) / 0.05);
+  border: 1px solid rgb(var(--ink) / 0.10);
+  transition: all 120ms ease;
+}
+.chip:hover { background: rgb(var(--ink) / 0.10); color: #fff; }
+.chipActive { background: color-mix(in srgb, var(--status-idle) 85%, transparent); border-color: rgb(var(--ink) / 0.25); color: #fff; }
+.filterDivider { width: 1px; height: 18px; background: rgb(var(--ink) / 0.12); margin: 0 4px; }
+
+/* ── Labels dropdown ── */
+.ddRoot { position: relative; }
+.filterBtn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 12px;
+  font-size: 12px; font-weight: 600; color: rgb(var(--ink) / 0.85);
+  border-radius: 10px; cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+.filterBtn:hover { color: #fff; background: rgb(var(--ink) / 0.13); }
+.filterBtnActive { color: #fff; }
+.filterMenu {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 60;
+  min-width: 168px; padding: 5px;
+  border-radius: 14px;
+  display: flex; flex-direction: column; gap: 1px;
+  animation: pop-in 130ms ease-out;
+}
+.filterOpt {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; padding: 7px 9px;
+  font-size: 12px; font-weight: 600; color: rgb(var(--ink) / 0.9);
+  text-transform: capitalize; text-align: left;
+  background: transparent; border: none; border-radius: 8px; cursor: pointer;
+  transition: background 120ms ease;
+}
+.filterOpt:hover { background: rgb(var(--ink) / 0.09); }
+.filterOptLabel { flex: 1; }
+.filterEmpty {
+  padding: 9px 10px; font-size: 11px;
+  color: rgb(var(--ink) / 0.45); text-align: center;
+}
+.checkbox {
+  width: 16px; height: 16px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 5px;
+  border: 1.5px solid rgb(var(--ink) / 0.3);
+  color: #fff; transition: background 120ms ease, border-color 120ms ease;
+}
+.checkboxOn { background: var(--accent, var(--status-idle)); border-color: transparent; }
+/* Select all / Clear header row. */
+.filterHead {
+  display: flex; gap: 4px;
+  padding: 2px 2px 5px;
+  margin-bottom: 3px;
+  border-bottom: 1px solid rgb(var(--ink) / 0.08);
+}
+.filterHeadBtn {
+  flex: 1; padding: 5px 8px;
+  font-size: 11px; font-weight: 700; color: rgb(var(--ink) / 0.78);
+  background: rgb(var(--ink) / 0.06); border: none; border-radius: 7px;
+  cursor: pointer; transition: background 120ms ease, color 120ms ease;
+}
+.filterHeadBtn:hover:not(:disabled) { background: rgb(var(--ink) / 0.14); color: #fff; }
+.filterHeadBtn:disabled { opacity: 0.4; cursor: default; }
+
+/* ── Hide-reviewed toggle (pushed right) ── */
+.toggle {
+  margin-left: auto;
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 30px; padding: 0 12px 0 8px;
+  font-size: 12px; font-weight: 600; color: rgb(var(--ink) / 0.72);
+  border-radius: 999px; cursor: pointer;
+  transition: color 140ms ease;
+}
+.toggleOn { color: #fff; }
+.toggleTrack {
+  width: 30px; height: 17px; border-radius: 999px;
+  background: rgb(var(--ink) / 0.18);
+  position: relative; transition: background 160ms ease;
+  flex-shrink: 0;
+}
+.toggleOn .toggleTrack { background: var(--accent); }
+.toggleKnob {
+  position: absolute; top: 2px; left: 2px;
+  width: 13px; height: 13px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  transition: transform 160ms var(--spring, ease);
+}
+.toggleOn .toggleKnob { transform: translateX(13px); }
+
+/* ── Feed — dense grid of small 16:9 cards, matching the focus Events strip ── */
+.feed {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 16px 20px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  align-content: start;
+}
+.empty {
+  grid-column: 1 / -1;
+  flex: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; padding: 60px 0;
+  color: rgb(var(--ink) / 0.3);
+  font-size: 13px;
+}
+
+/* ── Event card — mirrors NVRPanel's .thumbCell (focus-mode Events strip) ── */
+.card {
+  display: flex; flex-direction: column; gap: 4px;
+  width: 100%; padding: 5px; text-align: left; cursor: pointer;
+  background: rgb(var(--ink) / 0.05);
+  border: 1.5px solid rgb(var(--ink) / 0.1);
+  border-radius: 8px;
+  transition: border-color 0.15s, background 0.15s, transform 0.13s var(--spring, ease);
+  /* Off-screen tiles skip layout/paint/decode entirely — a busy day renders
+     hundreds of image tiles; this is ~react-window for one CSS property. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 180px;
+}
+/* Keyboard-selected card (j/k triage) */
+.cardKb {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 1.5px var(--accent);
+}
+.card:hover {
+  background: rgb(var(--ink) / 0.09);
+  border-color: rgb(var(--ink) / 0.22);
+  transform: translateY(-1px);
+}
+/* Reviewed cards are NOT dimmed and carry no dot. Dimming half the wall made
+   already-triaged footage hard to actually look at, which is the opposite of
+   what a review surface is for; the "Hide reviewed" filter is the control that
+   acts on this state. .cardNew (an accent dot at top/right 4) went with it — it
+   collided with the action row and duplicated the same fact. */
+
+.cardImg {
+  position: relative;
+  width: 100%; aspect-ratio: 16 / 9;
+  border-radius: 5px; overflow: hidden; background: #000;
+}
+.cardImg img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cardImgBlank {
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  color: rgb(var(--ink) / 0.2);
+}
+.cardRisk {
+  position: absolute; bottom: 3px; right: 3px;
+  font-size: 8px; font-weight: 700; color: #fff; letter-spacing: 0.06em;
+  padding: 1px 4px; border-radius: 3px;
+}
+.cardCam {
+  /* Moved from top-LEFT: the action column lives there now. It sat underneath
+     the bookmark button for as long as both existed. */
+  position: absolute; top: 3px; right: 3px;
+  font-size: 8px; font-weight: 800; letter-spacing: 0.05em; color: #fff;
+  background: rgba(0, 0, 0, 0.45); padding: 1px 5px; border-radius: 4px;
+}
+.cardPlay {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 30px; height: 30px; border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity 130ms ease;
+  pointer-events: none;
+}
+.card:hover .cardPlay { opacity: 1; }
+.cardActions {
+  /* Vertical stack down the LEFT edge. The thumbnail is 16:9, so at the grid's
+     150px minimum it is only ~84px tall — the column is budgeted against that:
+     4 buttons at 18px with 3px gaps is 81px, which still clears the frame. That
+     is why these are 18px here and not the 22px a horizontal row could afford. */
+  position: absolute; top: 4px; left: 4px; z-index: 3;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+}
+/* Actions stay out of the way until the card is hovered, so a wall of cards
+   reads as pictures rather than a grid of buttons. Keyboard focus reveals them
+   too, otherwise they'd be unreachable without a mouse. */
+.cardActions > * { opacity: 0; transition: opacity 130ms ease; }
+.card:hover .cardActions > *,
+.card:focus-within .cardActions > * { opacity: 1; }
+/* A saved bookmark is STATE, not an action — it must survive without hover or
+   you can't see what's saved while scanning. */
+.cardActions > .cardActionPinned { opacity: 1; }
+
+.cardTime {
+  font-size: 9px; font-family: var(--font-mono);
+  color: rgb(var(--ink) / 0.7); font-weight: 600;
+}
+.cardSummary {
+  font-size: 9px; color: rgb(var(--ink) / 0.4); line-height: 1.35;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+.nvrHint {
+  flex-shrink: 0;
+  padding: 8px 16px;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--status-warn) 85%, transparent);
+  background: color-mix(in srgb, var(--status-warn) 8%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--status-warn) 20%, transparent);
+}

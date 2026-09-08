@@ -1,0 +1,234 @@
+.root {
+  display: flex;
+  flex-direction: column; /* custom titlebar on top, then the body row */
+  height: 100vh;
+  overflow: hidden;
+  /* Always-opaque bottom layer — the surface that all the glass panels refract.
+   * Uses --bg-canvas (never made translucent), so glass surfaces have something
+   * solid behind them instead of showing the desktop. */
+  background: var(--bg-canvas);
+}
+
+/* Body = the original sidebar | main row, below the titlebar. */
+.body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   SIDEBAR — icon-only navigation, Benji Taylor style.
+   Every icon interaction has a clear physics arc:
+   rest → hover lift → press snap → spring settle.
+   ─────────────────────────────────────────────────────────────────────────── */
+.sidebar {
+  width: 52px;
+  min-width: 52px;
+  /* Liquid Glass material — translucent over the aurora canvas. The blur +
+   * inner highlight stroke gives it the floating-rail feel Family / X use. */
+  background: var(--glass-tint);
+  backdrop-filter: blur(var(--glass-blur)) saturate(170%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(170%);
+  border-right: 1px solid rgb(var(--ink) / 0.06);
+  box-shadow: inset -1px 0 0 rgb(var(--ink) / 0.04);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow: visible;
+  position: relative;
+  z-index: 20;
+}
+
+/* ── Nav ─────────────────────────────────────────────────────────────────── */
+.nav {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 0;
+  gap: 2px;
+}
+
+/* Button container */
+.navBtn {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius);
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  overflow: visible;
+
+  /* Container transitions */
+  transition:
+    background 140ms var(--ease-out),
+    color      140ms;
+
+  will-change: transform;
+}
+
+/* The icon element — separate transform layer for physics */
+.navBtn svg {
+  transition:
+    transform var(--dur-base) var(--spring),
+    filter    var(--dur-base) var(--ease-out),
+    color     140ms;
+  will-change: transform, filter;
+  /* GPU layer */
+  transform: translateZ(0);
+}
+
+/* ── Hover — lift + scale with spring overshoot ─────────────────────────── */
+.navBtn:not(.navBtnActive):hover {
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+}
+.navBtn:not(.navBtnActive):hover svg {
+  transform: translateY(-3px) scale(1.18);
+  filter: drop-shadow(0 4px 8px rgba(0,0,0,0.35));
+}
+
+/* ── Press — snap down, spring back on release ──────────────────────────── */
+.navBtn:not(.navBtnActive):active svg {
+  transform: translateY(1px) scale(0.88);
+  transition: transform 70ms var(--ease-in);
+}
+
+/* ── Active — pop in, then settle and glow ──────────────────────────────── */
+/* White lifts, red marks: the selected surface is neutral, the icon keeps the
+ * accent. Previously this was a red fill AND a red icon AND a red drop-shadow —
+ * three reds for one signal. */
+.navBtnActive {
+  background: var(--hl)  !important;
+  color: var(--accent)   !important;
+}
+
+/* Icon pops when first becoming active */
+.navBtnActive svg {
+  animation: icon-pop 450ms var(--spring) forwards;
+}
+
+@keyframes icon-pop {
+  0%   { transform: scale(0.8);  opacity: 0.6; }
+  45%  { transform: scale(1.22); opacity: 1;   }
+  70%  { transform: scale(0.96);              }
+  100% { transform: scale(1);                 }
+}
+
+/* Active glow pulse — subtle breathing to show it's "live" */
+@keyframes icon-glow-pulse {
+  0%, 100% { filter: drop-shadow(0 0 6px  color-mix(in srgb, var(--accent) 40%, transparent)); }
+  50%       { filter: drop-shadow(0 0 14px color-mix(in srgb, var(--accent) 75%, transparent)); }
+}
+.navBtnActive svg {
+  animation:
+    icon-pop        450ms var(--spring) forwards,
+    icon-glow-pulse 2.4s  var(--ease-std) 450ms infinite;
+}
+
+/* ── Bare icon button (sidebar footer: telemetry, account) ────────────────────
+   Same visual language as the nav rail: the ICON carries the state, not a pill
+   of chrome around it. These used to flip their own border + background, which
+   is why they read as a different control from everything above them. */
+.iconBtn {
+  width: 36px; height: 36px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  position: relative; cursor: pointer;
+  background: transparent; border: none;
+  color: var(--text-secondary);
+  transition: color 140ms var(--ease-out);
+}
+.iconBtn svg {
+  transition:
+    transform var(--dur-base) var(--spring),
+    filter    var(--dur-base) var(--ease-out),
+    color     140ms;
+  transform: translateZ(0);
+}
+.iconBtn:not(.iconBtnActive):hover svg {
+  transform: translateY(-3px) scale(1.18);
+  filter: drop-shadow(0 4px 8px rgba(0,0,0,0.35));
+}
+.iconBtn:not(.iconBtnActive):active svg {
+  transform: translateY(1px) scale(0.88);
+  transition: transform 70ms var(--ease-in);
+}
+/* Open = the icon itself lights up, exactly like an active nav item. */
+.iconBtnActive { color: var(--accent); }
+.iconBtnActive svg {
+  animation:
+    icon-pop        450ms var(--spring) forwards,
+    icon-glow-pulse 2.4s  var(--ease-std) 450ms infinite;
+}
+
+/* ── Active bar — slides in from left with spring ────────────────────────── */
+.navBtnActive::before {
+  content: '';
+  position: absolute;
+  left: -6px;
+  top: 50%;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+  /* Entry animation */
+  animation: bar-enter 380ms var(--spring) forwards;
+}
+
+@keyframes bar-enter {
+  0% {
+    height: 0;
+    opacity: 0;
+    transform: translateY(-50%) scaleY(0);
+    box-shadow: none;
+  }
+  60% {
+    height: 28px;
+    opacity: 1;
+  }
+  100% {
+    height: 22px;
+    opacity: 1;
+    transform: translateY(-50%) scaleY(1);
+    box-shadow:
+      0 0 10px color-mix(in srgb, var(--accent) 90%, transparent),
+      0 0 24px color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+}
+
+/* Bar also pulses in sync with the icon glow */
+@keyframes bar-glow-pulse {
+  0%, 100% { box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 90%, transparent), 0 0 24px color-mix(in srgb, var(--accent) 35%, transparent); }
+  50%       { box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 100%, transparent), 0 0 36px color-mix(in srgb, var(--accent) 55%, transparent); }
+}
+.navBtnActive::before {
+  animation:
+    bar-enter      380ms var(--spring) forwards,
+    bar-glow-pulse 2.4s  var(--ease-std) 450ms infinite;
+}
+
+/* ── Footer ───────────────────────────────────────────────────────────────── */
+.sidebarFooter {
+  width: 100%;
+  padding: 12px 0 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ── Main ─────────────────────────────────────────────────────────────────── */
+.main {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}

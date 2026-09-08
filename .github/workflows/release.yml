@@ -1,0 +1,186 @@
+name: Release
+
+# Builds signed, auto-updatable installers for every platform and publishes them
+# to a GitHub Release. Triggered by pushing a version tag (e.g. `v1.0.1`) or run
+# manually. Produces:
+#   • Windows  — NSIS + MSI            (DirectML: any DX12 GPU, no toolkit)
+#   • macOS    — .dmg (arm64 + x64)    (CoreML: Apple Neural Engine)
+#   • Linux    — .deb + .AppImage      (CPU)
+# plus the signed updater artifacts (.sig) and `latest.json` manifest the
+# in-app updater reads.
+#
+# Required repo secrets:
+#   TAURI_SIGNING_PRIVATE_KEY           — minisign private key (from `tauri signer generate`)
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  — its password (empty string if none)
+# (the matching PUBLIC key lives in src-tauri/tauri.conf.json → plugins.updater.pubkey)
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build (e.g. v1.0.1)"
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: ${{ matrix.label }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest,   label: "macOS (Apple Silicon)", target: aarch64-apple-darwin, args: "--target aarch64-apple-darwin" }
+          - { os: macos-latest,   label: "macOS (Intel)",         target: x86_64-apple-darwin,  args: "--target x86_64-apple-darwin" }
+          - { os: ubuntu-latest,  label: "Linux",                 target: "",                   args: "" }
+          - { os: windows-latest, label: "Windows",               target: "",                   args: "" }
+          # NVIDIA edition: same app identity (shares footage/DB/settings) but a
+          # distinct installer name, built with the CUDA EP. Users on an NVIDIA GPU
+          # download this one; the CUDA + cuDNN runtime is fetched on first launch.
+          - { os: windows-latest, label: "Windows (NVIDIA CUDA)", target: "",                   args: "--features cuda --config tauri.nvidia.conf.json" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Linux Tauri prerequisites (webkit, appindicator for the tray, etc.)
+      - name: Install Linux Tauri prerequisites
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      # ── llama.cpp build prerequisites (on-device LLM) ────────────────────────
+      # `llama-cpp-sys-2` compiles llama.cpp from source and runs bindgen, so the
+      # release builds need cmake + ninja + libclang on every platform, and an
+      # MSVC developer environment on Windows. See the notes beside the dependency
+      # in Cargo.toml — each of these cost a failed build to discover.
+      - name: llama.cpp prerequisites (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get install -y cmake ninja-build libclang-dev clang
+
+      - name: llama.cpp prerequisites (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install cmake ninja llvm
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+
+      - name: llama.cpp prerequisites (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          choco install ninja -y --no-progress
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+
+      - name: MSVC developer environment (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Select Ninja generator
+        shell: bash
+        run: echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
+
+      # Pinned to match ci.yml — a release should be built by the same compiler
+      # that gated the code, not by whatever is stable on the day it is tagged.
+      - uses: dtolnay/rust-toolchain@1.97
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: npm ci
+
+      # NOTE: there is no longer a step fetching ffmpeg + a default detector into
+      # the installer. Bundling them meant DISTRIBUTING them, and the detector was
+      # an Ultralytics YOLO (AGPL-3.0) while the ffmpeg build was GPL. Both are now
+      # downloaded by the user on demand, which keeps this Apache-2.0 app clear
+      # of their terms — see THIRD-PARTY-NOTICES.md.
+      #
+      # The ONNX provider DLLs below ARE still bundled: they are MIT, and the GPU
+      # lanes cannot load without them.
+      - name: Stage ONNX provider DLLs (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo build --release --manifest-path src-tauri/Cargo.toml
+          & ./scripts/sync-ort-dlls.ps1 -Profile release
+
+      - name: Build, sign, and publish
+        id: tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Anivar __VERSION__"
+          releaseBody: "Download the installer for your platform below. Existing installs update automatically."
+          releaseDraft: true
+          prerelease: false
+          includeUpdaterJson: true
+          args: ${{ matrix.args }}
+
+      # ── Checksums ────────────────────────────────────────────────────────────
+      # AUTO-UPDATES are already protected: `includeUpdaterJson` above signs the
+      # manifest with TAURI_SIGNING_PRIVATE_KEY, and the app refuses an update
+      # that fails that signature.
+      #
+      # A MANUAL download from the Releases page has no such check. The installer
+      # is not Authenticode-signed yet (that needs a purchased certificate), so
+      # today a user who downloads the .exe cannot tell a good copy from a
+      # tampered one. A published SHA-256 is not a signature — anyone who can
+      # replace the artifact could replace the hash — but it does catch a
+      # corrupted download and a mirror that altered the file, and it costs
+      # nothing. Remove it only when real code signing lands, not before.
+      - name: Publish checksums
+        if: steps.tauri.outputs.artifactPaths != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # macOS ships `shasum`, not `sha256sum`; both emit the same
+          # "<hash>  <filename>" format that `-c` reads back.
+          if command -v sha256sum >/dev/null; then hash() { sha256sum "$1"; }
+          else                                    hash() { shasum -a 256 "$1"; }
+          fi
+          # artifactPaths is a JSON array of absolute paths.
+          echo '${{ steps.tauri.outputs.artifactPaths }}' | jq -r '.[]' | while read -r f; do
+            [ -f "$f" ] || continue
+            # Relative filename inside the file, so `sha256sum -c x.exe.sha256`
+            # works in the directory the user downloaded it to.
+            ( cd "$(dirname "$f")" && hash "$(basename "$f")" > "$(basename "$f").sha256" )
+            gh release upload "${{ github.ref_name }}" "$f.sha256" --clobber --repo "$GITHUB_REPOSITORY"
+          done
+
+# ── More acceleration editions (future) ──────────────────────────────────────
+# Each accelerator is a separate `ort` feature build, added as another matrix row
+# with its own config override for a distinct installer name, e.g.
+#   - { os: windows-latest, label: "Windows (Intel OpenVINO)", target: "", args: "--features openvino --config tauri.openvino.conf.json" }
+#   - { os: ubuntu-latest,  label: "Linux (AMD ROCm)",         target: "", args: "--features rocm --config tauri.rocm.conf.json" }
+# Like the NVIDIA edition, each shares the app identity (footage/DB) and fetches its
+# vendor runtime on first launch. (OpenVINO/ROCm also need a `[features]` entry +
+# a managed-runtime downloader, mirroring `cuda` / `cuda_runtime.rs`.)

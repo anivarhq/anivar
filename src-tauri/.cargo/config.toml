@@ -1,0 +1,4 @@
+# Use LLD linker — avoids MSVC link.exe LNK1318 PDB TypeServer limit on large projects.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"
+rustflags = ["-Cdebuginfo=0"]
