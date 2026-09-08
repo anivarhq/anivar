@@ -1661,7 +1661,7 @@ fn grounded(draft: &str, q: &Query, relaxed: &[String], ev: &Evidence) -> bool {
                 if super::slots::is_colour(word) { colours.push(word.to_string()); }
             }
         }
-        for sentence in d.split(|c| c == '.' || c == '!' || c == '?' || c == ';') {
+        for sentence in d.split(['.', '!', '?', ';']) {
             if !colours.iter().any(|c| sentence.contains(c.as_str())) { continue; }
             if !negated(sentence) { return false; }
         }

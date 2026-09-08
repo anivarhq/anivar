@@ -261,6 +261,12 @@ pub(crate) const BUNDLE_ID: &str = "com.anivar.app";
 ///
 /// Add to the FRONT on the next rename. Never edit an existing entry and never
 /// remove one — the only thing that can still find an old install is its name.
+/// Present on Windows, where `migrate_legacy_webview_profile` uses it, and in
+/// test builds everywhere, where `current_names_are_not_in_their_own_legacy_lists`
+/// asserts the invariant. Without the `test` arm the guard-rail would only run on
+/// Windows; without the `windows` arm clippy calls it dead on macOS and Linux and
+/// `-D warnings` fails the build, which is exactly what it did.
+#[cfg(any(windows, test))]
 pub(crate) const LEGACY_WEBVIEW_IDS: &[&str] = &["com.nivar.app", "com.anvil.nvr", "com.securecam.app"];
 
 /// Delete `HKCU\Run` autostart entries left behind by a previous product name.
