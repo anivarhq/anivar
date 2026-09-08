@@ -31,7 +31,66 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Resolve the tag once, and turn CHANGELOG.md into the release body.
+  #
+  # Its own job because the build below is a five-way matrix: generating notes in
+  # each would do the same work five times, and whichever runner happened to
+  # create the release first would decide what the body said.
+  notes:
+    name: Release notes
+    runs-on: ubuntu-latest
+    outputs:
+      tag:  ${{ steps.resolve.outputs.tag }}
+      body: ${{ steps.body.outputs.body }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # git describe needs history for the fallback
+
+      - name: Resolve tag
+        id: resolve
+        run: |
+          TAG="${{ inputs.tag }}"
+          [ -n "$TAG" ] || TAG="${{ github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Releasing $TAG"
+
+      - name: Build release body
+        id: body
+        run: |
+          TAG="${{ steps.resolve.outputs.tag }}"
+          if bash .github/scripts/changelog-section.sh "$TAG" CHANGELOG.md > notes.md; then
+            echo "Notes from CHANGELOG.md for $TAG"
+          else
+            echo "::warning::$TAG has no CHANGELOG.md section — falling back to git log"
+            {
+              PREV=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
+              if [ -n "$PREV" ]; then git log "$PREV..$TAG" --pretty='- %s' --no-merges
+              else git log -20 --pretty='- %s' --no-merges; fi
+            } > notes.md
+          fi
+          {
+            echo "## Install"
+            echo
+            echo "Download the installer for your platform below. Existing installs update automatically."
+            echo
+            echo "> The installers are **not** OS-code-signed yet. Windows shows a SmartScreen"
+            echo "> prompt (More info → Run anyway). On macOS, right-click the app → Open, or run"
+            echo "> \`xattr -cr /Applications/Anivar.app\` if Gatekeeper refuses it."
+            echo
+            echo "## Changes"
+            echo
+            cat notes.md
+          } > body.md
+          {
+            echo "body<<ANIVAR_NOTES_EOF"
+            cat body.md
+            echo "ANIVAR_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "--- preview ---"; head -30 body.md
+
   release:
+    needs: notes
     name: ${{ matrix.label }}
     permissions:
       contents: write
@@ -135,9 +194,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
+          tagName: ${{ needs.notes.outputs.tag }}
           releaseName: "Anivar __VERSION__"
-          releaseBody: "Download the installer for your platform below. Existing installs update automatically."
+          releaseBody: ${{ needs.notes.outputs.body }}
           releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
@@ -173,7 +232,7 @@ jobs:
             # Relative filename inside the file, so `sha256sum -c x.exe.sha256`
             # works in the directory the user downloaded it to.
             ( cd "$(dirname "$f")" && hash "$(basename "$f")" > "$(basename "$f").sha256" )
-            gh release upload "${{ github.ref_name }}" "$f.sha256" --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload "${{ needs.notes.outputs.tag }}" "$f.sha256" --clobber --repo "$GITHUB_REPOSITORY"
           done
 
 # ── More acceleration editions (future) ──────────────────────────────────────

@@ -7,6 +7,8 @@ and this project (will) adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-08
+
 ### Privacy: anonymised cameras stopped leaking raw frames
 
 - **Fixed: `get_camera_snapshot` ignored depth anonymisation.** Every other
