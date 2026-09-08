@@ -98,8 +98,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macOS Intel (x86_64-apple-darwin) is deliberately absent: ort 2.0.0-rc.12
+          # publishes no prebuilt ONNX Runtime for that target, so the build fails in
+          # ort-sys before it reaches anything of ours. Restoring it means compiling
+          # ONNX Runtime from source in CI. Apple stopped selling Intel Macs in 2023
+          # and this project has none to test on.
           - { os: macos-latest,   label: "macOS (Apple Silicon)", target: aarch64-apple-darwin, args: "--target aarch64-apple-darwin" }
-          - { os: macos-latest,   label: "macOS (Intel)",         target: x86_64-apple-darwin,  args: "--target x86_64-apple-darwin" }
           - { os: ubuntu-latest,  label: "Linux",                 target: "",                   args: "" }
           - { os: windows-latest, label: "Windows",               target: "",                   args: "" }
           # NVIDIA edition: same app identity (shares footage/DB/settings) but a
@@ -183,7 +187,13 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          cargo build --release --manifest-path src-tauri/Cargo.toml
+          # `-p ort-sys`, NOT a full build. tauri-build validates bundle.resources
+          # inside build.rs, and tauri.windows.conf.json lists these DLLs there --
+          # so a full build cannot run until they exist, and they only exist once
+          # ort has downloaded them. Building the dependency alone breaks the cycle:
+          # ort-sys has no such check, and its build script is what copies them into
+          # target/<profile>/.
+          cargo build --release --manifest-path src-tauri/Cargo.toml -p ort-sys
           & ./scripts/sync-ort-dlls.ps1 -Profile release
 
       - name: Build, sign, and publish
