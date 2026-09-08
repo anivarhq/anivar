@@ -47,8 +47,12 @@ updates:
       prefix: "deps"
 
   # ── CI actions ──────────────────────────────────────────────────────────────
-  # Actions pinned to a major (checkout@v4 etc.) still drift; this catches the
-  # deprecations that otherwise surface as a red build on an unrelated PR.
+  # Actions are pinned to full commit SHAs, not tags. A tag is mutable: whoever
+  # controls the action can repoint v0 at new code, and release.yml is what signs
+  # and publishes the installers, so a moved tag is arbitrary code inside a signed
+  # build. Dependabot still watches them and opens a PR when the upstream tag
+  # advances -- the difference is that the bump becomes a reviewable diff instead
+  # of something that happens to you silently.
   - package-ecosystem: github-actions
     directory: /
     schedule:

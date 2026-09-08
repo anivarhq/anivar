@@ -20,8 +20,8 @@ jobs:
     name: Frontend (typecheck + build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '20'
           cache: 'npm'
@@ -39,8 +39,8 @@ jobs:
     name: Supply chain (advisories)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '20'
           cache: 'npm'
@@ -65,10 +65,10 @@ jobs:
       - name: npm audit (full report, advisory only)
         run: npm audit || true
 
-      - uses: dtolnay/rust-toolchain@1.97
+      - uses: dtolnay/rust-toolchain@4716b85f2fac3e324e64fa2810f6b5c3905760a5 # 1.97
       # Prebuilt binary rather than `cargo install` — the latter compiles
       # cargo-audit from source on every run, which costs minutes for nothing.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
         with:
           tool: cargo-audit
       # Fails on VULNERABILITIES. Unmaintained-crate notices are warnings by
@@ -111,7 +111,7 @@ jobs:
       # job really does bundle and must keep validating the real files.
       TAURI_CONFIG: '{"bundle":{"resources":null}}'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # Linux Tauri prerequisites (webkit, libsoup, etc.)
       - name: Install Linux Tauri prerequisites
@@ -153,7 +153,7 @@ jobs:
       # developer environment must be active for the whole build.
       - name: MSVC developer environment (Windows)
         if: matrix.os == 'windows-latest'
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
 
       # The Visual Studio generator fails on llama.cpp's `install` target; Ninja works.
       - name: Select Ninja generator
@@ -170,11 +170,11 @@ jobs:
       # Bumping this is a deliberate act: change the version, run
       #   scripts\cargo-env.bat +<version> clippy --lib --no-deps -- -D warnings
       # locally, and fix whatever the new release added.
-      - uses: dtolnay/rust-toolchain@1.97
+      - uses: dtolnay/rust-toolchain@4716b85f2fac3e324e64fa2810f6b5c3905760a5 # 1.97
         with:
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri -> target
 
