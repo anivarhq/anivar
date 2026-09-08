@@ -27,7 +27,7 @@
     "@tauri-apps/plugin-shell": "^2",
     "hls.js": "^1.6.16",
     "lucide-react": "^0.460.0",
-    "mermaid": "^11.16.0",
+    "mermaid": "^11.16.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zustand": "^5.0.0"
