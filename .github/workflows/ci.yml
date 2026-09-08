@@ -20,8 +20,8 @@ jobs:
     name: Frontend (typecheck + build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: 'npm'
@@ -39,8 +39,8 @@ jobs:
     name: Supply chain (advisories)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: 'npm'
@@ -65,7 +65,7 @@ jobs:
       - name: npm audit (full report, advisory only)
         run: npm audit || true
 
-      - uses: dtolnay/rust-toolchain@1.97
+      - uses: dtolnay/rust-toolchain@1.120
       # Prebuilt binary rather than `cargo install` — the latter compiles
       # cargo-audit from source on every run, which costs minutes for nothing.
       - uses: taiki-e/install-action@v2
@@ -111,7 +111,7 @@ jobs:
       # job really does bundle and must keep validating the real files.
       TAURI_CONFIG: '{"bundle":{"resources":null}}'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Linux Tauri prerequisites (webkit, libsoup, etc.)
       - name: Install Linux Tauri prerequisites
@@ -170,7 +170,7 @@ jobs:
       # Bumping this is a deliberate act: change the version, run
       #   scripts\cargo-env.bat +<version> clippy --lib --no-deps -- -D warnings
       # locally, and fix whatever the new release added.
-      - uses: dtolnay/rust-toolchain@1.97
+      - uses: dtolnay/rust-toolchain@1.120
         with:
           components: rustfmt, clippy
 

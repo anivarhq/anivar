@@ -49,7 +49,7 @@ jobs:
           - { os: windows-latest, label: "Windows (NVIDIA CUDA)", target: "",                   args: "--features cuda --config tauri.nvidia.conf.json" }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Linux Tauri prerequisites (webkit, appindicator for the tray, etc.)
       - name: Install Linux Tauri prerequisites
@@ -64,7 +64,7 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: "npm"
@@ -101,7 +101,7 @@ jobs:
 
       # Pinned to match ci.yml — a release should be built by the same compiler
       # that gated the code, not by whatever is stable on the day it is tagged.
-      - uses: dtolnay/rust-toolchain@1.97
+      - uses: dtolnay/rust-toolchain@1.120
         with:
           targets: ${{ matrix.target }}
 
@@ -129,7 +129,7 @@ jobs:
 
       - name: Build, sign, and publish
         id: tauri
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
