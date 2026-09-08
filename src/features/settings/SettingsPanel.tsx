@@ -1417,6 +1417,12 @@ export function SettingsPanel() {
             <span className={styles.sectionTitle}><Send size={12} /> Sharing & tunnel</span>
           </div>
 
+          <Field label="Allow other devices on this network"
+            more="Off, this app answers only on this computer. On, any device on the same Wi-Fi can reach it at http://<this computer>:8882 — useful for a phone at home. Remote share links work either way; they go through Tailscale, not the local network. Takes effect after a restart.">
+            <Toggle checked={form.lan_access ?? false}
+              onChange={v => patch("lan_access", v)} />
+          </Field>
+
           <Field label="Default share-link expiry" more="How long a 'Share Live View' / 'Share Clip' URL stays valid. Shorter = safer; longer = more convenient.">
             <select value={form.live_share_default_minutes ?? 30}
               onChange={e => patch("live_share_default_minutes", parseInt(e.target.value, 10) || 30)}

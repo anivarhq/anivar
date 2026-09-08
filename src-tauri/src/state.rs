@@ -336,10 +336,15 @@ pub struct Settings {
     #[serde(default)]
     pub known_plates: String,
 
-    /// Serve the stream/API on the LAN (0.0.0.0) — the default, so phones on the
-    /// same network can view. OFF = bind 127.0.0.1 only (single-machine use;
-    /// share links via the tunnel still work). Applied on next app start.
-    #[serde(default = "default_true")]
+    /// Serve the stream/API on the LAN (0.0.0.0) so other devices on the same
+    /// network can view. OFF (the default) binds 127.0.0.1 only.
+    ///
+    /// Off by default because this is the app's whole network attack surface and
+    /// it is reachable before anyone has decided they want that. Remote viewing
+    /// does not need it: `tailscale funnel --bg 8882` proxies to loopback, so
+    /// share links keep working with this off. Turn it on to open a phone on the
+    /// same Wi-Fi at `http://<this-machine>:8882`. Applied on next app start.
+    #[serde(default)]
     pub lan_access: bool,
 
     /// Versioned one-time migrations marker — see `db.rs::load_settings_from_db`.
@@ -521,11 +526,11 @@ impl Default for Settings {
             yolo_class_filter:          default_yolo_class_filter(),
             alpr_region:                default_alpr_region(),
             known_plates:               String::new(),
+            lan_access:                 false,   // opt in; see the field's doc comment
+            settings_version:           3, // fresh installs start at the current version
             // On by default for a security appliance: when the audio (YAMNet) skill is
             // installed AND a mic is present, listen for THREAT sounds (glass, alarm,
             // gunshot, scream…). No-ops with no skill/mic, so it's safe as a default.
-            lan_access:                 true,
-            settings_version:           3, // fresh installs start at the current version
             audio_detection:            true,
             audio_listen:               default_audio_listen(),
             audio_threshold:            default_audio_threshold(),

@@ -234,8 +234,10 @@ pub fn start_http_server(
     // Windows firewall for.
 
     tokio::spawn(async move {
-        // LAN access (default): reachable from phones on the network. Off →
-        // loopback only, so nothing on the network can even connect.
+        // Loopback unless the user opted in. ON = reachable from other devices on
+        // the network; OFF (the default) = nothing off this machine can connect
+        // at all. Remote viewing is unaffected either way — Tailscale Funnel
+        // proxies to loopback.
         let ip: [u8; 4] = if lan_access { [0, 0, 0, 0] } else { [127, 0, 0, 1] };
         let addr = SocketAddr::from((ip, port));
 

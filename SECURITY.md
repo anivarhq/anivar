@@ -87,11 +87,13 @@ Useful context if you are looking for something:
   because it consumes untrusted text
 - **Every user-derived value in a query is a bound parameter**, never string
   interpolation. A place where that is not true is a bug and worth reporting
-- **The local media server binds the LAN by default.** `lan_access` defaults to
-  on, so it listens on all interfaces (`0.0.0.0`) to let phones on your network
-  reach it; turning it off restricts it to loopback. Requests carry a token —
-  compared in constant time, rate-limited per IP — and paths are validated. The
-  camera proxy is restricted to private ranges with DNS-rebinding blocked
+- **The local media server binds loopback unless you opt in.** `lan_access`
+  defaults to OFF, so a fresh install answers only on `127.0.0.1`. Turning it on
+  (Settings → Sharing & tunnel) listens on all interfaces so other devices on
+  your network can reach it. Remote viewing does not depend on it — Tailscale
+  Funnel proxies to loopback. Either way requests carry a token, compared in
+  constant time and rate-limited per IP, and paths are validated. The camera
+  proxy is restricted to private ranges with DNS-rebinding blocked
 - **Footage wipes deliberately exclude face data**, so a retention purge cannot
   silently destroy enrolments
 - **Bundled binaries are SHA-pinned** (ffmpeg, go2rtc, runtime libraries).
