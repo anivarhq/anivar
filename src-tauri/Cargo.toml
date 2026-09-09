@@ -1,6 +1,6 @@
 [package]
 name = "anivar"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local-first, agentic AI security camera and NVR (Tauri desktop app)"
 authors = ["Ranjith Saila"]
 edition = "2021"

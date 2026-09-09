@@ -7,6 +7,86 @@ and this project (will) adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-09
+
+First release cut after installing 0.1.0 from its own installer rather than
+running a dev build. Four defects surfaced in the first ten minutes, all of them
+first-run problems that no dev build could have shown. Every one was traced
+against the installed app's log before any code changed.
+
+### Fixed: the assistant was unreachable on a default install
+
+- **The chat sat on "I'm resting" no matter what you installed.**
+  `agent_enabled` defaults to `false`, and `provider_ready` short-circuits on it
+  before it ever checks for a model — so a present, working 697 MB LLM reported
+  as not ready. The only thing that sets it true is Arsenal's **Use** button, and
+  that button could never appear: `ai_provider` and `local_llm_tier` both default
+  to the on-device *Balanced* row, so it showed as "✓ In use" from first launch
+  and went straight from **Install** to "in use", skipping **Use** entirely. The
+  chat's own instruction — *"Pick a model in Arsenal → Model (Use)"* — pointed at
+  a button that could not exist. "In use" now also requires the agent to be on,
+  which additionally stops the row claiming it after Guardian is switched off.
+
+### Fixed: the audio model could never be installed
+
+- **`audio_yamnet` failed with "server returned only 14096 bytes — not a model
+  file".** The server was fine. That file is the complete AudioSet class map, 522
+  lines, exactly what `audio.rs` reads. The 64 KB weights floor was being applied
+  to *every* file in a skill, and YAMNet is the only one with a small sidecar; the
+  all-or-nothing rule then deleted the whole skill, including the 16 MB model that
+  had downloaded correctly. The floor now applies to weights only.
+- **Sidecars are checked by shape instead of size**, which is the stronger test:
+  it rejects an HTML error page at *any* size, including one over 64 KB that the
+  floor used to wave through to fail later as an opaque ONNX parse error.
+- **Downloads now send a `User-Agent`.** `reqwest` sends none unless asked, and
+  several CDNs answer a UA-less request with an interstitial — HTTP 200, matching
+  content-length, an HTML body — which nothing upstream would have caught.
+
+### Fixed: "Application is not responding" on first launch
+
+- **Boot no longer downloads anything.** The CUDA runtime — roughly 1.8 GB — was
+  fetched inside a `block_on` on the thread that owns the window. Tauri shows the
+  window before `setup()` runs but does not pump its message loop until setup
+  returns, so that download *was* the hang: 30 seconds of it, measured. The Linux
+  lane already spawned the identical call. Boot now only puts an
+  already-installed runtime on the library path, which is a directory listing.
+- **The orphaned-process sweep moved off the startup path.** It waited on a cold
+  PowerShell + WMI query, seconds on a fresh install, on every machine. It now
+  runs inside the task that binds the stream port, preserving the ordering it
+  depends on.
+
+### Changed: one consent for the NVIDIA downloads, with the real number
+
+- The TensorRT pack was offered as "~1.85 GB" while the installed directory
+  measures **4.4 GB**, and the CUDA runtime beside it was never mentioned at all.
+  Both now sit behind the single existing prompt, which states the true
+  footprint. Decline it and detection still runs on DirectML.
+
+### Changed: onboarding stops implying a choice you don't have
+
+- The welcome screen showed three chips — core count, GPU name, accelerator.
+  None were clickable, but side by side, two of them labelled CPU and GPU, they
+  read as a decision to make. Replaced with one sentence naming what will
+  actually run detection.
+
+### Added
+
+- **A wordmark for the app icon** — an A and a V sharing one stroke, crossed by
+  the palette's single red as a scan line. Fluffy stays exactly where it belongs,
+  as the Guardian's face in the chat; the launcher, taskbar and installer now
+  carry the product's mark instead.
+- Tests pinning the download guard: a 14 KB CSV passes, a 14 KB HTML body does
+  not, a truncated `.onnx` does not.
+- A data-migration test that had never run. A stray `#[test]` had attached to its
+  neighbour, leaving 43 lines asserting every legacy data-directory and database
+  name migrates correctly compiled as dead code.
+
+### Known
+
+- `cuda/` and `trt/` overlap by ~1.76 GB across 14 files. `cublasLt` is
+  byte-identical in both; the cuDNN copies are different builds, so merging them
+  means reconciling two pinned versions — tracked, not guessed at.
+
 ## [0.1.0] - 2026-09-08
 
 ### Privacy: anonymised cameras stopped leaking raw frames
