@@ -1,23 +1,98 @@
+<div align="center">
+
+<img src="assets/logo.png" alt="Anivar" width="120" />
+
 # Anivar
+
+### Local-first NVR with on-device AI
+
+[![Latest release](https://img.shields.io/github/v/release/anivarhq/anivar?style=for-the-badge&labelColor=0d1117)](https://github.com/anivarhq/anivar/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/anivarhq/anivar/total?style=for-the-badge&labelColor=0d1117)](https://github.com/anivarhq/anivar/releases)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=for-the-badge&labelColor=0d1117)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/anivarhq/anivar/ci.yml?branch=main&style=for-the-badge&labelColor=0d1117&label=CI)](https://github.com/anivarhq/anivar/actions/workflows/ci.yml)
+
+[**Download**](#download) · [**What it does**](#what-it-does) ·
+[**Architecture**](#architecture) · [**Build from source**](#build-from-source) ·
+[**Privacy & security**](#privacy--security)
+
+</div>
+
+---
 
 A local-first NVR with on-device AI. One cross-platform desktop app built on
 [Tauri 2](https://v2.tauri.app/) with a React frontend and a Rust backend —
 recording, detection, recognition, and event analysis all run on your machine,
 including the language model.
 
-[![CI](https://github.com/anivarhq/anivar/actions/workflows/ci.yml/badge.svg)](https://github.com/anivarhq/anivar/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+> [!WARNING]
+> **Alpha.** APIs and the data-directory layout are still subject to change, and
+> the installers are not code-signed yet — your OS will warn you. See
+> [Before you install](#before-you-install).
 
-> **Status:** alpha. Not yet released. APIs and the data-directory layout are
-> still subject to change.
+## Download
 
-## Contents
+Latest release: **v0.1.0**. Every file below has a matching `.sha256` on the
+[releases page](https://github.com/anivarhq/anivar/releases/latest), and what
+changed is in [`CHANGELOG.md`](CHANGELOG.md).
 
-[What it does](#what-it-does) · [Architecture](#architecture) ·
-[Quick start](#quick-start) · [Project layout](#project-layout) ·
-[Configuration & data](#configuration--data) ·
-[Privacy & security](#privacy--security) · [Contributing](#contributing) ·
-[License](#license)
+| Platform | Download | |
+|---|---|---|
+| **Windows** 10/11, x64 | [`Anivar_0.1.0_x64-setup.exe`](https://github.com/anivarhq/anivar/releases/download/v0.1.0/Anivar_0.1.0_x64-setup.exe) | 66 MB · installs per-user, no admin |
+| **macOS** 11+, Apple Silicon | [`Anivar_0.1.0_aarch64.dmg`](https://github.com/anivarhq/anivar/releases/download/v0.1.0/Anivar_0.1.0_aarch64.dmg) | 19 MB |
+| **Linux** x86_64 | [`Anivar_0.1.0_amd64.AppImage`](https://github.com/anivarhq/anivar/releases/download/v0.1.0/Anivar_0.1.0_amd64.AppImage) | 97 MB · portable, `chmod +x` and run |
+| | [`Anivar_0.1.0_amd64.deb`](https://github.com/anivarhq/anivar/releases/download/v0.1.0/Anivar_0.1.0_amd64.deb) | 24 MB · Debian, Ubuntu |
+| | [`Anivar-0.1.0-1.x86_64.rpm`](https://github.com/anivarhq/anivar/releases/download/v0.1.0/Anivar-0.1.0-1.x86_64.rpm) | 24 MB · Fedora, RHEL, openSUSE |
+
+One download per platform. The Windows installer carries the CUDA execution
+provider and detects an NVIDIA card at runtime — there is no separate GPU
+edition to choose between. Without one it uses DirectML on any DX12 GPU. macOS
+uses CoreML; Linux runs detection on the CPU today.
+
+There is no Intel-Mac or 32-bit build. Linux binaries are built against
+`webkit2gtk-4.1`, so Ubuntu 22.04 / Debian 12 or newer.
+
+Installed builds update themselves. The updater checks a manifest signed with
+the project's key and refuses anything that fails that signature, so an update
+cannot come from anywhere else.
+
+### Verify your download
+
+The installers are not code-signed yet, so a checksum is the only thing that
+tells you the file arrived intact. Download the `.sha256` next to it, then:
+
+```powershell
+# Windows (PowerShell) — compare this against the .sha256 file's contents
+(Get-FileHash .\Anivar_0.1.0_x64-setup.exe -Algorithm SHA256).Hash
+```
+
+```bash
+# macOS
+shasum -a 256 -c Anivar_0.1.0_aarch64.dmg.sha256
+# Linux
+sha256sum -c Anivar_0.1.0_amd64.deb.sha256
+```
+
+A SHA-256 is not a signature — anyone who could replace the installer could
+replace the hash beside it. It catches a corrupted download and a mirror that
+altered the file. Real code signing is on the list; it needs a purchased
+certificate.
+
+### Before you install
+
+The Windows and macOS builds are not signed by a certificate authority yet, so
+both will stop you the first time (Linux does not check):
+
+- **Windows** shows *"Windows protected your PC"*. Click **More info** →
+  **Run anyway**.
+- **macOS** refuses to open an app that isn't notarised. Try to open it once,
+  then go to **System Settings → Privacy & Security** and click **Open Anyway**.
+  From a terminal, `xattr -dr com.apple.quarantine /Applications/Anivar.app`
+  does the same thing.
+
+If that trade is not one you want to make, [build from
+source](#build-from-source) — the release workflow that produced these files is
+[`release.yml`](.github/workflows/release.yml), and it builds nothing that isn't
+in this repository.
 
 ## What it does
 
@@ -111,7 +186,7 @@ Two design rules worth knowing up front, because they explain a lot of the code:
   an image, or is strong enough to classify risk, is a function of the provider —
   never of whether some model-name string happens to be non-empty.
 
-## Quick start
+## Build from source
 
 ### Prerequisites
 
