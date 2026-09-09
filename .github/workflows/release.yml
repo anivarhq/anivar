@@ -105,15 +105,16 @@ jobs:
           # and this project has none to test on.
           - { os: macos-latest,   label: "macOS (Apple Silicon)", target: aarch64-apple-darwin, args: "--target aarch64-apple-darwin" }
           - { os: ubuntu-latest,  label: "Linux",                 target: "",                   args: "" }
-          - { os: windows-latest, label: "Windows",               target: "",                   args: "" }
+          # ONE Windows installer, built with --features cuda so the CUDA and
+          # TensorRT providers are present. It stays a single download because the
+          # runtime they need is fetched on first launch ONLY when an NVIDIA adapter
+          # is found; everyone else runs DirectML and downloads nothing extra. The
+          # provider DLLs were already bundled in every Windows build, so this costs
+          # no installer size -- it makes them usable.
+          - { os: windows-latest, label: "Windows",               target: "",                   args: "--features cuda" }
           # NVIDIA edition: same app identity (shares footage/DB/settings) but a
           # distinct installer name, built with the CUDA EP. Users on an NVIDIA GPU
           # download this one; the CUDA + cuDNN runtime is fetched on first launch.
-          # --config is resolved against the directory the Tauri CLI is invoked
-          # from, which is the repo root, NOT src-tauri. Bare
-          # "tauri.nvidia.conf.json" made the CLI look at the repo root and fail
-          # with "Provided config path ... does not exist".
-          - { os: windows-latest, label: "Windows (NVIDIA CUDA)", target: "",                   args: "--features cuda --config src-tauri/tauri.nvidia.conf.json" }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

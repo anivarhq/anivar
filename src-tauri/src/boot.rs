@@ -395,8 +395,14 @@ pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::
     // CUDA build variant: provision the NVIDIA runtime (download once on first
     // launch) and put it on the DLL path BEFORE any ORT session loads, so the CUDA
     // EP can bind cudart/cublas/cudnn. Best-effort — falls back to DirectML/CPU.
+    //
+    // Gated on an actual NVIDIA adapter, the way the Linux lane above already is.
+    // Without that check EVERY machine fetched NVIDIA's redistributables, including
+    // AMD and Intel ones that can never load them -- which is what forced this into
+    // a separate "NVIDIA edition" installer rather than simply being what the one
+    // installer does when it finds an NVIDIA card.
     #[cfg(feature = "cuda")]
-    if settings.inference_device != "cpu" {
+    if settings.inference_device != "cpu" && crate::inference::has_nvidia_adapter() {
         let cuda_dd = data_dir.clone();
         if let Err(e) = tauri::async_runtime::block_on(crate::cuda_runtime::ensure_cuda_runtime(&cuda_dd)) {
             tracing::warn!("CUDA runtime setup failed ({e}) — using DirectML/CPU instead");
