@@ -74,9 +74,17 @@ jobs:
             echo
             echo "Download the installer for your platform below. Existing installs update automatically."
             echo
-            echo "> The installers are **not** OS-code-signed yet. Windows shows a SmartScreen"
-            echo "> prompt (More info → Run anyway). On macOS, right-click the app → Open, or run"
-            echo "> \`xattr -cr /Applications/Anivar.app\` if Gatekeeper refuses it."
+            # Keep this in step with README.md's "Before you install". The macOS
+            # line used to say right-click → Open, which recent macOS no longer
+            # accepts for an un-notarised app: the only route is Privacy & Security.
+            echo "> The installers are **not** code-signed yet, so both operating systems"
+            echo "> will stop you the first time. **Windows** shows \"Windows protected your"
+            echo "> PC\" — click **More info** → **Run anyway**. **macOS** refuses an app that"
+            echo "> isn't notarised: try to open it once, then go to **System Settings →"
+            echo "> Privacy & Security** and click **Open Anyway** (or"
+            echo "> \`xattr -dr com.apple.quarantine /Applications/Anivar.app\`)."
+            echo
+            echo "Every file has a \`.sha256\` beside it — see [Verify your download](https://github.com/anivarhq/anivar#verify-your-download)."
             echo
             echo "## Changes"
             echo

@@ -31,17 +31,17 @@ including the language model.
 
 ## Download
 
-Latest release: **v0.1.0**. Every file below has a matching `.sha256` on the
+Latest release: **v0.1.1**. Every file below has a matching `.sha256` on the
 [releases page](https://github.com/anivarhq/anivar/releases/latest), and what
 changed is in [`CHANGELOG.md`](CHANGELOG.md).
 
 | Platform | Download | |
 |---|---|---|
-| **Windows** 10/11, x64 | [`Anivar_0.1.0_x64-setup.exe`](https://github.com/anivarhq/anivar/releases/download/v0.1.0/Anivar_0.1.0_x64-setup.exe) | 66 MB · installs per-user, no admin |
-| **macOS** 11+, Apple Silicon | [`Anivar_0.1.0_aarch64.dmg`](https://github.com/anivarhq/anivar/releases/download/v0.1.0/Anivar_0.1.0_aarch64.dmg) | 19 MB |
-| **Linux** x86_64 | [`Anivar_0.1.0_amd64.AppImage`](https://github.com/anivarhq/anivar/releases/download/v0.1.0/Anivar_0.1.0_amd64.AppImage) | 97 MB · portable, `chmod +x` and run |
-| | [`Anivar_0.1.0_amd64.deb`](https://github.com/anivarhq/anivar/releases/download/v0.1.0/Anivar_0.1.0_amd64.deb) | 24 MB · Debian, Ubuntu |
-| | [`Anivar-0.1.0-1.x86_64.rpm`](https://github.com/anivarhq/anivar/releases/download/v0.1.0/Anivar-0.1.0-1.x86_64.rpm) | 24 MB · Fedora, RHEL, openSUSE |
+| **Windows** 10/11, x64 | [`Anivar_0.1.1_x64-setup.exe`](https://github.com/anivarhq/anivar/releases/download/v0.1.1/Anivar_0.1.1_x64-setup.exe) | 66 MB · installs per-user, no admin |
+| **macOS** 11+, Apple Silicon | [`Anivar_0.1.1_aarch64.dmg`](https://github.com/anivarhq/anivar/releases/download/v0.1.1/Anivar_0.1.1_aarch64.dmg) | 19 MB |
+| **Linux** x86_64 | [`Anivar_0.1.1_amd64.AppImage`](https://github.com/anivarhq/anivar/releases/download/v0.1.1/Anivar_0.1.1_amd64.AppImage) | 97 MB · portable, `chmod +x` and run |
+| | [`Anivar_0.1.1_amd64.deb`](https://github.com/anivarhq/anivar/releases/download/v0.1.1/Anivar_0.1.1_amd64.deb) | 24 MB · Debian, Ubuntu |
+| | [`Anivar-0.1.1-1.x86_64.rpm`](https://github.com/anivarhq/anivar/releases/download/v0.1.1/Anivar-0.1.1-1.x86_64.rpm) | 24 MB · Fedora, RHEL, openSUSE |
 
 One download per platform. The Windows installer carries the CUDA execution
 provider and detects an NVIDIA card at runtime — there is no separate GPU
@@ -62,14 +62,14 @@ tells you the file arrived intact. Download the `.sha256` next to it, then:
 
 ```powershell
 # Windows (PowerShell) — compare this against the .sha256 file's contents
-(Get-FileHash .\Anivar_0.1.0_x64-setup.exe -Algorithm SHA256).Hash
+(Get-FileHash .\Anivar_0.1.1_x64-setup.exe -Algorithm SHA256).Hash
 ```
 
 ```bash
 # macOS
-shasum -a 256 -c Anivar_0.1.0_aarch64.dmg.sha256
+shasum -a 256 -c Anivar_0.1.1_aarch64.dmg.sha256
 # Linux
-sha256sum -c Anivar_0.1.0_amd64.deb.sha256
+sha256sum -c Anivar_0.1.1_amd64.deb.sha256
 ```
 
 A SHA-256 is not a signature — anyone who could replace the installer could
