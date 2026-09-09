@@ -240,14 +240,28 @@ jobs:
           if command -v sha256sum >/dev/null; then hash() { sha256sum "$1"; }
           else                                    hash() { shasum -a 256 "$1"; }
           fi
-          # artifactPaths is a JSON array of absolute paths.
-          echo '${{ steps.tauri.outputs.artifactPaths }}' | jq -r '.[]' | while read -r f; do
-            [ -f "$f" ] || continue
+          # artifactPaths is a JSON array of absolute paths. On Windows they use
+          # BACKSLASHES, which this bash step cannot stat, so `[ -f "$f" ]` was
+          # false for every Windows artifact: the loop skipped them all and the
+          # step still exited 0. v0.1.0 published Windows installers with no
+          # checksum at all, under a green tick. `tr '\134' '/'` (octal, so there
+          # is no trailing-backslash portability warning) normalises them; Unix
+          # paths pass through untouched.
+          count=0
+          while read -r f; do
+            f=$(printf '%s' "$f" | tr '\134' '/')
+            [ -f "$f" ] || { echo "::warning::artifact not found: $f"; continue; }
             # Relative filename inside the file, so `sha256sum -c x.exe.sha256`
             # works in the directory the user downloaded it to.
             ( cd "$(dirname "$f")" && hash "$(basename "$f")" > "$(basename "$f").sha256" )
             gh release upload "${{ needs.notes.outputs.tag }}" "$f.sha256" --clobber --repo "$GITHUB_REPOSITORY"
-          done
+            count=$((count + 1))
+          done < <(echo '${{ steps.tauri.outputs.artifactPaths }}' | jq -r '.[]')
+
+          # Fail rather than pass having done nothing. A silent no-op here means
+          # a download nobody can verify, which is exactly what shipped before.
+          [ "$count" -gt 0 ] || { echo "::error::checksum step produced no files"; exit 1; }
+          echo "Published $count checksum(s)"
 
 # ── More acceleration editions (future) ──────────────────────────────────────
 # Each accelerator is a separate `ort` feature build, added as another matrix row
