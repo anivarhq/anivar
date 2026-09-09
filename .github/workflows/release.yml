@@ -275,16 +275,50 @@ jobs:
 
           [ -s names ] || { echo "::error::$TAG has no assets to checksum"; exit 1; }
 
+          # A stable alias per installer, so a download link can be written once
+          # and keep working. Asset names carry the version, which means
+          # releases/latest/download/Anivar_0.1.1_x64-setup.exe dies at 0.1.2 —
+          # every README, blog post and bookmark pointing at it breaks silently.
+          # These names never change, so releases/latest/download/<alias> is
+          # permanent. Matched on the stable suffix, never on a version string.
+          alias_for() {
+            case "$1" in
+              *_x64-setup.exe)  echo Anivar-windows-x64-setup.exe ;;
+              *_aarch64.dmg)    echo Anivar-macos-arm64.dmg ;;
+              *_amd64.AppImage) echo Anivar-linux-x86_64.AppImage ;;
+              *_amd64.deb)      echo Anivar-linux-amd64.deb ;;
+              *.x86_64.rpm)     echo Anivar-linux-x86_64.rpm ;;
+              *)                echo '' ;;
+            esac
+          }
+
+          aliases=0
           while read -r n; do
             gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$n" --clobber
             # Relative filename inside the file, so `sha256sum -c x.exe.sha256`
             # works in whatever directory the user downloaded it to.
             sha256sum "$n" > "$n.sha256"
             gh release upload "$TAG" "$n.sha256" --clobber --repo "$GITHUB_REPOSITORY"
+
+            a=$(alias_for "$n")
+            if [ -n "$a" ] && [ "$a" != "$n" ]; then
+              cp "$n" "$a"
+              gh release upload "$TAG" "$a" --clobber --repo "$GITHUB_REPOSITORY"
+              rm -f "$a"
+              aliases=$((aliases + 1))
+            fi
             rm -f "$n"
           done < names
 
-          echo "Published $(wc -l < names) checksum(s):"
+          # Five installers ship, so five aliases must exist or a documented
+          # download link is dead and nothing else would have noticed.
+          [ "$aliases" -eq 5 ] || {
+            echo "::error::expected 5 stable aliases, published $aliases"
+            cat names
+            exit 1
+          }
+
+          echo "Published $(wc -l < names) checksum(s) and $aliases stable aliases:"
           cat names
 
 

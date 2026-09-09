@@ -31,16 +31,16 @@ the first time — see [Before you install](#before-you-install).
 
 ## Download
 
-### [Download for your system →](https://anivarhq.github.io/anivar-site/#download)
+These links always serve the newest release — click one and the file downloads.
 
-The site picks the right file for the machine you are on and shows its size.
-Or take it straight from GitHub:
-
-| Platform | Get it | What you get |
+| Platform | Download | Notes |
 |---|---|---|
-| **Windows** 10/11, x64 | [**Download**](https://github.com/anivarhq/anivar/releases/latest) | `…_x64-setup.exe` — installs per-user, no admin |
-| **macOS** 11+, **Apple Silicon only** | [**Download**](https://github.com/anivarhq/anivar/releases/latest) | `…_aarch64.dmg` |
-| **Linux** x86_64 | [**Download**](https://github.com/anivarhq/anivar/releases/latest) | `…_amd64.AppImage` (portable — `chmod +x` and run), `…_amd64.deb`, or `…x86_64.rpm` |
+| **Windows** 10 / 11, x64 | [**Installer** `.exe`](https://github.com/anivarhq/anivar/releases/latest/download/Anivar-windows-x64-setup.exe) | Installs for your user — no administrator prompt |
+| **macOS** 11+, **Apple Silicon** | [**Disk image** `.dmg`](https://github.com/anivarhq/anivar/releases/latest/download/Anivar-macos-arm64.dmg) | Intel Macs are not supported |
+| **Linux** x86_64 | [**AppImage**](https://github.com/anivarhq/anivar/releases/latest/download/Anivar-linux-x86_64.AppImage) · [`.deb`](https://github.com/anivarhq/anivar/releases/latest/download/Anivar-linux-amd64.deb) · [`.rpm`](https://github.com/anivarhq/anivar/releases/latest/download/Anivar-linux-x86_64.rpm) | AppImage is portable — `chmod +x` and run |
+
+Prefer to see sizes and checksums first? The [website](https://anivarhq.github.io/anivar-site/#download) shows the
+file for your system, and the [releases page](https://github.com/anivarhq/anivar/releases/latest) lists everything.
 
 One download per platform. The Windows installer carries the CUDA execution
 provider and detects an NVIDIA card at runtime — there is no separate GPU edition
