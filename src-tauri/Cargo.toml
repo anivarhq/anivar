@@ -137,7 +137,7 @@ sha2 = "0.10"
 # salted PHC strings) — far stronger than the legacy SHA-256 of the remote login.
 argon2 = "0.5"
 hmac = "0.12"
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 rand = "0.8"
 mdns-sd = "0.11"
 socket2 = { version = "0.5", features = ["all"] }
