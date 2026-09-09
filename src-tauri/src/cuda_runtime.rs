@@ -53,11 +53,19 @@ pub async fn ensure_cuda_runtime(data_dir: &Path) -> Result<PathBuf> {
 /// Put an ALREADY-provisioned runtime on the library path. Returns false when it
 /// isn't installed, and never touches the network.
 ///
+/// Windows-only by `cfg`, and that is a statement rather than a lint workaround:
+/// the Linux lane keeps calling [`ensure_cuda_runtime`] at boot because CUDA is
+/// its ONLY route off the CPU — there is no DirectML to fall back to — and
+/// `ensure_lib_pack` already returns early without a network call once the
+/// markers are present, so Linux gains nothing from a separate activate path.
+/// Compiled on Linux, this would be dead code and `-D warnings` says so.
+///
 /// Boot needs exactly this. It used to call [`ensure_cuda_runtime`], which on a
 /// first launch meant a ~1.8 GB download nobody had agreed to, on the thread that
 /// owns the window — 30 seconds of "not responding" measured on a fresh install.
 /// The libraries still have to be loadable before the first ORT session, so the
 /// path setup stays at boot; only the fetching moved behind consent.
+#[cfg(feature = "cuda")]
 pub fn activate_if_present(data_dir: &Path) -> bool {
     let dir = data_dir.join("cuda");
     if !Requirement::Markers(MARKERS).met(&dir) {
