@@ -109,7 +109,11 @@ jobs:
           # NVIDIA edition: same app identity (shares footage/DB/settings) but a
           # distinct installer name, built with the CUDA EP. Users on an NVIDIA GPU
           # download this one; the CUDA + cuDNN runtime is fetched on first launch.
-          - { os: windows-latest, label: "Windows (NVIDIA CUDA)", target: "",                   args: "--features cuda --config tauri.nvidia.conf.json" }
+          # --config is resolved against the directory the Tauri CLI is invoked
+          # from, which is the repo root, NOT src-tauri. Bare
+          # "tauri.nvidia.conf.json" made the CLI look at the repo root and fail
+          # with "Provided config path ... does not exist".
+          - { os: windows-latest, label: "Windows (NVIDIA CUDA)", target: "",                   args: "--features cuda --config src-tauri/tauri.nvidia.conf.json" }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
