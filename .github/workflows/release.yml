@@ -217,52 +217,68 @@ jobs:
           includeUpdaterJson: true
           args: ${{ matrix.args }}
 
-      # ── Checksums ────────────────────────────────────────────────────────────
-      # AUTO-UPDATES are already protected: `includeUpdaterJson` above signs the
-      # manifest with TAURI_SIGNING_PRIVATE_KEY, and the app refuses an update
-      # that fails that signature.
-      #
-      # A MANUAL download from the Releases page has no such check. The installer
-      # is not Authenticode-signed yet (that needs a purchased certificate), so
-      # today a user who downloads the .exe cannot tell a good copy from a
-      # tampered one. A published SHA-256 is not a signature — anyone who can
-      # replace the artifact could replace the hash — but it does catch a
-      # corrupted download and a mirror that altered the file, and it costs
-      # nothing. Remove it only when real code signing lands, not before.
-      - name: Publish checksums
-        if: steps.tauri.outputs.artifactPaths != ''
-        shell: bash
+
+  # ── Checksums ──────────────────────────────────────────────────────────────
+  # AUTO-UPDATES are already protected: `includeUpdaterJson` above signs the
+  # manifest with TAURI_SIGNING_PRIVATE_KEY, and the app refuses an update that
+  # fails that signature.
+  #
+  # A MANUAL download from the Releases page has no such check. The installers
+  # are not Authenticode-signed or notarised yet (that needs a purchased
+  # certificate), so today a user who downloads the .exe cannot tell a good copy
+  # from a tampered one. A published SHA-256 is not a signature — anyone who
+  # could replace the artifact could replace the hash — but it does catch a
+  # corrupted download and a mirror that altered the file, and it costs nothing.
+  # Remove it only when real code signing lands, not before.
+  #
+  # This hashes the RELEASE ASSETS, not the runners' build output, which is both
+  # simpler and strictly more correct than the per-runner step it replaces:
+  #
+  #   * It hashes the exact bytes a user downloads, end of story.
+  #   * Names always match. tauri-action renames on upload — the macOS updater
+  #     bundle goes up as `Anivar_aarch64.app.tar.gz` while on disk it is
+  #     `Anivar.app.tar.gz` — so hashing disk paths published
+  #     `Anivar.app.tar.gz.sha256`, naming a file nobody can download.
+  #   * No Windows path handling. tauri-action reports absolute paths with
+  #     backslashes, and even normalised they would not stat from the runner's
+  #     bash while the file was demonstrably present, so every Windows artifact
+  #     was skipped and the step still exited 0: v0.1.0's first build published
+  #     Windows installers with no checksum at all, under a green tick.
+  #
+  # One Linux job instead of the same step on three runners, at 1× minutes.
+  checksums:
+    needs: [notes, release]
+    name: Checksums
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Hash and publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.notes.outputs.tag }}
         run: |
           set -euo pipefail
-          # macOS ships `shasum`, not `sha256sum`; both emit the same
-          # "<hash>  <filename>" format that `-c` reads back.
-          if command -v sha256sum >/dev/null; then hash() { sha256sum "$1"; }
-          else                                    hash() { shasum -a 256 "$1"; }
-          fi
-          # artifactPaths is a JSON array of absolute paths. On Windows they use
-          # BACKSLASHES, which this bash step cannot stat, so `[ -f "$f" ]` was
-          # false for every Windows artifact: the loop skipped them all and the
-          # step still exited 0. v0.1.0 published Windows installers with no
-          # checksum at all, under a green tick. `tr '\134' '/'` (octal, so there
-          # is no trailing-backslash portability warning) normalises them; Unix
-          # paths pass through untouched.
-          count=0
-          while read -r f; do
-            f=$(printf '%s' "$f" | tr '\134' '/')
-            [ -f "$f" ] || { echo "::warning::artifact not found: $f"; continue; }
-            # Relative filename inside the file, so `sha256sum -c x.exe.sha256`
-            # works in the directory the user downloaded it to.
-            ( cd "$(dirname "$f")" && hash "$(basename "$f")" > "$(basename "$f").sha256" )
-            gh release upload "${{ needs.notes.outputs.tag }}" "$f.sha256" --clobber --repo "$GITHUB_REPOSITORY"
-            count=$((count + 1))
-          done < <(echo '${{ steps.tauri.outputs.artifactPaths }}' | jq -r '.[]')
+          cd "$(mktemp -d)"
+          # Skip the updater manifest and any checksum from an earlier run.
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[].name
+                                | select(endswith(".sha256") or . == "latest.json" | not)' > names
 
-          # Fail rather than pass having done nothing. A silent no-op here means
-          # a download nobody can verify, which is exactly what shipped before.
-          [ "$count" -gt 0 ] || { echo "::error::checksum step produced no files"; exit 1; }
-          echo "Published $count checksum(s)"
+          [ -s names ] || { echo "::error::$TAG has no assets to checksum"; exit 1; }
+
+          while read -r n; do
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$n" --clobber
+            # Relative filename inside the file, so `sha256sum -c x.exe.sha256`
+            # works in whatever directory the user downloaded it to.
+            sha256sum "$n" > "$n.sha256"
+            gh release upload "$TAG" "$n.sha256" --clobber --repo "$GITHUB_REPOSITORY"
+            rm -f "$n"
+          done < names
+
+          echo "Published $(wc -l < names) checksum(s):"
+          cat names
+
 
 # ── More acceleration editions (future) ──────────────────────────────────────
 # Each accelerator is a separate `ort` feature build, added as another matrix row
