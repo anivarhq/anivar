@@ -1084,7 +1084,6 @@ mod tests {
     /// Runs the whole legacy chain, one hop per entry: an install sitting on ANY
     /// past name must arrive intact. Parameterised so adding a future rename to
     /// `LEGACY_DATA_DIRS` is covered here automatically.
-    #[test]
     /// The CURRENT names must never appear in their own legacy lists.
     ///
     /// That is the documented failure of this codebase's second rename: a bulk
@@ -1106,6 +1105,7 @@ mod tests {
             "BUNDLE_ID {} is in LEGACY_WEBVIEW_IDS", crate::BUNDLE_ID);
     }
 
+    #[test]
     fn migrates_every_legacy_data_dir_and_db() {
         let stem = DB_FILENAME.trim_end_matches(".db");
         for (i, (legacy_dir, legacy_stem)) in
