@@ -30,6 +30,53 @@ fn is_real_model(path: &std::path::Path) -> bool {
     Requirement::MinSize(MIN_MODEL_BYTES).met(path)
 }
 
+/// Weight formats. Everything else a skill downloads is a SIDECAR — a class map,
+/// a tokenizer — whose honest size is a few KB, so [`MIN_MODEL_BYTES`] must not
+/// be applied to it.
+fn is_weights(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref(),
+        Some("onnx" | "gguf" | "bin" | "safetensors" | "pt")
+    )
+}
+
+/// True if these opening bytes are an HTML document. A CDN interstitial, a login
+/// wall or a "repository not found" page arrives as HTTP 200 with a matching
+/// `content-length`, so neither `error_for_status` nor the length check sees it;
+/// this does, at any size.
+fn looks_like_html(head: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(head);
+    let text = text.trim_start().to_ascii_lowercase();
+    text.starts_with("<!doctype html") || text.starts_with("<html") || text.starts_with("<head")
+}
+
+/// Verdict on a finished download: is this plausibly the file we asked for?
+///
+/// Weights must clear the size floor. Every file must be non-empty and must not
+/// be a web page. Splitting it this way is what lets `audio_yamnet` ship: its
+/// 14 KB `class_map.csv` is correct and complete, and the flat floor rejected it.
+async fn reject_if_not_a_file(dest: &Path, got: u64) -> Result<(), String> {
+    if got == 0 {
+        return Err("server returned an empty file".to_string());
+    }
+    if is_weights(dest) && got < MIN_MODEL_BYTES {
+        return Err(format!("server returned only {got} bytes — not a model file"));
+    }
+    let mut head = [0u8; 512];
+    let read = match tokio::fs::File::open(dest).await {
+        Ok(mut f) => {
+            use tokio::io::AsyncReadExt;
+            f.read(&mut head).await.unwrap_or(0)
+        }
+        Err(_) => 0,
+    };
+    if looks_like_html(&head[..read]) {
+        return Err("server returned a web page, not a file — the URL is wrong, \
+                    moved, or needs a login".to_string());
+    }
+    Ok(())
+}
+
 /// Returns true if the skill model file is present in <data_dir>/skills/<skill_id>/
 /// For YOLO26: checks for model.onnx (the onnx-community/yolo26x-ONNX export).
 ///
@@ -159,11 +206,18 @@ pub async fn download_skill(
         }
     }).await.map_err(|e| format!("download failed: {e}"))?;
 
-    // A 404/403 page is a valid HTTP response — it just isn't a model. The size
-    // floor is what stops one being reported as a successful install.
-    if got < MIN_MODEL_BYTES {
+    // A 404/403 page is a valid HTTP response — it just isn't a model.
+    //
+    // The size floor only makes sense for WEIGHTS. Applied to every file it
+    // rejected `audio_yamnet`'s companion `class_map.csv`, which is a complete,
+    // correct 14 KB file (522 AudioSet classes) — and the all-or-nothing rule
+    // then wiped the whole skill, so the only audio model could never install.
+    // Sidecars get a shape check instead, which is the stronger guard anyway:
+    // it catches an HTML error page at ANY size, including one over 64 KB that
+    // the floor waved through to fail later as an opaque ONNX parse error.
+    if let Err(why) = reject_if_not_a_file(&dest, got).await {
         let _ = tokio::fs::remove_file(&dest).await;
-        return Err(format!("server returned only {got} bytes — not a model file"));
+        return Err(why);
     }
 
     tick(got, Some(got)); // final 100%
@@ -297,4 +351,32 @@ fn walk_dir_size(p: &Path) -> u64 {
             acc + meta.len()
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The regression that shipped in v0.1.0: `audio_yamnet`'s class map is a
+    /// legitimate 14,096-byte CSV, and the flat 64 KB floor rejected it, which
+    /// the all-or-nothing rule turned into "the audio model cannot be installed".
+    #[test]
+    fn sidecars_are_not_held_to_the_weights_floor() {
+        assert!(!is_weights(Path::new("class_map.csv")));
+        assert!(!is_weights(Path::new("tokenizer.json")));
+        assert!(is_weights(Path::new("model.onnx")));
+        assert!(is_weights(Path::new("model.gguf")));
+        assert!(is_weights(Path::new("MODEL.ONNX")), "extension match is case-insensitive");
+    }
+
+    #[test]
+    fn an_html_page_is_caught_at_any_size() {
+        assert!(looks_like_html(b"<!DOCTYPE html><html><head>"));
+        assert!(looks_like_html(b"\n  <html lang=\"en\">"), "leading whitespace is skipped");
+        assert!(looks_like_html(b"<!doctype HTML>"), "tag match is case-insensitive");
+        // The real 14 KB file this all turned on, and the formats it sits beside.
+        assert!(!looks_like_html(b"index,mid,display_name\n0,/m/09x0r,Speech\n"));
+        assert!(!looks_like_html(b"GGUF\x03\x00\x00\x00"));
+        assert!(!looks_like_html(&[0x08, 0x07, 0x12, 0x0c]), "onnx protobuf header");
+    }
 }

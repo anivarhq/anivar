@@ -24,9 +24,15 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
-  Shield, Cpu, Zap, Camera, Check, ChevronRight, ChevronLeft, Download,
-  Sparkles, Rocket, MonitorPlay,
+  Shield, Zap, Camera, Check, ChevronRight, ChevronLeft, Download,
+  Sparkles, Rocket,
 } from "lucide-react";
+
+/// The backend accelerator string is an engineering line —
+/// "DirectML → NVIDIA GeForce RTX 5060 Laptop GPU (adapter 1)". Keep the engine
+/// only. Same trim as the sidebar Activity card in App.tsx.
+const cleanAccelerator = (s?: string) =>
+  (s ?? "").split("→")[0].replace(/\(.*\)/, "").trim() || "this machine";
 import { api } from "../../api";
 import type { TrtxStatus, SystemMetrics, CameraConfig, Settings } from "../../types";
 import { AddCameraModal } from "../live/LivePanel";
@@ -133,11 +139,16 @@ function WelcomeStep({ metrics, onNext, onSkip }: {
         </div>
       </div>
 
-      {metrics && (
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
-          <HwPill icon={<Cpu size={12} />} label={`${metrics.per_core?.length ?? "?"}-core CPU`} />
-          {gpu && <HwPill icon={<MonitorPlay size={12} />} label={gpu.name} />}
-          {metrics.accelerator && <HwPill icon={<Zap size={12} />} label={metrics.accelerator} accent />}
+      {/* One sentence naming what will actually run detection — NOT a row of
+          chips. This used to render three: a CPU icon + core count, the GPU name,
+          and the accelerator. None were clickable, but side by side, two of them
+          labelled CPU and GPU, they read as a choice the user had to make and
+          didn't understand. Core count is not a decision and not actionable; the
+          only thing worth saying here is which chip does the work. */}
+      {metrics && (gpu || metrics.accelerator) && (
+        <div style={{ display: "flex", justifyContent: "center" }}>
+          <HwPill icon={<Zap size={12} />} accent
+            label={`Detection will run on ${gpu?.name ?? cleanAccelerator(metrics.accelerator)}`} />
         </div>
       )}
 
@@ -237,9 +248,10 @@ function PerformanceStep({ trtx, metrics, settings, onStatus, onBack, onNext }: 
               <div>
                 <div style={{ fontWeight: 700, fontSize: 13 }}>NVIDIA GPU detected</div>
                 <div style={{ fontSize: 11.5, color: "var(--text-secondary)", lineHeight: 1.55, marginTop: 3 }}>
-                  Install the TensorRT Performance Pack for substantially faster detection
-                  (NVIDIA's optimized engine, ~50% higher throughput than the default).
-                  One-time <b>~1.85 GB</b> download; runs entirely on-device afterward.
+                  Install NVIDIA's optimized engines for substantially faster detection
+                  (~50% higher throughput than the default). One-time download that uses
+                  about <b>6 GB of disk</b>; runs entirely on-device afterward. Skip it and
+                  detection still works — just not as fast.
                 </div>
               </div>
             </div>
@@ -249,7 +261,7 @@ function PerformanceStep({ trtx, metrics, settings, onStatus, onBack, onNext }: 
               </div>
             )}
             <button onClick={enable} className="btn-primary" style={{ padding: "10px 16px", justifyContent: "center" }}>
-              <Download size={14} /> Enable max performance (~1.85 GB)
+              <Download size={14} /> Enable max performance (~6 GB)
             </button>
             <button onClick={onNext} style={{ ...ghostBtn, alignSelf: "center", padding: "4px 8px" }}>
               Not now — I'll decide later

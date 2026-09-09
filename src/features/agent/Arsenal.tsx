@@ -1078,9 +1078,18 @@ function LocalAiCard({
           const def = findSkill(row.id);
           if (!def) return null;
           const isInstalled   = installedSet.has(row.id);
-          // "In use" needs BOTH: the tier is picked AND on-device is the active
-          // provider. Showing it while the user is on OpenAI would be a lie.
-          const isActive      = onDevice && current === row.tier;
+          // "In use" needs THREE things: the tier is picked, on-device is the
+          // active provider, AND the agent is actually on. Showing it while the
+          // user is on OpenAI would be a lie — and so would showing it while the
+          // agent is off, which is what deadlocked a default install:
+          // `ai_provider` and `local_llm_tier` both default to the on-device
+          // Balanced row, so it read as "in use" from first launch. Installing
+          // took it straight from Install to "✓ In use", never rendering `Use` —
+          // the only thing that sets `agent_enabled: true`. The chat then sat on
+          // "Pick a model in Arsenal → Model (Use)" pointing at a button that
+          // could not exist. This also makes the row revert to `Use` after
+          // "Turn off Guardian AI", which used to leave it claiming "In use".
+          const isActive      = onDevice && current === row.tier && !!settings?.agent_enabled;
           const isDownloading = state[row.id] === "downloading";
           const prog          = progress[row.id];
           const pct           = prog?.pct ?? 0;

@@ -392,21 +392,21 @@ pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::
     crate::agent::local_llm::set_tier(&data_dir, &settings.local_llm_tier);
     crate::inference::set_gpu_inference(settings.inference_device != "cpu");
 
-    // CUDA build variant: provision the NVIDIA runtime (download once on first
-    // launch) and put it on the DLL path BEFORE any ORT session loads, so the CUDA
-    // EP can bind cudart/cublas/cudnn. Best-effort — falls back to DirectML/CPU.
+    // CUDA build variant: put an ALREADY-INSTALLED NVIDIA runtime on the DLL path
+    // BEFORE any ORT session loads, so the CUDA EP can bind cudart/cublas/cudnn.
     //
-    // Gated on an actual NVIDIA adapter, the way the Linux lane above already is.
-    // Without that check EVERY machine fetched NVIDIA's redistributables, including
-    // AMD and Intel ones that can never load them -- which is what forced this into
-    // a separate "NVIDIA edition" installer rather than simply being what the one
-    // installer does when it finds an NVIDIA card.
+    // Boot never downloads. This used to call `ensure_cuda_runtime` inside a
+    // `block_on`, which on a first launch fetched ~1.8 GB of NVIDIA
+    // redistributables — before the user had agreed to anything, and on the thread
+    // that owns the window, which Tauri has already shown but does not pump until
+    // setup returns. Measured on a fresh install of the shipped v0.1.0: 30 seconds
+    // of a frozen window, then a 7.4 GB data directory. The download now sits
+    // behind the same consent as the TensorRT pack; see `install_nvidia_packs`.
+    //
+    // Marker check only, so this is a directory listing, not a network call.
     #[cfg(feature = "cuda")]
-    if settings.inference_device != "cpu" && crate::inference::has_nvidia_adapter() {
-        let cuda_dd = data_dir.clone();
-        if let Err(e) = tauri::async_runtime::block_on(crate::cuda_runtime::ensure_cuda_runtime(&cuda_dd)) {
-            tracing::warn!("CUDA runtime setup failed ({e}) — using DirectML/CPU instead");
-        }
+    if settings.inference_device != "cpu" && crate::cuda_runtime::activate_if_present(&data_dir) {
+        tracing::info!("CUDA runtime: activated from a previous install");
     }
 
     let port = settings.stream_port;
@@ -1048,11 +1048,19 @@ pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::
     let client_sessions_for_server = Arc::clone(&state.client_sessions);
     let kick_txs_for_server = Arc::clone(&state.kick_txs);
 
-    // Free the stream port from any orphaned child left by a force-killed run
-    // BEFORE we try to bind it (otherwise: blank camera). See fn docs above.
-    kill_orphaned_app_children();
-
     tauri::async_runtime::spawn(async move {
+        // Free the stream port from any orphaned child left by a force-killed run
+        // BEFORE we try to bind it (otherwise: blank camera). See fn docs above —
+        // the ordering is load-bearing, which is why this sits inside the same
+        // task as the bind rather than being fired off independently.
+        //
+        // It used to run inline on the setup thread. Tauri has already SHOWN the
+        // window by this point but does not pump its message loop until setup
+        // returns, so every second spent here is a visibly hung window — and on a
+        // fresh install this is a cold PowerShell start plus a cold WMI/CIM query,
+        // several seconds of it. That was the "not responding" on first launch.
+        let _ = tauri::async_runtime::spawn_blocking(kill_orphaned_app_children).await;
+
         start_http_server(
             frame_txs_for_server, port, auth_token_for_server,
             app_handle_for_server, camera_active_for_server,

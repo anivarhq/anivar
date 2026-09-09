@@ -559,11 +559,27 @@ pub async fn trtx_status(state: State<'_, Arc<AppState>>) -> Result<TrtxStatus, 
 pub async fn install_trtx_pack(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) -> Result<TrtxStatus, String> {
     #[cfg(windows)]
     {
+        // Both NVIDIA payloads, behind this ONE consent. The CUDA runtime used to
+        // be fetched at boot with no prompt at all (~1.8 GB), which meant a first
+        // launch downloaded most of a TensorRT pack's worth of libraries before
+        // the user had agreed to anything — and then this button asked about the
+        // rest. One button, one agreement, everything or nothing.
+        //
+        // CUDA first: it is the smaller pack and it gives the CUDA EP as a working
+        // fallback lane if TensorRT's canary later fails on this GPU.
+        #[cfg(feature = "cuda")]
+        let cuda_ok = match crate::cuda_runtime::ensure_cuda_runtime(&state.data_dir).await {
+            Ok(_) => true,
+            Err(e) => { tracing::warn!("CUDA runtime setup failed ({e}) — continuing to TensorRT"); false }
+        };
+        #[cfg(not(feature = "cuda"))]
+        let cuda_ok = false;
+
         crate::trtx_runtime::ensure_trt_pack(&state.data_dir, &app).await.map_err(|e| e.to_string())?;
         let dd = state.data_dir.clone();
         let ok = tokio::task::spawn_blocking(move || crate::trtx_runtime::activate_if_provisioned(&dd))
             .await.map_err(|e| e.to_string())?;
-        if !ok {
+        if !ok && !cuda_ok {
             return Err("Pack downloaded but no NVIDIA runtime passed its canary on this GPU — staying on DirectML".into());
         }
         Ok(nv_status(&state.data_dir))

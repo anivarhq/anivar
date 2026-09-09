@@ -40,9 +40,29 @@ const MARKERS: &[&str] = &["libcudart", "libcublas", "libcudnn"];
 /// if needed. Cheap no-op afterwards. Best-effort by contract: on failure the
 /// CUDA EP simply fails to register and ORT falls back, so a download hiccup
 /// never breaks inference.
+///
+/// This DOWNLOADS — roughly 1.8 GB installed — so it must only ever be reached
+/// from an explicit user action. Boot calls [`activate_if_present`] instead.
 pub async fn ensure_cuda_runtime(data_dir: &Path) -> Result<PathBuf> {
     let dir = data_dir.join("cuda");
     provision::ensure_lib_pack(WHEELS, &dir, &Requirement::Markers(MARKERS), "CUDA runtime").await?;
     provision::make_libs_loadable(&dir);
     Ok(dir)
+}
+
+/// Put an ALREADY-provisioned runtime on the library path. Returns false when it
+/// isn't installed, and never touches the network.
+///
+/// Boot needs exactly this. It used to call [`ensure_cuda_runtime`], which on a
+/// first launch meant a ~1.8 GB download nobody had agreed to, on the thread that
+/// owns the window — 30 seconds of "not responding" measured on a fresh install.
+/// The libraries still have to be loadable before the first ORT session, so the
+/// path setup stays at boot; only the fetching moved behind consent.
+pub fn activate_if_present(data_dir: &Path) -> bool {
+    let dir = data_dir.join("cuda");
+    if !Requirement::Markers(MARKERS).met(&dir) {
+        return false;
+    }
+    provision::make_libs_loadable(&dir);
+    true
 }

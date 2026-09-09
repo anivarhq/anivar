@@ -42,6 +42,11 @@ pub(crate) fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(30))
         .read_timeout(std::time::Duration::from_secs(180))
+        // reqwest sends NO User-Agent unless you set one, and several CDNs answer
+        // a UA-less request with an interstitial rather than the file — HTTP 200,
+        // matching content-length, an HTML body. Nothing upstream of the skill
+        // download's shape check would notice.
+        .user_agent(concat!("Anivar/", env!("CARGO_PKG_VERSION")))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
 }
