@@ -72,11 +72,14 @@ This is a small project without a paid security team. There is **no bug bounty**
 
 | Version | Supported |
 |---|---|
-| `main` | ✅ — pre-release, and all there is today |
+| latest release | ✅ |
+| `main` | ✅ |
+| anything older | ❌ — update first |
 
-There is no public release yet. Fixes land on `main`; once there are tagged
-releases this table will say which ones still get them. There are no long-term
-support branches.
+Fixes land on `main` and go out in the next release. While the project is at
+`0.x`, only the newest release is patched: there is no back-porting and there
+are no long-term support branches. Installed builds update themselves, so
+"update first" is usually a restart.
 
 ## What the design already assumes
 

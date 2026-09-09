@@ -24,63 +24,48 @@ A local-first NVR with on-device AI. One cross-platform desktop app built on
 recording, detection, recognition, and event analysis all run on your machine,
 including the language model.
 
-> [!WARNING]
-> **Alpha.** APIs and the data-directory layout are still subject to change, and
-> the installers are not code-signed yet — your OS will warn you. See
-> [Before you install](#before-you-install).
+**Alpha.** The installers are not code-signed, so Windows and macOS will stop you
+the first time — see [Before you install](#before-you-install).
 
 ## Download
 
-Latest release: **v0.1.1**. Every file below has a matching `.sha256` on the
-[releases page](https://github.com/anivarhq/anivar/releases/latest), and what
-changed is in [`CHANGELOG.md`](CHANGELOG.md).
+**[Get the latest release →](https://github.com/anivarhq/anivar/releases/latest)**
 
-| Platform | Download | |
-|---|---|---|
-| **Windows** 10/11, x64 | [`Anivar_0.1.1_x64-setup.exe`](https://github.com/anivarhq/anivar/releases/download/v0.1.1/Anivar_0.1.1_x64-setup.exe) | 66 MB · installs per-user, no admin |
-| **macOS** 11+, Apple Silicon | [`Anivar_0.1.1_aarch64.dmg`](https://github.com/anivarhq/anivar/releases/download/v0.1.1/Anivar_0.1.1_aarch64.dmg) | 19 MB |
-| **Linux** x86_64 | [`Anivar_0.1.1_amd64.AppImage`](https://github.com/anivarhq/anivar/releases/download/v0.1.1/Anivar_0.1.1_amd64.AppImage) | 97 MB · portable, `chmod +x` and run |
-| | [`Anivar_0.1.1_amd64.deb`](https://github.com/anivarhq/anivar/releases/download/v0.1.1/Anivar_0.1.1_amd64.deb) | 24 MB · Debian, Ubuntu |
-| | [`Anivar-0.1.1-1.x86_64.rpm`](https://github.com/anivarhq/anivar/releases/download/v0.1.1/Anivar-0.1.1-1.x86_64.rpm) | 24 MB · Fedora, RHEL, openSUSE |
+| Platform | File |
+|---|---|
+| **Windows** 10/11, x64 | `…_x64-setup.exe` — installs per-user, no admin |
+| **macOS** 11+, **Apple Silicon only** | `…_aarch64.dmg` |
+| **Linux** x86_64 | `…_amd64.AppImage` (portable — `chmod +x` and run), `.deb`, or `.rpm` |
 
 One download per platform. The Windows installer carries the CUDA execution
-provider and detects an NVIDIA card at runtime — there is no separate GPU
-edition to choose between. Without one it uses DirectML on any DX12 GPU. macOS
-uses CoreML; Linux runs detection on the CPU today.
+provider and detects an NVIDIA card at runtime — there is no separate GPU edition
+to choose between. Without one it uses DirectML on any DX12 GPU. macOS uses
+CoreML; Linux runs detection on the CPU today.
 
 There is no Intel-Mac or 32-bit build. Linux binaries are built against
 `webkit2gtk-4.1`, so Ubuntu 22.04 / Debian 12 or newer.
 
-Installed builds update themselves. The updater checks a manifest signed with
-the project's key and refuses anything that fails that signature, so an update
-cannot come from anywhere else.
+Installed builds update themselves, and what changed each time is in
+[`CHANGELOG.md`](CHANGELOG.md).
 
 ### Verify your download
 
-The installers are not code-signed yet, so a checksum is the only thing that
-tells you the file arrived intact. Download the `.sha256` next to it, then:
+Every file has a `.sha256` beside it. Take that too, then:
 
 ```powershell
-# Windows (PowerShell) — compare this against the .sha256 file's contents
-(Get-FileHash .\Anivar_0.1.1_x64-setup.exe -Algorithm SHA256).Hash
+# Windows — compare the result against the .sha256 file's contents
+(Get-FileHash .\Anivar_*_x64-setup.exe -Algorithm SHA256).Hash
 ```
 
 ```bash
-# macOS
-shasum -a 256 -c Anivar_0.1.1_aarch64.dmg.sha256
-# Linux
-sha256sum -c Anivar_0.1.1_amd64.deb.sha256
+shasum -a 256 -c Anivar_*_aarch64.dmg.sha256   # macOS
+sha256sum -c Anivar_*_amd64.deb.sha256         # Linux
 ```
-
-A SHA-256 is not a signature — anyone who could replace the installer could
-replace the hash beside it. It catches a corrupted download and a mirror that
-altered the file. Real code signing is on the list; it needs a purchased
-certificate.
 
 ### Before you install
 
-The Windows and macOS builds are not signed by a certificate authority yet, so
-both will stop you the first time (Linux does not check):
+Windows and macOS both stop an app that no certificate authority has signed
+(Linux does not check):
 
 - **Windows** shows *"Windows protected your PC"*. Click **More info** →
   **Run anyway**.
@@ -88,11 +73,6 @@ both will stop you the first time (Linux does not check):
   then go to **System Settings → Privacy & Security** and click **Open Anyway**.
   From a terminal, `xattr -dr com.apple.quarantine /Applications/Anivar.app`
   does the same thing.
-
-If that trade is not one you want to make, [build from
-source](#build-from-source) — the release workflow that produced these files is
-[`release.yml`](.github/workflows/release.yml), and it builds nothing that isn't
-in this repository.
 
 ## What it does
 
@@ -312,9 +292,8 @@ prerequisites and their failure modes, and commit-message style, and
 ## License
 
 **Apache-2.0** — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). Use it, fork it,
-ship it, build a product on it. Apache-2.0 also carries an explicit patent grant,
-which MIT does not: contributors licence their patent claims to you, and that
-grant terminates for anyone who sues over them.
+ship it, build a product on it. It carries a patent grant: contributors licence
+their patent claims to you, and that grant ends for anyone who sues over them.
 
 Third-party components keep their own terms, listed in
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). The short version:

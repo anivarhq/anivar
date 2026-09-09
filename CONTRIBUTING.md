@@ -164,6 +164,6 @@ Before requesting review:
 
 ## License
 
-License terms have not yet been finalised. By contributing, you agree to
-license your contribution under whatever license is ultimately chosen for
-the project (intended to be a permissive open-source license).
+This project is **Apache-2.0** ([`LICENSE`](LICENSE)). By contributing, you
+agree that your contribution is licensed under those terms, including its
+patent grant.
