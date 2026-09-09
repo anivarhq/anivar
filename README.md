@@ -11,6 +11,8 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=for-the-badge&labelColor=0d1117)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/anivarhq/anivar/ci.yml?branch=main&style=for-the-badge&labelColor=0d1117&label=CI)](https://github.com/anivarhq/anivar/actions/workflows/ci.yml)
 
+[**anivarhq.github.io/anivar-site**](https://anivarhq.github.io/anivar-site/)
+
 [**Download**](#download) · [**What it does**](#what-it-does) ·
 [**Architecture**](#architecture) · [**Build from source**](#build-from-source) ·
 [**Privacy & security**](#privacy--security)
@@ -29,13 +31,16 @@ the first time — see [Before you install](#before-you-install).
 
 ## Download
 
-**[Get the latest release →](https://github.com/anivarhq/anivar/releases/latest)**
+### [Download for your system →](https://anivarhq.github.io/anivar-site/#download)
 
-| Platform | File |
-|---|---|
-| **Windows** 10/11, x64 | `…_x64-setup.exe` — installs per-user, no admin |
-| **macOS** 11+, **Apple Silicon only** | `…_aarch64.dmg` |
-| **Linux** x86_64 | `…_amd64.AppImage` (portable — `chmod +x` and run), `.deb`, or `.rpm` |
+The site picks the right file for the machine you are on and shows its size.
+Or take it straight from GitHub:
+
+| Platform | Get it | What you get |
+|---|---|---|
+| **Windows** 10/11, x64 | [**Download**](https://github.com/anivarhq/anivar/releases/latest) | `…_x64-setup.exe` — installs per-user, no admin |
+| **macOS** 11+, **Apple Silicon only** | [**Download**](https://github.com/anivarhq/anivar/releases/latest) | `…_aarch64.dmg` |
+| **Linux** x86_64 | [**Download**](https://github.com/anivarhq/anivar/releases/latest) | `…_amd64.AppImage` (portable — `chmod +x` and run), `…_amd64.deb`, or `…x86_64.rpm` |
 
 One download per platform. The Windows installer carries the CUDA execution
 provider and detects an NVIDIA card at runtime — there is no separate GPU edition
