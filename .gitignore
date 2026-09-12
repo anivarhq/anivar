@@ -94,3 +94,9 @@ src-tauri/resources/skills/
 # in target/<profile>/ during the Rust build; scripts/sync-ort-dlls.ps1 stages them,
 # and scripts/app-build.bat --bundle does that automatically.
 src-tauri/binaries/onnx/*.dll
+
+# `tauri icon` writes iOS and Android sets from one master. This is a desktop
+# app with no mobile target, so they are 35 files and ~580 KB of art nothing
+# reads. Regenerating the icons will recreate them; keep them out of the repo.
+src-tauri/icons/ios/
+src-tauri/icons/android/
