@@ -6,8 +6,9 @@ name: Release
 #   • Windows  — NSIS + MSI            (DirectML: any DX12 GPU, no toolkit)
 #   • macOS    — .dmg (arm64 + x64)    (CoreML: Apple Neural Engine)
 #   • Linux    — .deb + .AppImage      (CPU)
-# plus the signed updater artifacts (.sig) and `latest.json` manifest the
-# in-app updater reads.
+# plus the signed updater artifacts (.sig) and the `latest.json` manifest that
+# tauri-plugin-updater reads (plugins.updater.endpoints). Nothing in the app calls
+# the plugin yet: users update through Settings → Check for Updates.
 #
 # Required repo secrets:
 #   TAURI_SIGNING_PRIVATE_KEY           — minisign private key (from `tauri signer generate`)
@@ -72,7 +73,7 @@ jobs:
           {
             echo "## Install"
             echo
-            echo "Download the installer for your platform below. Existing installs update automatically."
+            echo "Download the installer for your platform below. Already running Anivar? **Settings → Check for Updates** shows when a new version is out and links to its installer. Installs don't update themselves yet."
             echo
             # Keep this in step with README.md's "Before you install". The macOS
             # line used to say right-click → Open, which recent macOS no longer

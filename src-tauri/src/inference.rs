@@ -11,7 +11,7 @@
 //! * [`filter_detections_by_masks`]   - drop detections whose bbox-bottom-center is inside a mask
 //! * [`run_inference_loop`]            — the long-running task driven by `state.infer_queue`
 //! * [`build_ort_session`]             — ORT session builder with optimisation + thread tuning
-//! * [`preprocess_jpeg_for_yolo`]     — JPEG -> normalised 1x3x640x640 f32 input tensor
+//! * [`preprocess_jpeg_for_yolo`]     — JPEG -> normalised 1x3x640x640 f32 input tensor + source dims
 
 use std::sync::Arc;
 
@@ -497,16 +497,10 @@ pub async fn run_inference_loop(state: Arc<AppState>) {
             tick_last   = std::time::Instant::now();
         }
 
-        // Decode JPEG → 640×640 CHW float32 Vec
-        let input_data = match preprocess_jpeg_for_yolo(&frame) {
+        // Decode JPEG once → 640×640 CHW float32 Vec + original dims for bbox rescaling
+        let (input_data, orig_w, orig_h) = match preprocess_jpeg_for_yolo(&frame) {
             Ok(d) => d,
             Err(_) => continue,
-        };
-
-        // Original image dimensions for bbox rescaling
-        let (orig_w, orig_h) = match image::load_from_memory(&frame) {
-            Ok(img) => (img.width() as f32, img.height() as f32),
-            Err(_)  => (640.0, 640.0),
         };
 
         // Create ORT tensor from raw Vec<f32> — official tuple API, no ndarray required:
@@ -1742,11 +1736,12 @@ fn build_ort_session_at(model_path: &std::path::Path, force_cpu: bool) -> anyhow
 }
 
 /// Decode JPEG → resize to 640×640 → CHW float32 Vec normalised [0,1].
-/// Returns flat Vec of length 1×3×640×640 in channel-first row-major order.
-pub(crate) fn preprocess_jpeg_for_yolo(jpeg: &[u8]) -> anyhow::Result<Vec<f32>> {
-    let img   = image::load_from_memory(jpeg)?
-        .resize_exact(640, 640, image::imageops::FilterType::Triangle);
-    let rgb   = img.to_rgb8();
+/// Returns flat Vec of length 1×3×640×640 in channel-first row-major order,
+/// plus the source width/height (for bbox rescaling) from the same decode.
+pub(crate) fn preprocess_jpeg_for_yolo(jpeg: &[u8]) -> anyhow::Result<(Vec<f32>, f32, f32)> {
+    let img   = image::load_from_memory(jpeg)?;
+    let (w, h) = (img.width() as f32, img.height() as f32);
+    let rgb   = img.resize_exact(640, 640, image::imageops::FilterType::Triangle).into_rgb8();
     let bytes = rgb.as_raw(); // HWC u8, length = 640*640*3
 
     // Transpose HWC u8 → CHW f32, normalise to [0,1]
@@ -1762,6 +1757,6 @@ pub(crate) fn preprocess_jpeg_for_yolo(jpeg: &[u8]) -> anyhow::Result<Vec<f32>> 
             data[2 * PLANE + dst] = bytes[src + 2] as f32 / 255.0; // B (channel 2)
         }
     }
-    Ok(data)
+    Ok((data, w, h))
 }
 
