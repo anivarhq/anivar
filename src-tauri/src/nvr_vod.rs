@@ -11,7 +11,7 @@
 //!
 //! Two routes, both behind the global `require_token` middleware:
 //!   GET /nvr-vod/:cam/playlist.m3u8?start=UNIX_SECS&window=SECS&token=…
-//!   GET /nvr-vod/seg/:id.ts?token=…
+//!   GET /nvr-vod/seg/:id.ts?token=…&o=MEDIA_SECS
 
 use axum::{
     body::Body,
@@ -93,6 +93,13 @@ pub(crate) async fn nvr_vod_playlist(
     if start_offset > 0.05 {
         m3u8.push_str(&format!("#EXT-X-START:TIME-OFFSET={:.3},PRECISE=YES\n", start_offset));
     }
+    // Every recording restarts its clock at 0 and each segment is remuxed on its
+    // own, so without an offset hls.js sees PTS jump back ~10 s at every seam. It
+    // repairs the video but re-anchors each fragment's AUDIO onto 0-10 s, which
+    // capped the playable range there: playback froze after ~10 s, fetched the
+    // whole hour, and seeks landed short. `o` = this fragment's media start (the
+    // running EXTINF sum, same basis as TIME-OFFSET above) -> continuous PTS.
+    let mut media_off = 0.0f64;
     for (i, seg) in segs.iter().enumerate() {
         if i > 0 {
             let prev = &segs[i - 1];
@@ -105,7 +112,8 @@ pub(crate) async fn nvr_vod_playlist(
         }
         m3u8.push_str(&format!("#EXT-X-PROGRAM-DATE-TIME:{}\n", seg.started_at));
         m3u8.push_str(&format!("#EXTINF:{:.3},\n", seg.duration));
-        m3u8.push_str(&format!("/nvr-vod/seg/{}.ts?token={}\n", seg.id, token));
+        m3u8.push_str(&format!("/nvr-vod/seg/{}.ts?token={}&o={:.3}\n", seg.id, token, media_off));
+        media_off += seg.duration;
     }
     m3u8.push_str("#EXT-X-ENDLIST\n");
 
@@ -166,16 +174,19 @@ async fn segment_needs_420_transcode(ffmpeg: &std::path::Path, seg_id: &str, pat
     needs
 }
 
-/// GET /nvr-vod/seg/:file  (`file` = `<segment-uuid>.ts`)
+/// GET /nvr-vod/seg/:file?o=MEDIA_SECS  (`file` = `<segment-uuid>.ts`)
 ///
 /// Remuxes ONE indexed segment mp4 → MPEG-TS, stream-copy only (ffmpeg
 /// auto-inserts h264_mp4toannexb + AAC→ADTS for mpegts). Segments are
 /// immutable once indexed, so responses are cacheable — that also absorbs
 /// ClipOverlay's blurred-clone double-fetch. Legacy 4:4:4 segments are the one
 /// exception: they're transcoded to 4:2:0 so WebView2 can decode them.
+/// `o` shifts the output timestamps to the segment's place in the playlist
+/// (see `nvr_vod_playlist`); without it the output is unchanged.
 pub(crate) async fn nvr_vod_segment(
     axum::extract::Path(file): axum::extract::Path<String>,
     AxumState(s): AxumState<StreamState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Response {
     let id = match file.strip_suffix(".ts") {
         Some(v) => v,
@@ -226,6 +237,9 @@ pub(crate) async fn nvr_vod_segment(
         if has_audio { args.extend(["-c:a".into(), "copy".into()]); }
     } else {
         args.extend(["-c".into(), "copy".into()]);
+    }
+    if let Some(o) = ts_offset_arg(params.get("o").map(String::as_str)) {
+        args.extend(["-output_ts_offset".into(), o]);
     }
     args.extend([
         "-muxdelay".into(), "0".into(), "-muxpreload".into(), "0".into(),
@@ -413,9 +427,27 @@ fn normalize_extinf(segs: &mut [VodSeg]) {
     }
 }
 
+/// `-output_ts_offset` value for a segment's `o` query param. The value comes
+/// from a URL, so only a finite, non-negative offset no longer than a day
+/// reaches ffmpeg's argv (a VOD window is at most an hour plus lead-in).
+fn ts_offset_arg(raw: Option<&str>) -> Option<String> {
+    let o: f64 = raw?.parse().ok()?;
+    (o.is_finite() && (0.0..=86_400.0).contains(&o)).then(|| format!("{o:.3}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ts_offset_arg_accepts_only_sane_offsets() {
+        assert_eq!(ts_offset_arg(Some("0")), Some("0.000".into()));
+        assert_eq!(ts_offset_arg(Some("1790.25")), Some("1790.250".into()));
+        for bad in ["-1", "NaN", "inf", "abc", "", "90000"] {
+            assert_eq!(ts_offset_arg(Some(bad)), None, "{bad:?} must be rejected");
+        }
+        assert_eq!(ts_offset_arg(None), None, "URLs without `o` keep the old output");
+    }
 
     fn seg(start: f64, duration: f64) -> VodSeg {
         VodSeg {
