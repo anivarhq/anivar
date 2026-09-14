@@ -7,6 +7,59 @@ and this project (will) adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-14
+
+### Fixed: recorded footage played in ten-second blocks
+
+- **Playback froze about ten seconds after every load or seek, and seeks landed
+  short.** Recordings reach the player as ten-second pieces, and every piece
+  restarted its timestamps at zero. The player repaired the video but laid each
+  piece's audio over the first ten seconds, so it could never play past them.
+  Meanwhile it downloaded the rest of the hour trying to catch up, and the app
+  converted every piece of it. Each piece now carries its place in the
+  timeline. The fault was reproduced in Edge against real recordings with the
+  app's own player settings, and the fix was confirmed there and in the
+  installed app.
+
+### Changed: detection decodes each frame once
+
+- The object detector decoded every camera frame for the model, then decoded the
+  same image a second time only to read its width and height. It now takes both
+  from the first decode: same pixels, same boxes, one full-resolution decode fewer
+  per detected frame.
+
+### Changed: the app icon is repainted
+
+- Same geometry, two differences. The bar now sits beneath the letters instead of
+  cutting them in half at the waist, so a letter can be traced through the middle
+  of the mark. And the strokes are painted rather than drawn.
+
+### Changed: the update address, and what the notes say about updating
+
+- The built-in updater was set to ask a domain that no longer exists. It now
+  points at the signed `latest.json` that every GitHub release publishes.
+- Nothing in the app calls that updater yet, so installs still don't update
+  themselves. To update, use **Settings → Check for Updates**: it shows the new
+  version and links to its installer. Earlier release notes said installs update
+  automatically. That was never true, and the notes now say how updating
+  actually works.
+
+### Added
+
+- **Permanent download links.** Every installer is also published under a name
+  with no version in it (`Anivar-windows-x64-setup.exe`, `Anivar-macos-arm64.dmg`,
+  `Anivar-linux-x86_64.AppImage`, `Anivar-linux-amd64.deb`,
+  `Anivar-linux-x86_64.rpm`), so a `releases/latest/download/…` link keeps
+  pointing at the newest release.
+
+### Security
+
+- **rustls 0.23.45**
+  ([RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285.html)).
+  The TLS library behind the app's HTTPS downloads and the updater accepted
+  TLS 1.3 handshake messages sent at the wrong encryption level. Fixed upstream in
+  0.23.45.
+
 ## [0.1.1] - 2026-09-09
 
 First release cut after installing 0.1.0 from its own installer rather than
