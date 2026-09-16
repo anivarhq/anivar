@@ -187,8 +187,6 @@ export const api = {
   // on-device assistants-inspired intelligence
   queryEvents: (question: string, history?: { role: string; content: string }[]) =>
     invoke<string>("query_events", { question, history: history ?? null }),
-  reportCrowdCount: (camId: number, count: number, eventId: string | null) =>
-    invoke<void>("report_crowd_count", { camId, count, eventId: eventId ?? null }),
   analyzeSnapshot: (imageB64: string, detections: { label: string; score: number }[], sceneContext?: string) =>
     invoke<string>("analyze_snapshot", { imageB64, detections, sceneContext: sceneContext ?? null }),
 
@@ -255,6 +253,16 @@ export const api = {
    *  Identity = enrolled personId OR an unknown cluster's faceIds. Events ship
    *  the '@thumb' marker (render via eventThumbSrc); person_crop = the face
    *  crop of this person in that event (the mature NVRs object-crop preview). */
+  // People v2 — person tracks (people_search.rs): search by description,
+  // find-similar by appearance, and a day's visits.
+  searchPeople: (query: string, opts?: { from?: string; to?: string; cams?: number[] }) =>
+    invoke<PeopleSearchResult>("search_people", {
+      query, from: opts?.from ?? null, to: opts?.to ?? null, cams: opts?.cams ?? null,
+    }),
+  findSimilarPerson: (trackId: string, days?: number) =>
+    invoke<PeopleSearchResult>("find_similar_person", { trackId, days: days ?? null }),
+  getPeopleDay: (from: string, to: string, personId?: string) =>
+    invoke<PeopleDay>("get_people_day", { from, to, personId: personId ?? null }),
   getPersonEvents: (opts: { personId?: string; faceIds?: string[]; days?: number; limit?: number }) =>
     invoke<PersonEvent[]>("get_person_events", {
       personId: opts.personId ?? null, faceIds: opts.faceIds ?? null,
@@ -400,10 +408,6 @@ export const api = {
   // Multi-camera + anomaly
   recordFaceSighting: (personName: string, cameraId: number, eventId: string | null, confidence: number) =>
     invoke<void>("record_face_sighting", { personName, cameraId, eventId, confidence }),
-  getCameraCorrelations: (sinceHours?: number) =>
-    invoke<{ person_name: string; sightings: { camera_id: number; seen_at: string; confidence: number; event_id: string | null }[] }[]>("get_camera_correlations", { sinceHours: sinceHours ?? 24 }),
-  detectAnomalies: (sinceHours?: number) =>
-    invoke<{ event_id: string; started_at: string; anomaly_type: string; duration_secs: number; peak_score: number; detail: string }[]>("detect_anomalies", { sinceHours: sinceHours ?? 24 }),
 
   // Tunnel — v11: just lifecycle. QR + pair flow + Tailscale + libp2p went
   // with the remote-access pivot. start_tunnel/stop_tunnel still drive the
@@ -480,6 +484,7 @@ export const api = {
     url: string,
     onProgress?: (pct: number, downloaded?: number, total?: number | null) => void,
     filename?: string,
+    sha256?: string,
   ) => {
     const unlisten = await listen<{
       skill_id:    string;
@@ -491,7 +496,7 @@ export const api = {
       onProgress?.(payload.percent, payload.downloaded, payload.total ?? null);
     });
     try {
-      await invoke<void>("download_skill", { skillId, url, filename });
+      await invoke<void>("download_skill", { skillId, url, filename, sha256 });
     } finally {
       unlisten();
     }
@@ -807,6 +812,62 @@ export interface PersonSighting {
 export interface PersonEvent {
   event:       MotionEvent;
   person_crop: string | null;
+}
+
+/** One person's continuous presence on one camera (person_tracks row). */
+export interface TrackHit {
+  id:              string;
+  cam_id:          number;
+  event_id:        string | null;
+  body_person_id:  string | null;
+  started_at:      string;
+  ended_at:        string;
+  top_color:       string | null;
+  bottom_color:    string | null;
+  /** What they visibly wear or carry — never gender or age. */
+  evidence:        string[];
+  behaviours:      string[];
+  /** "face" names the track; "body_reid" only proposes (Maybe X?). */
+  identity_method: string | null;
+  score:           number;
+}
+
+export interface PersonGroup {
+  key:        string;
+  person_id:  string | null;
+  name:       string | null;
+  maybe_name: string | null;
+  score:      number;
+  first_seen: string;
+  last_seen:  string;
+  cameras:    number[];
+  tracks:     TrackHit[];
+}
+
+export interface PeopleSearchResult {
+  groups:     PersonGroup[];
+  understood: string[];
+  ignored:    string[];
+}
+
+/** One continuous stay across cameras. */
+export interface Visit {
+  key:        string;
+  person_id:  string | null;
+  name:       string | null;
+  maybe_name: string | null;
+  start:      string;
+  end:        string;
+  cameras:    number[];
+  behaviours: string[];
+  tracks:     TrackHit[];
+}
+
+export interface PeopleDay {
+  visits:            Visit[];
+  known_visits:      number;
+  unfamiliar_visits: number;
+  unfamiliar_repeat: number;
 }
 
 export interface FaceSample {

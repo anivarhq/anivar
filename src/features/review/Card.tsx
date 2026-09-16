@@ -30,6 +30,13 @@ import { tint } from "../../lib/palette";
 
 /* ── Container ─────────────────────────────────────────────────────────────── */
 
+/**
+ * The one grid width every People list uses — roster, stranger clusters, tracked
+ * bodies, visits and search results. They had four (200/190/168/124), so no two
+ * lists in the section ever lined up with each other or with Review's 150.
+ */
+export const CARD_MIN = 160;
+
 /** The dense auto-fill grid. `min` widens for roster cards, which carry text. */
 export function CardGrid({ children, min = 150, scroll = true }: {
   children: ReactNode;
@@ -191,51 +198,37 @@ export function ProfileCard({ media, onClick, selected, title, children }: {
   // actions ("Confirm", "Not them") and a button inside a button is invalid HTML
   // that browsers resolve by breaking one of them. Enter and Space are handled
   // explicitly, which is what the element would have given us for free.
+  //
+  // The MATERIAL is `.card` — the same 8px tile as `Card` above. It used to be
+  // `.glass` at radius 24 with its own hover transform, so the roster, the
+  // stranger clusters and the tracked bodies were the only card shape in the app
+  // that didn't match the event feed sitting one tab over.
   return (
     <div
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
       title={title}
-      className="glass"
+      className={`${styles.card} ${selected ? styles.cardKb : ""}`}
       onClick={onClick}
       onKeyDown={onClick ? (e) => {
         if (e.target !== e.currentTarget) return;   // let nested controls answer first
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); }
       } : undefined}
-      style={{
-        padding: 0, overflow: "hidden", textAlign: "left", cursor: onClick ? "pointer" : "default",
-        border: selected ? "1.5px solid var(--accent)" : undefined,
-        boxShadow: selected ? "0 0 0 1.5px var(--accent)" : undefined,
-        transition: "transform 160ms var(--spring, ease), border-color 140ms ease",
-      }}
-      onMouseEnter={onClick ? (e) => { e.currentTarget.style.transform = "translateY(-2px)"; } : undefined}
-      onMouseLeave={onClick ? (e) => { e.currentTarget.style.transform = "translateY(0)"; } : undefined}
+      style={onClick ? undefined : { cursor: "default" }}
     >
-      <div style={{ position: "relative" }}>{media}</div>
-      <div style={{ padding: "8px 10px" }}>{children}</div>
+      {media}
+      <div style={{ padding: "0 3px 2px" }}>{children}</div>
     </div>
   );
 }
 
-/** Flush media for `ProfileCard` — no inner radius, fills the card's top edge. */
+/** Media for `ProfileCard`. Identical to `CardMedia` — the two were separate only
+ *  while ProfileCard was a different material. */
 export function ProfileMedia({ src, fallback, aspect = "16 / 10", children }: {
   src?: string | null;
   fallback?: ReactNode;
   aspect?: string;
   children?: ReactNode;
 }) {
-  return (
-    <>
-      {src
-        ? <img src={src} alt="" loading="lazy"
-            onError={e => { e.currentTarget.style.display = "none"; }}
-            style={{ width: "100%", aspectRatio: aspect, objectFit: "cover", display: "block" }} />
-        : <div style={{
-            width: "100%", aspectRatio: aspect, background: "rgb(var(--ink) / 0.05)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            color: "rgb(var(--ink) / 0.25)",
-          }}>{fallback}</div>}
-      {children}
-    </>
-  );
+  return <CardMedia src={src} fallback={fallback} aspect={aspect}>{children}</CardMedia>;
 }

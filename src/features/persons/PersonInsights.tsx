@@ -1,22 +1,12 @@
 /**
- * What the archive already knows about a person, beyond "here are their photos".
+ * When a person tends to be here, beyond "here are their photos".
  *
- * Both of these read data the backend has always produced and the UI has never
- * shown:
- *
- *   - `get_person_stats` builds a 24-bucket local-hour histogram and, until now,
- *     serialised only its argmax. "Home every evening" and "here exactly once, at
- *     18:00" reached the UI as the same single number.
- *   - `get_camera_correlations` returns the full ordered camera trail per person.
- *     It has been wired through `api/index.ts` and called by nothing at all.
- *
- * Neither is a new capability. Both are presentation over answers already
- * computed on every call.
+ * `get_person_stats` builds a 24-bucket local-hour histogram: "home every
+ * evening" and "here exactly once, at 18:00" used to reach the UI as the same
+ * single number. (Where they move lives in visits — PersonDetail / TodayView.)
  */
-import { useEffect, useState } from "react";
-import { Clock, MapPin, ArrowRight } from "lucide-react";
-import { api, PersonStats } from "../../api";
-import { fmtWhen } from "../../lib/time";
+import { Clock } from "lucide-react";
+import type { PersonStats } from "../../api";
 
 /* ── When ──────────────────────────────────────────────────────────────────── */
 
@@ -54,101 +44,6 @@ export function HourHistogram({ hours, peak }: { hours: number[]; peak: number |
       }}>
         <span>00</span><span>06</span><span>12</span><span>18</span><span>23</span>
       </div>
-    </div>
-  );
-}
-
-/* ── Where ─────────────────────────────────────────────────────────────────── */
-
-type Hop = { camera_id: number; seen_at: string; confidence: number; event_id: string | null };
-
-/**
- * The movement trail: which cameras saw this person, in what order.
- *
- * Consecutive sightings on the SAME camera collapse into one hop. Without that
- * a person standing in the driveway for two minutes produces forty identical
- * entries and the actual path — the thing worth seeing — is buried.
- */
-export function MovementTrail({ personName, cameraName, onOpenEvent }: {
-  personName: string;
-  cameraName: (id: number) => string;
-  onOpenEvent?: (eventId: string) => void;
-}) {
-  const [hops, setHops] = useState<Hop[] | null>(null);
-  const [hours, setHours] = useState(24);
-
-  useEffect(() => {
-    let live = true;
-    api.getCameraCorrelations(hours)
-      .then(rows => {
-        if (!live) return;
-        const mine = rows.find(r => r.person_name === personName);
-        const raw = (mine?.sightings ?? []).slice().reverse(); // oldest first: a path
-        const collapsed: Hop[] = [];
-        for (const s of raw) {
-          const prev = collapsed[collapsed.length - 1];
-          if (prev && prev.camera_id === s.camera_id) continue;
-          collapsed.push(s);
-        }
-        setHops(collapsed);
-      })
-      .catch(() => { if (live) setHops([]); });
-    return () => { live = false; };
-  }, [personName, hours]);
-
-  if (hops === null) {
-    return <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>Loading movement…</div>;
-  }
-
-  return (
-    <div>
-      <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
-        {[24, 72, 168].map(h => (
-          <button key={h} type="button" onClick={() => { setHops(null); setHours(h); }}
-            style={{
-              padding: "2px 9px", borderRadius: 999, fontSize: 10, fontWeight: 700,
-              cursor: "pointer",
-              border: `1px solid ${h === hours ? "var(--accent)" : "var(--border)"}`,
-              background: h === hours ? "color-mix(in srgb, var(--accent) 12%, transparent)" : "transparent",
-              color: h === hours ? "var(--accent)" : "var(--text-secondary)",
-            }}>
-            {h === 24 ? "24h" : h === 72 ? "3d" : "7d"}
-          </button>
-        ))}
-      </div>
-
-      {hops.length === 0 ? (
-        <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>
-          No camera sightings in this window.
-        </div>
-      ) : (
-        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
-          {hops.map((h, i) => (
-            <span key={`${h.camera_id}-${h.seen_at}`} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <button
-                type="button"
-                disabled={!h.event_id || !onOpenEvent}
-                onClick={() => h.event_id && onOpenEvent?.(h.event_id)}
-                title={h.event_id ? "Open this event" : "No event recorded for this sighting"}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 5,
-                  padding: "4px 9px", borderRadius: 999,
-                  border: "1px solid var(--border-strong)",
-                  background: "rgb(var(--ink) / 0.04)",
-                  color: "var(--text-primary)", fontSize: 11, fontWeight: 600,
-                  cursor: h.event_id && onOpenEvent ? "pointer" : "default",
-                }}>
-                <MapPin size={10} style={{ color: "var(--accent)" }} />
-                {cameraName(h.camera_id)}
-                <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-secondary)" }}>
-                  {fmtWhen(h.seen_at)}
-                </span>
-              </button>
-              {i < hops.length - 1 && <ArrowRight size={11} style={{ color: "var(--text-tertiary)" }} />}
-            </span>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

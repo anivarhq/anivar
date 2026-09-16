@@ -1,23 +1,18 @@
 /**
- * One person, everything known about them.
- *
- * The gallery and the 30-day event history were always here. What was not:
- * where they move (`get_camera_correlations`, fully wired and called by
- * nothing), and WHEN they show up — the backend built a 24-bucket hour
- * histogram and shipped only its argmax, so the UI could say "most often
- * around 18:00" but never tell "home every evening" from "here once".
+ * One person, everything known about them: when they tend to be here (the hour
+ * histogram), their visits over 30 days (continuous stays across cameras, each
+ * playable), and the face gallery recognition matches against.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Camera, Clock, MapPin, Play, Trash2, Pencil, Check, X, UserPlus, Activity } from "lucide-react";
-import { api, KnownPerson, FaceShot, PersonEvent, PersonStats } from "../../api";
+import { api, KnownPerson, FaceShot, PersonStats, TrackHit, Visit } from "../../api";
 import { useStore } from "../../store";
 import { useShallow } from "zustand/react/shallow";
-import { faceCropSrc, eventThumbSrc } from "../../lib/eventThumb";
-import { fmtWhen } from "../../lib/time";
-import { Modal, useDismiss } from "../../components/ui/Modal";
-import { CardGrid, Card, CardMedia, CardFooter, CardTime, CardEmpty } from "../review/Card";
-import { RemovePersonDialog, Stat, Section, Empty, ZoomableImg, summaryText, formatRelative, fmtDay } from "./shared";
-import { ActivityPattern, MovementTrail } from "./PersonInsights";
+import { trackCropSrc } from "../../lib/eventThumb";
+import { fmtWhen, localDateStr } from "../../lib/time";
+import { useDismiss } from "../../components/ui/Modal";
+import { RemovePersonDialog, Stat, Section, Empty, ZoomableImg, formatRelative, timeSpan, cameraPath, behaviourPhrase, fmtLocalDay } from "./shared";
+import { ActivityPattern } from "./PersonInsights";
 
 export function PersonDetail({ person, stats, cameraName, onClose, onDeleted, onAddAngles, showToast }: {
   person: KnownPerson;
@@ -32,11 +27,10 @@ export function PersonDetail({ person, stats, cameraName, onClose, onDeleted, on
   showToast: (msg: string, type?: "success" | "error" | "info") => void;
 }) {
   const [faces, setFaces] = useState<FaceShot[]>([]);
-  // standard person-events: ID-BOUND event history (face_sightings /
-  // face_embeddings by person_id) — replaced the old fuzzy name-LIKE search
-  // that could show someone else's events or miss renamed people entirely.
-  const [history, setHistory] = useState<PersonEvent[]>([]);
-  const [playing, setPlaying] = useState<PersonEvent | null>(null);
+  // Visits — continuous stays across cameras, bound by person id (a rename can't
+  // lose or mix them up). Replaced the per-event list + name-keyed movement trail.
+  const [visits, setVisits] = useState<Visit[]>([]);
+  const [playing, setPlaying] = useState<TrackHit | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const { streamInfo } = useStore(useShallow(s => ({ streamInfo: s.streamInfo })));
   const [loading, setLoading] = useState(true);
@@ -50,12 +44,13 @@ export function PersonDetail({ person, stats, cameraName, onClose, onDeleted, on
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [f, h] = await Promise.all([
+      const [f, v] = await Promise.all([
         api.listPersonFaces(person.id).catch(() => [] as FaceShot[]),
-        api.getPersonEvents({ personId: person.id, days: 30, limit: 100 }).catch(() => [] as PersonEvent[]),
+        api.getPeopleDay(new Date(Date.now() - 30 * 86_400_000).toISOString(), new Date().toISOString(), person.id)
+          .then(d => d.visits).catch(() => [] as Visit[]),
       ]);
       setFaces(f);
-      setHistory(h);
+      setVisits(v);
     } finally { setLoading(false); }
   }, [person.id]);
   useEffect(() => { load(); }, [load]);
@@ -79,7 +74,7 @@ export function PersonDetail({ person, stats, cameraName, onClose, onDeleted, on
   // Server-computed — listings no longer ship the embeddings JSON.
   const angles = person.embedding_count;
   const cameras = useMemo(
-    () => Array.from(new Set(faces.map(f => f.cam_id))).sort((a, b) => a - b), [faces]);
+    () => Array.from(new Set(visits.flatMap(v => v.cameras))).sort((a, b) => a - b), [visits]);
 
   const removeShot = async (id: string) => {
     setFaces(fs => fs.filter(f => f.id !== id));
@@ -172,7 +167,7 @@ export function PersonDetail({ person, stats, cameraName, onClose, onDeleted, on
         {/* Stats */}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <Stat label="Angles" value={String(angles)} />
-          <Stat label="Sightings" value={String(faces.length)} />
+          <Stat label="Visits · 30 days" value={String(visits.length)} />
           <Stat label="Cameras" value={cameras.length ? cameras.map(c => c + 1).join(", ") : "—"} />
           <Stat label="Last seen" value={person.last_seen_at ? formatRelative(new Date(person.last_seen_at)) : "never"} />
         </div>
@@ -183,17 +178,64 @@ export function PersonDetail({ person, stats, cameraName, onClose, onDeleted, on
           <ActivityPattern stats={stats} />
         </Section>
 
-        {/* WHERE — get_camera_correlations, wired since it was written and never called. */}
-        <Section icon={<MapPin size={12} />} title="Movement"
-          more="Which cameras saw this person, in order. Repeated sightings on the same camera collapse into one hop, so the path is the path and not a list of frames.">
-          <MovementTrail
-            personName={displayName}
-            cameraName={cameraName}
-            onOpenEvent={(id) => {
-              const ev = history.find(h => h.event.id === id);
-              if (ev) setPlaying(ev);
-              else showToast("That event is outside this person's 30-day history", "info");
-            }} />
+        {/* WHERE and WHEN, as visits: one row per continuous stay, with the
+            cameras passed in order. Replaced the name-keyed movement trail and
+            the per-event list, which showed one person forty times. */}
+        <Section icon={<MapPin size={12} />} title={`Visits (${visits.length})`}
+          more="Each visit is one continuous stay, across cameras, in the last 30 days. Tap one to play its first recorded moment.">
+          {visits.length === 0 ? (
+            <Empty text={loading ? "Loading…" : "No visits in the last 30 days"} />
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {Array.from(
+                visits.reduce((days, v) => {
+                  const day = localDateStr(new Date(v.start));
+                  (days.get(day) ?? days.set(day, []).get(day)!).push(v);
+                  return days;
+                }, new Map<string, Visit[]>()),
+              ).map(([day, vs]) => (
+                <div key={day}>
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.05, textTransform: "uppercase",
+                    color: "var(--text-tertiary)", margin: "0 2px 6px" }}>
+                    {fmtLocalDay(day)} · {vs.length} visit{vs.length === 1 ? "" : "s"}
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {vs.map(v => {
+                      const playable = v.tracks.find(t => t.event_id) ?? null;
+                      const crop = trackCropSrc(v.tracks[0]?.id, streamInfo);
+                      return (
+                        <button key={`${v.key}-${v.start}`} type="button" disabled={!playable}
+                          onClick={() => playable && setPlaying(playable)}
+                          title={playable ? "Play this visit" : "No recording linked to this visit"}
+                          style={{ display: "flex", gap: 10, alignItems: "center", padding: 8, textAlign: "left",
+                            borderRadius: 12, background: "rgb(var(--ink) / 0.02)", border: "1px solid var(--border)",
+                            cursor: playable ? "pointer" : "default", width: "100%", color: "inherit" }}>
+                          {crop ? (
+                            <img src={crop} alt="" onError={e => { e.currentTarget.style.visibility = "hidden"; }}
+                              style={{ width: 30, height: 40, borderRadius: 7, objectFit: "cover", flexShrink: 0, background: "#000" }} />
+                          ) : (
+                            <div style={{ width: 30, height: 40, borderRadius: 7, flexShrink: 0, background: "rgb(var(--ink) / 0.05)" }} />
+                          )}
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ fontSize: 12, color: "var(--text-secondary)", overflow: "hidden",
+                              textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {timeSpan(v.start, v.end)} · {cameraPath(v.cameras, cameraName)}
+                            </div>
+                            {v.behaviours.length > 0 && (
+                              <div style={{ fontSize: 10.5, color: "var(--accent-amber)", marginTop: 2 }}>
+                                {v.behaviours.map(behaviourPhrase).join(" · ")}
+                              </div>
+                            )}
+                          </div>
+                          {playable && <Play size={13} style={{ opacity: 0.5, flexShrink: 0 }} />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </Section>
 
         {/* Face gallery */}
@@ -217,73 +259,6 @@ export function PersonDetail({ person, stats, cameraName, onClose, onDeleted, on
                   <div style={{ position: "absolute", bottom: 3, left: 4, fontSize: 8,
                     color: "rgb(var(--ink) / 0.85)", textShadow: "0 1px 2px rgba(0,0,0,0.8)" }}>
                     CAM {f.cam_id + 1}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </Section>
-
-        {/* Events timeline (mature NVRs person-events): id-bound, grouped by day,
-            each row playable. */}
-        <Section icon={<Clock size={12} />} title={`Events (${history.length})`}
-          more="Video events this person appears in.">
-          {history.length === 0 ? (
-            <Empty text={loading ? "Loading…" : "No events in the last 30 days"} />
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {Array.from(
-                history.reduce((days, h) => {
-                  const day = h.event.started_at.slice(0, 10);
-                  (days.get(day) ?? days.set(day, []).get(day)!).push(h);
-                  return days;
-                }, new Map<string, PersonEvent[]>()),
-              ).map(([day, evs]) => (
-                <div key={day}>
-                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.05, textTransform: "uppercase",
-                    color: "var(--text-tertiary)", margin: "0 2px 6px" }}>
-                    {fmtDay(day)} · {evs.length} event{evs.length === 1 ? "" : "s"}
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {evs.map(h => {
-                      const thumb = h.event.thumbnail ? eventThumbSrc(h.event.thumbnail, h.event.id, streamInfo) : null;
-                      return (
-                      <button key={h.event.id} type="button" onClick={() => setPlaying(h)}
-                        title="Play this event's clip"
-                        style={{ display: "flex", gap: 10, alignItems: "center", padding: 8, textAlign: "left",
-                          borderRadius: 12, background: "rgb(var(--ink) / 0.02)", border: "1px solid var(--border)",
-                          cursor: "pointer", width: "100%" }}>
-                        <div style={{ position: "relative", flexShrink: 0 }}>
-                          {thumb ? (
-                            <img src={thumb} alt=""
-                              style={{ width: 52, height: 38, borderRadius: 8, objectFit: "cover", display: "block" }} />
-                          ) : (
-                            <div style={{ width: 52, height: 38, borderRadius: 8, background: "rgb(var(--ink) / 0.05)",
-                              display: "flex", alignItems: "center", justifyContent: "center" }}>
-                              <Play size={13} style={{ opacity: 0.5 }} />
-                            </div>
-                          )}
-                          {/* mature NVRs object-crop: THIS person, in THIS event. */}
-                          {h.person_crop && (
-                            <img src={`data:image/jpeg;base64,${h.person_crop}`} alt=""
-                              title="This person, in this event"
-                              style={{ position: "absolute", right: -5, bottom: -5, width: 22, height: 22,
-                                borderRadius: 7, objectFit: "cover", border: "1.5px solid var(--accent)",
-                                background: "#000" }} />
-                          )}
-                        </div>
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div style={{ fontSize: 11, color: "var(--text-secondary)", overflow: "hidden",
-                            textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{summaryText(h.event.ai_summary)}</div>
-                          <div style={{ fontSize: 10, color: "var(--text-tertiary)", marginTop: 2, display: "flex", gap: 6, alignItems: "center" }}>
-                            <span>CAM {(h.event.cam_id ?? 0) + 1}</span>
-                            <span>·</span>
-                            <span>{fmtWhen(h.event.started_at)}</span>
-                            {h.event.event_category && h.event.event_category !== "other" && (<><span>·</span><span>{h.event.event_category}</span></>)}
-                          </div>
-                        </div>
-                      </button>
-                    );})}
                   </div>
                 </div>
               ))}
@@ -315,7 +290,7 @@ export function PersonDetail({ person, stats, cameraName, onClose, onDeleted, on
 
       {/* Event clip player — server NVR slice via /footage/:id/clip (same pattern
           as the Vehicles/Audio players; never gated on clip_path). */}
-      {playing && streamInfo && (
+      {playing?.event_id && streamInfo && (
         <div onClick={e => { e.stopPropagation(); setPlaying(null); }} style={{
           position: "fixed", inset: 0, zIndex: 1300,
           background: "rgba(5,4,4,0.78)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
@@ -323,7 +298,7 @@ export function PersonDetail({ person, stats, cameraName, onClose, onDeleted, on
           <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 860 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
               <span style={{ fontWeight: 700, fontSize: 13, color: "#fff" }}>
-                {displayName} · CAM {(playing.event.cam_id ?? 0) + 1} · {fmtWhen(playing.event.started_at)}
+                {displayName} · {cameraName(playing.cam_id)} · {fmtWhen(playing.started_at)}
               </span>
               <div style={{ flex: 1 }} />
               <button onClick={() => setPlaying(null)}
@@ -332,7 +307,7 @@ export function PersonDetail({ person, stats, cameraName, onClose, onDeleted, on
               </button>
             </div>
             <video
-              src={`http://localhost:${streamInfo.port}/footage/${playing.event.id}/clip?token=${streamInfo.auth_token}`}
+              src={`http://localhost:${streamInfo.port}/footage/${playing.event_id}/clip?token=${streamInfo.auth_token}`}
               controls autoPlay
               style={{ width: "100%", borderRadius: 14, background: "#000" }} />
           </div>

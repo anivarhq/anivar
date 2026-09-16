@@ -1,15 +1,14 @@
 /**
  * PersonsPanel — the ONE identity home (mature NVRs Face Library model).
  *
- * A single vertically-composed section (no tabs):
- *   1. Roster — enrolled people grid + "Recently recognized" strip (each
- *      recognition shows its provenance: method, score, "why this name?").
- *   2. "Needs your review" — unknown faces/clusters awaiting a tag (mature NVRs
- *      Train): everything in `face_embeddings` without a `person_id`.
- *   3. "Tracked across cameras" — body Re-ID tracks; body matches only
- *      PROPOSE a name, a face (or the user) confirms.
- * Enrollment is a modal launched from the header. Vehicles/Sounds moved to
- * the Review section (they're event browsers, not identity).
+ * Four segments, one question each:
+ *   • Today  — who was here, as visits (one continuous stay across cameras).
+ *   • People — enrolled roster + recognitions (provenance: "why this name?").
+ *   • Review — unknown faces/clusters awaiting a tag, then body matches to
+ *     confirm; body matches only PROPOSE a name, a face (or the user) confirms.
+ *   • Search — describe someone; results grouped by who they were.
+ * Enrollment is a modal launched from the header. Vehicles/Sounds live in the
+ * Review section (they're event browsers, not identity).
  *
  * All suggestion/correction actions bind by PERSON ID, never display name
  * (renames and duplicate names mis-resolve by name).
@@ -19,7 +18,7 @@
 
 import { useEffect, useRef, useState, useCallback, useMemo, type ReactNode, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { UserPlus, Trash2, Camera, RefreshCw, Users, Sparkles, Check, X, Layers, Clock, Activity, MapPin, Play, Pencil } from "lucide-react";
+import { UserPlus, Trash2, Camera, RefreshCw, RotateCcw, Users, Sparkles, Check, X, Layers, Clock, Activity, MapPin, Play, Pencil, Search, Calendar } from "lucide-react";
 import { api, KnownPerson, UnknownFace, TrackedPerson, TrackedCluster, FaceShot, Recognition, FaceCapture, UnknownCluster, FaceDebug, FaceClassifierStatus, PersonSighting, PersonEvent, PersonStats } from "../../api";
 import { listen } from "@tauri-apps/api/event";
 import { useStore } from "../../store";
@@ -28,22 +27,118 @@ import { useShallow } from "zustand/react/shallow";
 import { downloadSkill, findSkill } from "../agent/skillDownload";
 import { usePanelCache } from "../../lib/panelCache";
 import { Modal, useDismiss } from "../../components/ui/Modal";
-import { fmtWhen } from "../../lib/time";
+import { fmtWhen, localDateStr } from "../../lib/time";
 import { OBJECT_COLOR_SWATCH } from "../../lib/palette";
 import {
   RemovePersonDialog, PersonPickList, SectionHeader, ZoomableImg, FaceContextZoom,
   Stat, Section, Empty, summaryText, methodLabel, whyNamed, formatRelative,
-  fmtDay, OutfitLine,
+  OutfitLine, fmtLocalDay,
 } from "./shared";
-import { CardGrid, ProfileCard, ProfileMedia } from "../review/Card";
+import { CardGrid, ProfileCard, ProfileMedia, CardEmpty, CARD_MIN } from "../review/Card";
+import { FilterDropdown } from "../review/FilterDropdown";
+import { GlassCalendar } from "../../components/ui/GlassCalendar";
+import { useRecordedDays } from "../../lib/useRecordedDays";
+import styles from "../review/ReviewFeed.module.css";
 import { EnrollWizard } from "./EnrollWizard";
 import { TrackedSection } from "./TrackedSection";
 import { ReviewSection } from "./ReviewSection";
 import { PersonDetail } from "./PersonDetail";
+import { TodayView } from "./TodayView";
+import { PeopleSearch } from "./PeopleSearch";
+
+/** Three places, one question each: who was here · who we know · what needs a
+ *  human. "Find someone" was a fourth tab; it is the header search box now, the
+ *  way Review searches from its toolbar on every tab. */
+type PeopleTab = "today" | "people" | "review";
+const PEOPLE_TABS: { id: PeopleTab; label: string; icon: ReactNode }[] = [
+  { id: "today", label: "Today", icon: <Clock size={13} /> },
+  { id: "people", label: "People", icon: <Users size={13} /> },
+  { id: "review", label: "Review", icon: <Sparkles size={13} /> },
+];
+
+/** Review tab's Kind filter — which of its two queues to show. */
+const REVIEW_KINDS = ["faces", "bodies"];
+const REVIEW_KIND_LABEL: Record<string, string> = { faces: "Faces to tag", bodies: "Body matches" };
+// "family" was missing from the old chip row while roleColor handled it all
+// along, so a person with that role was reachable only through "all".
+const ROLES = ["resident", "family", "employee", "visitor"];
+
+/**
+ * A tab body that scrolls.
+ *
+ * In Review `.feed` is both the scroller AND the card grid, which is right when
+ * a tab is one wall of cards (Today, search results). A tab that stacks several
+ * sections needs the scroller without the grid — those use `CardGrid
+ * scroll={false}` inside. Either way the header and filter rows stay pinned;
+ * they used to scroll away with the content.
+ */
+function Scroller({ children }: { children: ReactNode }) {
+  return (
+    <div style={{
+      flex: 1, minHeight: 0, overflowY: "auto", padding: "4px 16px 20px",
+      display: "flex", flexDirection: "column", gap: 16,
+    }}>
+      {children}
+    </div>
+  );
+}
 
 export function PersonsPanel() {
   // Enrollment is a MODAL launched from the People header (it was a whole tab).
   const [enrollOpen, setEnrollOpen] = useState(false);
+  // Set when "Add more angles" opened the wizard for an existing person.
+  const [enrollTarget, setEnrollTarget] = useState<KnownPerson | null>(null);
+  const [tab, setTab] = useState<PeopleTab>(() => {
+    try {
+      const t = localStorage.getItem("sc.peopleTab");
+      if (t && PEOPLE_TABS.some(x => x.id === t)) return t as PeopleTab;
+    } catch { /* storage blocked */ }
+    return "today";   // also where a stored "search" lands — that tab is gone
+  });
+  // Track id for "looks like this person".
+  const [similarTo, setSimilarTo] = useState<string | null>(null);
+  const pickTab = (t: PeopleTab) => {
+    setTab(t);
+    setSimilarTo(null);
+    try { localStorage.setItem("sc.peopleTab", t); } catch { /* storage blocked */ }
+  };
+
+  /** ONE search box, in the header, on every tab — Review's model exactly.
+   *
+   *  It means two different things depending on the tab, as Review's does: a
+   *  whole-archive PEOPLE search on Today and Review, and a live client-side
+   *  filter of the roster on People (what Review's box does on Vehicles and
+   *  Sounds). The roster used to carry a second, differently-shaped name input
+   *  of its own; this replaces it. */
+  const [query, setQuery] = useState("");
+  const [debounced, setDebounced] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(query.trim()), 250);
+    return () => clearTimeout(t);
+  }, [query]);
+  const rosterMode = tab === "people";
+  /** Results take over the body: a typed description, or "looks like this one". */
+  const searchMode = !!similarTo || (!rosterMode && debounced.length > 0);
+  /** "Looks like this person" replaces any typed query — they are two different
+   *  questions, and leaving the words in the box would cancel the match on the
+   *  next debounce tick. `debounced` is set here too, so there is no window
+   *  where the stale query is still live. */
+  const findSimilar = (trackId: string) => {
+    setQuery(""); setDebounced(""); setCalOpen(false); setSimilarTo(trackId);
+  };
+
+  // Today's day — the header date button owns it, so TodayView has no day-nav.
+  const [day, setDay] = useState(() => localDateStr());
+  const [calOpen, setCalOpen] = useState(false);
+  const calAnchor = useRef<HTMLButtonElement>(null);
+  const recordedDays = useRecordedDays();
+
+  // Toolbar filters. Empty set = no filter, matching Review's dropdowns.
+  const [camFilter, setCamFilter] = useState<Set<string>>(new Set());
+  const [roleFilter, setRoleFilter] = useState<Set<string>>(new Set());
+  const [kindFilter, setKindFilter] = useState<Set<string>>(new Set());
+  const toggleIn = (set: (fn: (p: Set<string>) => Set<string>) => void) => (v: string) =>
+    set(prev => { const n = new Set(prev); n.has(v) ? n.delete(v) : n.add(v); return n; });
   // Stale-while-revalidate: the fan-out lists survive tab switches, so a
   // revisit paints instantly while refresh() revalidates in the background.
   const [persons, setPersons] = usePanelCache<KnownPerson[]>("people.persons", []);
@@ -152,105 +247,177 @@ export function PersonsPanel() {
   const [removeTarget, setRemoveTarget] = useState<{ id: string; name: string } | null>(null);
   const handleDelete = (id: string, name: string) => setRemoveTarget({ id, name });
 
-  return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
-      {/* Glass header */}
-      <div className="glass" style={{
-        margin: 16, marginBottom: 0,
-        padding: "14px 18px",
-        display: "flex", alignItems: "center", gap: 14,
-      }}>
-        <Users size={16} style={{ color: "var(--accent)" }} />
-        <span style={{ fontWeight: 700, fontSize: 14, letterSpacing: -0.01 }}>People</span>
-        <span style={{ fontSize: 12, color: "var(--text-tertiary)" }}>
-          {persons.length} enrolled · {reviewCount} to review
-        </span>
+  /** Result count for the header status line; null while a search is in flight. */
+  const [searchCount, setSearchCount] = useState<number | null>(null);
+  const cams = useMemo(() => camConfigs.map(c => String(c.cam_id)), [camConfigs]);
+  const showFaces  = kindFilter.size === 0 || kindFilter.has("faces");
+  const showBodies = kindFilter.size === 0 || kindFilter.has("bodies");
 
-        {/* ONE review count, computed once above. There used to be three of
-            them on screen at the same time — this subtitle, the badge below,
-            and the section header — all labelled the same and all disagreeing. */}
-        {(() => {
-          return reviewCount > 0 ? (
-            <span title="People waiting for your review below" style={{
-              display: "inline-flex", alignItems: "center", justifyContent: "center",
-              minWidth: 18, height: 18, padding: "0 6px",
-              fontSize: 10, fontWeight: 700, borderRadius: 999,
-              background: "var(--accent-glow)", color: "var(--accent)",
-            }}>{reviewCount}</span>
-          ) : null;
-        })()}
-        <div style={{ marginLeft: "auto" }} />
-        <button
-          onClick={refresh}
-          title="Refresh"
-          style={{ background: "none", border: "none", color: "var(--text-tertiary)", cursor: "pointer", padding: 4 }}
-        >
-          <RefreshCw size={14} className={loading ? "spin" : ""} />
-        </button>
+  return (
+    <div className={styles.root}>
+      {/* ── Top toolbar: tabs · search · date — the same one row as Review ── */}
+      <div className={styles.header}>
+        <div className={`lg ${styles.segTabs}`}>
+          {PEOPLE_TABS.map(t => (
+            <button key={t.id} className={`${styles.segTab} ${tab === t.id ? styles.segTabActive : ""}`}
+              onClick={() => pickTab(t.id)}>
+              {t.icon} {t.label}
+              {/* ONE review count, on the Review segment — there used to be three
+                  on screen, all labelled the same and all disagreeing. */}
+              {t.id === "review" && reviewCount > 0 && <span className={styles.count}>{reviewCount}</span>}
+            </button>
+          ))}
+        </div>
+
+        <div className={`lg ${styles.searchRow}`}>
+          <Search size={14} className={styles.searchIcon} />
+          <input
+            className={styles.searchInput}
+            placeholder={rosterMode
+              ? "Filter people — name…"
+              : "Describe someone — blue top with a backpack · unfamiliar, no hat"}
+            value={query}
+            // Searching hides the date button, so a calendar left open would
+            // reappear by itself when the query is cleared.
+            onChange={e => { setQuery(e.target.value); setCalOpen(false); }}
+            onKeyDown={e => { if (e.key === "Escape") setQuery(""); }}
+            spellCheck={false}
+          />
+          {searchMode && !similarTo && (
+            <span className={styles.searchStatus}>
+              {searchCount == null ? "searching…"
+                : `${searchCount} result${searchCount === 1 ? "" : "s"} · all dates`}
+            </span>
+          )}
+          {query && (
+            <button className={styles.searchClear} onClick={() => setQuery("")}
+              title="Clear search" aria-label="Clear search">
+              <X size={14} />
+            </button>
+          )}
+        </div>
+
+        <div className={styles.headerRight}>
+          {/* The day lives here, not on a chevron pair inside Today. */}
+          {tab === "today" && !searchMode && (<>
+            <button ref={calAnchor} className={`lg ${styles.glassBtn}`} onClick={() => setCalOpen(o => !o)}>
+              <Calendar size={12} /> {fmtLocalDay(day)}
+            </button>
+            <GlassCalendar value={day} onChange={d => { setDay(d); setCalOpen(false); }}
+              max={localDateStr()} open={calOpen} onClose={() => setCalOpen(false)} anchorRef={calAnchor}
+              recordedDays={recordedDays} />
+          </>)}
+          <button className={`lg ${styles.glassBtn}`}
+            onClick={() => { setEnrollTarget(null); setEnrollOpen(true); }}>
+            <UserPlus size={12} /> Enroll
+          </button>
+          <button className={`lg ${styles.iconBtn}`} onClick={refresh} disabled={loading} title="Refresh">
+            <RotateCcw size={13} className={loading ? styles.spin : ""} />
+          </button>
+        </div>
       </div>
 
-      <div style={{ flex: 1, overflow: "auto", padding: 16, paddingTop: 12 }}>
-        {/* Face-model health — shown on every tab so "recognition is off" is never
-            mistaken for "no people". Stays quiet when the pipeline is healthy. */}
-        <FaceModelStrip health={health} onChanged={refresh} showToast={showToast} />
-        {/* A loader failed — say so (with Retry) instead of pretending it's empty. */}
-        {loadError && (
-          <div className="glass" style={{
-            padding: "11px 15px", marginBottom: 14, display: "flex", alignItems: "center", gap: 12,
-            border: "1px solid color-mix(in srgb, var(--status-alert) 34%, transparent)",
-          }}>
-            <X size={15} style={{ color: "var(--accent-red)", flexShrink: 0 }} />
-            <div style={{ flex: 1, fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
-              <strong style={{ color: "var(--text-primary)" }}>Couldn't load some People data.</strong>
-              <div style={{ fontSize: 10.5, color: "var(--text-tertiary)", marginTop: 3 }}>{loadError}</div>
-            </div>
-            <button onClick={refresh} className="btn-primary" style={{ flexShrink: 0, padding: "7px 14px", fontSize: 12 }}>Retry</button>
-          </div>
+      {/* ── Filters — exactly one dropdown per mode, in Review's row ── */}
+      <div className={styles.filters}>
+        {(searchMode || tab === "today") && (
+          <FilterDropdown label="Cameras" options={cams} selected={camFilter}
+            onToggle={toggleIn(setCamFilter)}
+            onSelectAll={() => setCamFilter(new Set(cams))}
+            onClear={() => setCamFilter(new Set())}
+            format={v => cameraName(Number(v))} emptyText="No cameras" />
         )}
-        {!everLoaded && persons.length === 0 ? (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center",
-            gap: 8, padding: "60px 0", color: "var(--text-tertiary)", fontSize: 12 }}>
-            <RefreshCw size={14} className="spin" /> Loading people…
-          </div>
-        ) : (
-          <>
-            {/* ── 1. Roster: enrolled people + recognition strips + corrections ── */}
-            <RosterSection persons={persons} recognitions={recognitions} onDelete={handleDelete}
-              onOpenDetail={setDetailPerson}
-              onJumpToReview={() => document.getElementById("needs-review")?.scrollIntoView({ behavior: "smooth", block: "start" })}
-              onJumpToEnroll={() => setEnrollOpen(true)}
-              hasUnknowns={unknowns.length > 0}
-              classifier={classifier}
-              stats={statsById}
-              onChanged={refresh}
-              showToast={showToast}
-              onRetrain={async () => {
-                try {
-                  const s = await api.retrainFaceClassifier();
-                  setClassifier(s);
-                  showToast(s.active ? `Smart match retrained · ${s.trained_people} people` : "Not enough enrolled angles yet for smart match", s.active ? "success" : "info");
-                } catch (e) { showToast(`Retrain failed: ${String(e)}`, "error"); }
-              }} />
+        {!searchMode && tab === "people" && (
+          <FilterDropdown label="Role" options={ROLES} selected={roleFilter}
+            onToggle={toggleIn(setRoleFilter)}
+            onSelectAll={() => setRoleFilter(new Set(ROLES))}
+            onClear={() => setRoleFilter(new Set())} />
+        )}
+        {!searchMode && tab === "review" && (
+          <FilterDropdown label="Kind" options={REVIEW_KINDS} selected={kindFilter}
+            onToggle={toggleIn(setKindFilter)}
+            onSelectAll={() => setKindFilter(new Set(REVIEW_KINDS))}
+            onClear={() => setKindFilter(new Set())}
+            format={v => REVIEW_KIND_LABEL[v] ?? v} />
+        )}
+      </div>
 
-            {/* ── 2. Review queue: faces the agent saw but couldn't identify ── */}
-            <div id="needs-review" style={{ marginTop: 26 }}>
+      {/* Pinned strips — these scrolled away with the content before. */}
+      {(((tab === "people" || tab === "review") && !searchMode) || loadError) && (
+        <div style={{ flexShrink: 0, padding: "0 16px" }}>
+          {/* Face-model health, so "recognition is off" is never mistaken for
+              "no people". Stays quiet when the pipeline is healthy. */}
+          {(tab === "people" || tab === "review") && !searchMode && (
+            <FaceModelStrip health={health} onChanged={refresh} showToast={showToast} />
+          )}
+          {/* A loader failed — say so (with Retry) instead of pretending it's empty. */}
+          {loadError && (
+            <div className="glass" style={{
+              padding: "11px 15px", marginBottom: 12, display: "flex", alignItems: "center", gap: 12,
+              border: "1px solid color-mix(in srgb, var(--status-alert) 34%, transparent)",
+            }}>
+              <X size={15} style={{ color: "var(--accent-red)", flexShrink: 0 }} />
+              <div style={{ flex: 1, fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                <strong style={{ color: "var(--text-primary)" }}>Couldn't load some People data.</strong>
+                <div style={{ fontSize: 10.5, color: "var(--text-tertiary)", marginTop: 3 }}>{loadError}</div>
+              </div>
+              <button onClick={refresh} className="btn-primary" style={{ flexShrink: 0, padding: "7px 14px", fontSize: 12 }}>Retry</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!everLoaded && persons.length === 0 ? (
+        <CardEmpty icon={<RefreshCw size={30} className="spin" />}>Loading people…</CardEmpty>
+      ) : searchMode ? (
+        <PeopleSearch cameraName={cameraName} persons={persons}
+          query={debounced} cams={[...camFilter].map(Number)} similarTo={similarTo}
+          onClearSimilar={() => setSimilarTo(null)} onFindSimilar={findSimilar}
+          onCount={setSearchCount} onChanged={refresh} showToast={showToast} />
+      ) : tab === "today" ? (
+        <TodayView day={day} cams={camFilter} cameraName={cameraName} persons={persons}
+          onChanged={refresh} onFindSimilar={findSimilar} showToast={showToast} />
+      ) : tab === "people" ? (
+        /* ── People: enrolled people + recognition strips + corrections ── */
+        <RosterSection persons={persons} recognitions={recognitions} onDelete={handleDelete}
+          onOpenDetail={setDetailPerson}
+          onJumpToReview={() => pickTab("review")}
+          onJumpToEnroll={() => setEnrollOpen(true)}
+          hasUnknowns={unknowns.length > 0}
+          classifier={classifier}
+          stats={statsById}
+          query={debounced}
+          roleFilter={roleFilter}
+          onChanged={refresh}
+          showToast={showToast}
+          onRetrain={async () => {
+            try {
+              const s = await api.retrainFaceClassifier();
+              setClassifier(s);
+              showToast(s.active ? `Smart match retrained · ${s.trained_people} people` : "Not enough enrolled angles yet for smart match", s.active ? "success" : "info");
+            } catch (e) { showToast(`Retrain failed: ${String(e)}`, "error"); }
+          }} />
+      ) : (
+        /* ── Review: faces the cameras couldn't identify + body matches ── */
+        <Scroller>
+          {showFaces && (
+            <div id="needs-review">
               <SectionHeader icon={<Sparkles size={13} />} title="Needs your review"
                 subtitle="Tag the people the cameras saw but couldn't identify — every tag makes recognition smarter."
                 count={reviewCount} />
               <ReviewSection unknowns={unknowns} clusters={clusters} persons={persons}
                 onTagged={() => { refresh(); showToast("Tagged", "success"); }} showToast={showToast} />
             </div>
-
-            {/* ── 3. Cross-camera body tracking (proposals + named tracks) ── */}
-            <div style={{ marginTop: 26 }}>
-              <SectionHeader icon={<Layers size={13} />} title="Tracked across cameras"
-                subtitle="People followed by body appearance (Re-ID). Body matches only PROPOSE a name — a face or you confirms." />
+          )}
+          {showBodies && (
+            <div>
+              <SectionHeader icon={<Layers size={13} />} title="Body matches to confirm"
+                subtitle="Seen by body appearance only. A match here only proposes a name — you or a face confirms it." />
               <TrackedSection tracked={tracked} backend={reidBackend} persons={persons}
                 onChanged={refresh} showToast={showToast} />
             </div>
-          </>
-        )}
-      </div>
+          )}
+        </Scroller>
+      )}
 
       {removeTarget && (
         <RemovePersonDialog
@@ -278,7 +445,8 @@ export function PersonsPanel() {
                 display: "flex", alignItems: "center", justifyContent: "center" }}>
               <X size={15} />
             </button>
-            <EnrollWizard onDone={() => { setEnrollOpen(false); refresh(); }} showToast={showToast} />
+            <EnrollWizard person={enrollTarget ?? undefined}
+              onDone={() => { setEnrollOpen(false); setEnrollTarget(null); refresh(); }} showToast={showToast} />
           </div>
         </div>
       )}
@@ -295,7 +463,7 @@ export function PersonsPanel() {
           // — same button, same position, two entirely different outcomes
           // decided by state the user cannot see. "Add more angles" means
           // capture more angles, so it opens the wizard, always.
-          onAddAngles={() => { setDetailPerson(null); setEnrollOpen(true); }}
+          onAddAngles={() => { setEnrollTarget(detailPerson); setDetailPerson(null); setEnrollOpen(true); }}
           showToast={showToast}
         />
       )}
@@ -393,7 +561,7 @@ function FaceModelStrip({ health, onChanged, showToast }: {
 // this panel had six of them. It has had none since the consolidation to one
 // scrolling column with three sections and a modal wizard, and the names were
 // the last thing still claiming otherwise.
-function RosterSection({ persons, recognitions, onDelete, onOpenDetail, onJumpToReview, onJumpToEnroll, hasUnknowns, classifier, stats, onRetrain, onChanged, showToast }: {
+function RosterSection({ persons, recognitions, onDelete, onOpenDetail, onJumpToReview, onJumpToEnroll, hasUnknowns, classifier, stats, query, roleFilter, onRetrain, onChanged, showToast }: {
   persons: KnownPerson[];
   recognitions: Recognition[];
   onDelete: (id: string, name: string) => void;
@@ -403,6 +571,10 @@ function RosterSection({ persons, recognitions, onDelete, onOpenDetail, onJumpTo
   hasUnknowns: boolean;
   classifier: FaceClassifierStatus | null;
   stats: Map<string, PersonStats>;
+  /** Name filter from the header search box (debounced, already trimmed). */
+  query: string;
+  /** Roles from the toolbar dropdown; empty = every role. */
+  roleFilter: Set<string>;
   onRetrain: () => void;
   onChanged: () => void;
   showToast: (msg: string, type?: "success" | "error" | "info") => void;
@@ -417,49 +589,36 @@ function RosterSection({ persons, recognitions, onDelete, onOpenDetail, onJumpTo
   /** A recognition the user rejected from the confirm queue; RecognizedStrip
    *  renders the correction dialog for it. */
   const [correctingMarginal, setCorrectingMarginal] = useState<Recognition | null>(null);
-  const [query, setQuery] = useState("");
-  const [roleFilter, setRoleFilter] = useState("all");
-  const filtered = useMemo(() => persons.filter(p => {
-    if (roleFilter !== "all" && (p.role || "").toLowerCase() !== roleFilter) return false;
-    if (query.trim() && !p.name.toLowerCase().includes(query.trim().toLowerCase())) return false;
-    return true;
-  }), [persons, query, roleFilter]);
+  // Name and role come from the header search box and the toolbar dropdown now.
+  // The roster used to carry its own pill-shaped input and its own chip row for
+  // these two, which is why People had two search fields of different shapes.
+  const filtered = useMemo(() => {
+    const q = query.toLowerCase();
+    return persons.filter(p =>
+      (roleFilter.size === 0 || roleFilter.has((p.role || "").toLowerCase()))
+      && (!q || p.name.toLowerCase().includes(q)));
+  }, [persons, query, roleFilter]);
 
   if (persons.length === 0) {
     return (
-      <div className="glass" style={{
-        padding: "40px 28px", textAlign: "center",
-        display: "flex", flexDirection: "column", alignItems: "center", gap: 16,
-      }}>
-        <Users size={42} style={{ opacity: 0.35 }} />
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6 }}>No people enrolled yet</div>
-          <div style={{ fontSize: 12, color: "var(--text-secondary)", maxWidth: 340, lineHeight: 1.55 }}>
-            Once your cameras spot faces they'll appear in the <strong>Train</strong> tab — tap one to give it a name.
-            Or enroll yourself manually from a live frame.
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 10 }}>
+      <CardEmpty icon={<Users size={32} />}>
+        No people enrolled yet — tag a face your cameras saw, or enroll one from a live frame.
+        <span style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 12 }}>
           {hasUnknowns && (
-            <button onClick={onJumpToReview} className="btn-primary" style={{ padding: "8px 16px" }}>
-              <Sparkles size={13} /> Tag from recent events
+            <button className={`lg ${styles.glassBtn}`} onClick={onJumpToReview}>
+              <Sparkles size={12} /> Tag from recent events
             </button>
           )}
-          <button onClick={onJumpToEnroll} style={{
-            padding: "8px 16px", borderRadius: 999, fontSize: 12, fontWeight: 600,
-            border: "1px solid var(--border-strong)", background: "transparent",
-            color: "var(--text-primary)", cursor: "pointer",
-            display: "inline-flex", alignItems: "center", gap: 6,
-          }}>
-            <UserPlus size={13} /> Enroll from camera
+          <button className={`lg ${styles.glassBtn}`} onClick={onJumpToEnroll}>
+            <UserPlus size={12} /> Enroll from camera
           </button>
-        </div>
-      </div>
+        </span>
+      </CardEmpty>
     );
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+    <Scroller>
       <RecognitionModeStrip classifier={classifier} personCount={persons.length} onRetrain={onRetrain} />
 
       {/* Narrowly-decided matches first: they are the ones that go wrong. */}
@@ -484,39 +643,17 @@ function RosterSection({ persons, recognitions, onDelete, onOpenDetail, onJumpTo
           onCloseCorrecting={() => setCorrectingMarginal(null)} />
       )}
 
-      {/* Filter bar — search by name + role chips */}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search name…"
-          style={{ flex: "1 1 160px", minWidth: 140, padding: "8px 12px", borderRadius: 999, fontSize: 12,
-            border: "1px solid var(--border-strong)", background: "rgb(var(--ink) / 0.04)",
-            color: "var(--text-primary)", outline: "none" }} />
-        {/* "family" was missing, while roleColor has handled it all along — so
-            a person with that role was reachable only through "all". */}
-        {["all", "resident", "family", "employee", "visitor"].map(r => (
-          <button key={r} type="button" onClick={() => setRoleFilter(r)}
-            style={{ padding: "6px 12px", borderRadius: 999, fontSize: 11, fontWeight: 600, cursor: "pointer",
-              border: `1px solid ${roleFilter === r ? "var(--accent)" : "var(--border)"}`,
-              background: roleFilter === r ? "var(--hl)" : "transparent",
-              color: roleFilter === r ? "var(--accent)" : "var(--text-secondary)", textTransform: "capitalize" }}>
-            {r}
-          </button>
-        ))}
-      </div>
-
-      {/* Same grid primitive as the cluster and stranger lists, so a roster
-          sitting above them lines up instead of using its own column maths. */}
-      <CardGrid scroll={false} min={200}>
-        {filtered.map(p => (
-          <PersonCard key={p.id} person={p} onDelete={onDelete} onOpen={() => onOpenDetail(p)}
-            trained={trainedIds.has(p.id)} stats={stats.get(p.id)} />
-        ))}
+      {/* One grid width across the whole section — the roster, the clusters and
+          the tracked bodies used four different ones (200/190/168/124). */}
+      <CardGrid scroll={false} min={CARD_MIN}>
+        {filtered.length === 0
+          ? <CardEmpty icon={<Users size={32} />}>Nobody matches those filters.</CardEmpty>
+          : filtered.map(p => (
+            <PersonCard key={p.id} person={p} onDelete={onDelete} onOpen={() => onOpenDetail(p)}
+              trained={trainedIds.has(p.id)} stats={stats.get(p.id)} />
+          ))}
       </CardGrid>
-      {filtered.length === 0 && (
-        <div style={{ fontSize: 12, color: "var(--text-tertiary)", textAlign: "center", padding: 18 }}>
-          No people match.
-        </div>
-      )}
-    </div>
+    </Scroller>
   );
 }
 
@@ -614,13 +751,15 @@ function ConfirmQueue({ recognitions, persons, onCorrect, onConfirm }: {
         These were named, but only just \u2014 someone else scored almost as high. Confirming
         one teaches the matcher; correcting it teaches it more.
       </div>
-      <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 2 }}>
+      {/* A grid, not a sideways scroller: Review has none, and a queue you have
+          to drag through hides how much of it is left. */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(112px, 1fr))", gap: 10 }}>
         {marginal.map(r => {
           const gap = Math.round((r.match_margin ?? 0) * 100);
           return (
-            <div key={r.id} style={{ flexShrink: 0, width: 112 }}>
+            <div key={r.id}>
               <div style={{
-                width: 112, height: 112, borderRadius: 12, overflow: "hidden",
+                width: "100%", aspectRatio: "1 / 1", borderRadius: 8, overflow: "hidden",
                 border: "1px solid var(--border-strong)", position: "relative", marginBottom: 6,
               }}>
                 <img src={`data:image/jpeg;base64,${r.thumbnail_b64}`} alt={r.name}
@@ -693,15 +832,15 @@ function RecognizedStrip({ recognitions, persons, onOpenDetail, onChanged, showT
       }}>
         <Activity size={12} style={{ color: "var(--accent)" }} /> Recently recognized
       </div>
-      <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 2 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(92px, 1fr))", gap: 10 }}>
         {recognitions.map(r => (
-          <div key={r.id} style={{ flexShrink: 0, width: 92, textAlign: "center", position: "relative" }}>
+          <div key={r.id} style={{ textAlign: "center", position: "relative" }}>
             <button type="button"
               onClick={() => { const p = persons.find(p => p.id === r.person_id); if (p) onOpenDetail(p); }}
               title={`${r.name} · CAM ${r.cam_id + 1} · ${fmtWhen(r.seen_at)}\n${whyNamed(r.match_method, r.match_score, r.match_margin)}${r.event_id ? ` · event ${r.event_id.slice(0, 8)}` : ""}`}
               style={{ width: "100%", padding: 0, border: "none", cursor: "pointer", background: "transparent", textAlign: "center" }}>
               <div style={{
-                width: 92, height: 92, borderRadius: 14, overflow: "hidden",
+                width: "100%", aspectRatio: "1 / 1", borderRadius: 8, overflow: "hidden",
                 border: "1px solid var(--border)", marginBottom: 6, position: "relative",
               }}>
                 <img src={`data:image/jpeg;base64,${r.thumbnail_b64}`} alt={r.name}

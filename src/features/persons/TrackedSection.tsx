@@ -6,15 +6,15 @@
  * changes daily, so nothing here writes a durable identity on its own.
  */
 import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { Layers, Users, Check, X, Sparkles, UserPlus, Activity } from "lucide-react";
+import { Layers, Users, Check, X, Sparkles, UserPlus, Activity, ChevronDown, ChevronRight } from "lucide-react";
 import { api, KnownPerson, TrackedPerson, TrackedCluster } from "../../api";
 import { useStore } from "../../store";
 import { createPortal } from "react-dom";
 import { fmtWhen } from "../../lib/time";
 import { bodyCropSrc } from "../../lib/eventThumb";
 import { Modal, useDismiss } from "../../components/ui/Modal";
-import { CardGrid, ProfileCard, ProfileMedia, CardCount, CardEmpty } from "../review/Card";
-import { PersonPickList, SectionHeader, ZoomableImg, OutfitLine, fmtDay, formatRelative } from "./shared";
+import { CardGrid, ProfileCard, ProfileMedia, CardCount, CardEmpty, CARD_MIN } from "../review/Card";
+import { PersonPickList, SectionHeader, ZoomableImg, OutfitLine, formatRelative } from "./shared";
 
 export function TrackedSection({ tracked, backend, persons, onChanged, showToast }: {
   tracked: TrackedPerson[];
@@ -87,17 +87,7 @@ export function TrackedSection({ tracked, backend, persons, onChanged, showToast
   const visibleClusters = clusters.filter(c => !dismissed.has(c.cluster_id));
 
   if (tracked.length === 0) {
-    return (
-      <div className="glass" style={{
-        padding: "40px 28px", textAlign: "center",
-        display: "flex", flexDirection: "column", alignItems: "center", gap: 14,
-      }}>
-        <Layers size={42} style={{ opacity: 0.35 }} />
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6 }}>No tracked people yet</div>
-        </div>
-      </div>
-    );
+    return <CardEmpty icon={<Layers size={32} />}>No tracked people yet.</CardEmpty>;
   }
 
   /** Grid for the merge PROPOSALS only. Those cards expand to `gridColumn: 1/-1`
@@ -118,10 +108,9 @@ export function TrackedSection({ tracked, backend, persons, onChanged, showToast
 
       {visibleClusters.length > 0 && (
         <div style={{ marginBottom: 18 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", margin: "0 2px 4px",
-            display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <Sparkles size={12} /> Suggested groups
-          </div>
+          <SectionHeader icon={<Sparkles size={13} />} title="Suggested groups"
+            subtitle="Anonymous tracks that look like one person — review the photos, then name the group."
+            count={visibleClusters.length} />
           <div style={grid}>
             {visibleClusters.map(c => (
               <ClusterCard key={c.cluster_id} c={c} persons={persons}
@@ -135,10 +124,10 @@ export function TrackedSection({ tracked, backend, persons, onChanged, showToast
 
       {named.length > 0 && (
         <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", margin: "0 2px 8px" }}>
-            Recognised people
-          </div>
-          <CardGrid scroll={false} min={190}>
+          <SectionHeader icon={<Activity size={13} />} title="Recognised people"
+            subtitle="Matched at a distance by appearance, anchored by their face."
+            count={named.length} />
+          <CardGrid scroll={false} min={CARD_MIN}>
             {named.map(p => <TrackedCard key={p.person_id} p={p} persons={persons} onName={setNaming} onConfirm={assign} onCorrect={(pp, w) => setCorrecting({ p: pp, wrongName: w })} />)}
           </CardGrid>
         </div>
@@ -150,10 +139,11 @@ export function TrackedSection({ tracked, backend, persons, onChanged, showToast
             style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "7px 12px", borderRadius: 10,
               fontSize: 12, fontWeight: 700, cursor: "pointer", marginBottom: 8,
               border: "1px solid var(--border-strong)", background: "transparent", color: "var(--text-secondary)" }}>
-            {showUnknown ? "▾" : "▸"} Recent unknowns ({unknown.length}) — appearance only, expire in ~2 days
+            {showUnknown ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+            Recent unknowns ({unknown.length}) — appearance only, expire in ~2 days
           </button>
           {showUnknown && (
-            <CardGrid scroll={false} min={190}>
+            <CardGrid scroll={false} min={CARD_MIN}>
               {unknown.map(p => <TrackedCard key={p.person_id} p={p} persons={persons} onName={setNaming} onConfirm={assign} onCorrect={(pp, w) => setCorrecting({ p: pp, wrongName: w })} />)}
             </CardGrid>
           )}
@@ -227,7 +217,8 @@ function ClusterCard({ c, persons, onAssign, onOpen, onDismiss }: {
           <button type="button" onClick={() => setExpanded(v => !v)}
             style={{ marginTop: 4, padding: 0, border: "none", background: "transparent", cursor: "pointer",
               fontSize: 10.5, fontWeight: 700, color: "var(--accent)", display: "inline-flex", alignItems: "center", gap: 3 }}>
-            {expanded ? "▾ Hide photos" : `▸ Review ${c.samples.length} photo${c.samples.length === 1 ? "" : "s"}`}
+            {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            {expanded ? "Hide photos" : `Review ${c.samples.length} photo${c.samples.length === 1 ? "" : "s"}`}
           </button>
         </div>
       </div>

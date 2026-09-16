@@ -486,6 +486,16 @@ pub(crate) async fn search_events_core(
     }
     let limit = limit.unwrap_or(300).clamp(1, 1000);
 
+    // A question about a PERSON ("red top with a backpack", "Ravi loitering",
+    // "unfamiliar") is answered from person tracks, best match first — a LIKE
+    // over summaries can't see colours or carried objects at all.
+    if let Some(ids) = crate::people_search::event_ids_for_query(state, query).await {
+        if !ids.is_empty() {
+            let ids: Vec<String> = ids.into_iter().take(limit as usize).collect();
+            return fetch_events_by_ids(&state.db, &ids).await.map_err(|e| e.to_string());
+        }
+    }
+
     // 1. Keyword results first — high precision (exact substring over the rich
     //    label columns), recency-ordered. This is the whole result set when the
     //    semantic skill isn't installed, so behaviour is unchanged without it.
@@ -1092,10 +1102,21 @@ pub(crate) async fn consolidate_unknown_faces(state: &Arc<AppState>) {
     let sights = sqlx::query(
         "DELETE FROM face_sightings WHERE seen_at < ? AND (person_name IS NULL OR person_name='' OR person_name='unknown')"
     ).bind(&cutoff).execute(&state.db).await.map(|r| r.rows_affected()).unwrap_or(0);
+    // Unfamiliar person tracks past retention: their footage is gone, so the row
+    // can no longer be played or proven. Named tracks are identity history — kept.
+    let old_crops: Vec<(Option<String>,)> = sqlx::query_as(
+        "SELECT crop FROM person_tracks WHERE known_person_id IS NULL AND started_at < ?"
+    ).bind(&cutoff).fetch_all(&state.db).await.unwrap_or_default();
+    let dd = state.data_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        for (c,) in old_crops { if let Some(c) = c { crate::blobstore::delete(&dd, &c); } }
+    }).await.ok();
+    let tracks = sqlx::query("DELETE FROM person_tracks WHERE known_person_id IS NULL AND started_at < ?")
+        .bind(&cutoff).execute(&state.db).await.map(|r| r.rows_affected()).unwrap_or(0);
 
-    if oneoff + capped > 0 || bodies + sights > 0 {
+    if oneoff + capped > 0 || bodies + sights + tracks > 0 {
         tracing::info!(
-            "identity consolidation: kept {regulars} recurring stranger(s); pruned {oneoff} one-off + {capped} over-cap face crop(s) + {bodies} anon body + {sights} stranger-sighting row(s) (named identities kept)"
+            "identity consolidation: kept {regulars} recurring stranger(s); pruned {oneoff} one-off + {capped} over-cap face crop(s) + {bodies} anon body + {sights} stranger-sighting + {tracks} unfamiliar track row(s) (named identities kept)"
         );
     }
 }

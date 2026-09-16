@@ -114,6 +114,27 @@ pub(crate) async fn face_crop(
     }
 }
 
+/// Serve a PERSON-TRACK crop by `person_tracks.id` — the best crop of one
+/// person's presence on one camera (Today, Search, visit sheets).
+pub(crate) async fn track_crop(
+    axum::extract::Path(id): axum::extract::Path<String>,
+    AxumState(s): AxumState<StreamState>,
+) -> Response {
+    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') || id.len() > 48 {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let v: Option<String> = sqlx::query_scalar("SELECT crop FROM person_tracks WHERE id=?")
+        .bind(&id).fetch_optional(&s.db).await.ok().flatten();
+    let Some(v) = v else { return StatusCode::NOT_FOUND.into_response() };
+    let bytes = crate::blobstore::resolve_bytes(&s.data_dir, &v);
+    if bytes.is_empty() { return StatusCode::NOT_FOUND.into_response(); }
+    let mut headers = HeaderMap::new();
+    headers.insert("Content-Type",  HeaderValue::from_static("image/jpeg"));
+    // A track's crop is written once, at flush → immutable.
+    headers.insert("Cache-Control", HeaderValue::from_static("max-age=3600, immutable"));
+    (StatusCode::OK, headers, Body::from(bytes)).into_response()
+}
+
 /// Serve a BODY-track crop by track id: latest stored body crop, else the
 /// latest linked event thumbnail (same preference order the Tracked list used
 /// when it inlined these). Short cache — a track's latest crop advances.

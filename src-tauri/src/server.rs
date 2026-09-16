@@ -196,6 +196,7 @@ pub fn start_http_server(
         // inline-base64 IPC payloads that froze the People tab).
         .route("/face/:id/crop", get(crate::footage::face_crop))
         .route("/body/:id/crop", get(crate::footage::body_crop))
+        .route("/track/:id/crop", get(crate::footage::track_crop))
         // WHEP SDP exchange → go2rtc (sub-second WebRTC live view; media flows
         // peer-to-peer after this one authed request/response).
         .route("/webrtc/:cam", axum::routing::post(webrtc_whep))

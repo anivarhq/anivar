@@ -6,15 +6,15 @@
  * useful object — it carries how often, over how many days, at what time of
  * day — so it leads.
  */
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Sparkles, Users, Check, X, Clock, MapPin, Play, Trash2, UserPlus } from "lucide-react";
 import { api, KnownPerson, UnknownFace, UnknownCluster, PersonSighting } from "../../api";
 import { useStore } from "../../store";
 import { createPortal } from "react-dom";
 import { faceCropSrc, eventThumbSrc } from "../../lib/eventThumb";
 import { fmtWhen } from "../../lib/time";
-import { Modal, useDismiss } from "../../components/ui/Modal";
-import { CardGrid, Card, CardMedia, ProfileCard, ProfileMedia, CardCount, CardEmpty, CardFooter, CardTime } from "../review/Card";
+import { Modal, Confirm, useDismiss } from "../../components/ui/Modal";
+import { CardGrid, Card, CardMedia, ProfileCard, ProfileMedia, CardCount, CardEmpty, CardFooter, CardTime, CARD_MIN } from "../review/Card";
 import { PersonPickList, SectionHeader, FaceContextZoom, formatRelative, ZoomableImg, summaryText } from "./shared";
 
 export function ReviewSection({ unknowns, clusters, persons, onTagged, showToast }: {
@@ -54,28 +54,23 @@ export function ReviewSection({ unknowns, clusters, persons, onTagged, showToast
     try { await api.assignFaceToPerson(faceId, personId); onTagged(); }
     catch (e) { showToast(`Couldn't tag: ${String(e).replace(/^.*Error:\s*/, "")}`, "error"); }
   }, [onTagged, showToast]);
-  // Wipe the stranger backlog (e.g. old low-quality crops) — cameras re-capture clean ones.
-  const handleClear = async () => {
-    if (!confirm("Remove ALL un-tagged stranger faces from Train? Cameras will re-capture clean ones, and enrolled people are kept.")) return;
+  // Wipe the stranger backlog (e.g. old low-quality crops) — cameras re-capture
+  // clean ones. Behind a real dialog, not a native confirm(): this deletes face
+  // data, and the app's other destructive actions all ask the same way.
+  const [clearing, setClearing] = useState(false);
+  const doClear = async () => {
+    setClearing(false);
     try { const n = await api.clearUnknownFaces(); onTagged(); showToast(`Cleared ${n} face${n === 1 ? "" : "s"}`, "info"); }
     catch (e) { showToast(`Clear failed: ${String(e).replace(/^.*Error:\s*/, "")}`, "error"); }
   };
 
   if (clusters.length === 0 && unknowns.length === 0) {
     return (
-      <div className="glass" style={{
-        padding: "40px 28px", textAlign: "center",
-        display: "flex", flexDirection: "column", alignItems: "center", gap: 14,
-      }}>
-        <Sparkles size={36} style={{ opacity: 0.35 }} />
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6 }}>No unidentified faces in the last 30 days</div>
-        </div>
-      </div>
+      <CardEmpty icon={<Sparkles size={32} />}>
+        No unidentified faces in the last 30 days.
+      </CardEmpty>
     );
   }
-
-  const sectionLabel: CSSProperties = { fontSize: 11, fontWeight: 700, letterSpacing: 0.04, textTransform: "uppercase", color: "var(--text-tertiary)", margin: "0 2px 8px" };
 
   return (
     <div style={{ display: "grid", gap: 18 }}>
@@ -94,7 +89,7 @@ export function ReviewSection({ unknowns, clusters, persons, onTagged, showToast
             ? <>The agent grouped <strong style={{ color: "var(--accent)" }}>{clusters.length}</strong> distinct {clusters.length === 1 ? "person" : "people"} it couldn't identify, none of them more than once.</>
             : <>The agent saw <strong style={{ color: "var(--accent)" }}>{singletons.length}</strong> unidentified face{singletons.length === 1 ? "" : "s"}. Tap one to tag it.</>}
         </span>
-        <button onClick={handleClear} title="Remove all un-tagged stranger faces (cameras re-capture clean ones)"
+        <button onClick={() => setClearing(true)} title="Remove all un-tagged stranger faces (cameras re-capture clean ones)"
           style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 5,
             padding: "5px 11px", borderRadius: 999, cursor: "pointer", fontSize: 11, fontWeight: 600,
             border: "1px solid color-mix(in srgb, var(--status-alert) 30%, transparent)", background: "transparent", color: "var(--accent-red)" }}>
@@ -105,8 +100,10 @@ export function ReviewSection({ unknowns, clusters, persons, onTagged, showToast
       {/* Recurring strangers — the security finding, not a tagging queue. */}
       {recurring.length > 0 && (
         <div>
-          <div style={sectionLabel}>Keeps coming back ({recurring.length})</div>
-          <CardGrid scroll={false} min={168}>
+          <SectionHeader icon={<Users size={13} />} title="Keeps coming back"
+            subtitle="Seen on more than one day — naming one names every sighting of them at once."
+            count={recurring.length} />
+          <CardGrid scroll={false} min={CARD_MIN}>
             {recurring.map(c => (
               <ClusterProfile key={c.cluster_id} c={c} persons={persons}
                 streamInfo={streamInfo} onOpen={() => setActiveCluster(c)}
@@ -119,8 +116,10 @@ export function ReviewSection({ unknowns, clusters, persons, onTagged, showToast
       {/* Seen once. Same card, lower billing. */}
       {oneOff.length > 0 && (
         <div>
-          <div style={sectionLabel}>Seen once ({oneOff.length})</div>
-          <CardGrid scroll={false} min={168}>
+          <SectionHeader icon={<Users size={13} />} title="Seen once"
+            subtitle="Walked past on one day and hasn't come back."
+            count={oneOff.length} />
+          <CardGrid scroll={false} min={CARD_MIN}>
             {oneOff.map(c => (
               <ClusterProfile key={c.cluster_id} c={c} persons={persons}
                 streamInfo={streamInfo} onOpen={() => setActiveCluster(c)}
@@ -133,8 +132,10 @@ export function ReviewSection({ unknowns, clusters, persons, onTagged, showToast
       {/* Single unmatched faces — not (yet) grouped into a recurring person. */}
       {singletons.length > 0 && (
         <div>
-          <div style={sectionLabel}>Other recent faces ({singletons.length})</div>
-          <CardGrid scroll={false} min={124}>
+          <SectionHeader icon={<Users size={13} />} title="Other recent faces"
+            subtitle="Not grouped into a recurring person yet."
+            count={singletons.length} />
+          <CardGrid scroll={false} min={CARD_MIN}>
             {singletons.map(u => {
               const sp = (u.suggested_person_id ? persons.find(p => p.id === u.suggested_person_id) : null)
                 ?? (u.suggested_name ? persons.find(p => p.name === u.suggested_name) : null);
@@ -183,6 +184,11 @@ export function ReviewSection({ unknowns, clusters, persons, onTagged, showToast
         </div>
       )}
 
+      {clearing && (
+        <Confirm title="Remove all un-tagged stranger faces?"
+          body="Cameras will re-capture clean ones. Enrolled people are not affected."
+          confirmLabel="Clear" onConfirm={doClear} onCancel={() => setClearing(false)} />
+      )}
       {active && (
         <TagModal face={active} persons={persons} showToast={showToast}
           onClose={() => setActive(null)}

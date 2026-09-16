@@ -303,8 +303,12 @@ fn push_common(q: &Query, sql: &mut String, binds: &mut Vec<String>) {
         binds.push(cam.to_string());
     }
     if let Some(who) = &q.who {
-        sql.push_str(" AND sub_label = ? COLLATE NOCASE");
-        binds.push(who.clone());
+        // `sub_label` joins every name recognised in the event with ", "
+        // (agent/clip.rs), so an exact match missed anyone seen WITH someone.
+        // LIKE is case-insensitive for ASCII, as COLLATE NOCASE was.
+        sql.push_str(" AND (', ' || sub_label || ',') LIKE ? ESCAPE '\\'");
+        let lit = who.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        binds.push(format!("%, {lit},%"));
     }
     if let Some(what) = q.what {
         sql.push_str(" AND ");
@@ -369,7 +373,7 @@ fn push_common(q: &Query, sql: &mut String, binds: &mut Vec<String>) {
 /// because `camera_configs.name` was reachable only from the Telegram menus —
 /// so it could neither report a camera by name nor understand a question that
 /// used one.
-pub(super) async fn camera_names(db: &sqlx::SqlitePool) -> BTreeMap<i64, String> {
+pub(crate) async fn camera_names(db: &sqlx::SqlitePool) -> BTreeMap<i64, String> {
     // Every CONFIGURED camera, named or not. Filtering on `name <> ''` reported
     // "Cameras: none set up yet" to a user with two cameras that simply had no
     // names typed in — a configured camera exists whether or not it was named.
@@ -3014,7 +3018,9 @@ mod tests {
         assert!(!sql.contains("DROP"), "user text reached the SQL string: {sql}");
         assert!(!sql.contains("2026-07-14"), "even a validated date is bound: {sql}");
         assert_eq!(sql.matches('?').count(), binds.len(), "one bind per placeholder");
-        assert!(binds.iter().any(|b| b == EVIL), "the value must travel as a bind");
+        // LIKE-escaping adds backslashes (EVIL has an underscore); the text still
+        // travels only as the bind.
+        assert!(binds.iter().any(|b| b.replace('\\', "").contains(EVIL)), "the value must travel as a bind");
     }
 
     /// The whole point of the round: every slot in the sentence survives.

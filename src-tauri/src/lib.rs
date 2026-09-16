@@ -145,6 +145,12 @@ mod hls;
 
 
 mod reid;
+mod person_track;
+mod pose;
+mod par;
+mod behaviour;
+mod people_search;
+pub use people_search::{search_people, find_similar_person, get_people_day};
 pub use reid::{list_tracked_persons, reid_backend_status, assign_tracked_to_known, list_tracked_clusters, name_tracked_group, unname_tracked_group, correct_track};
 
 mod inference;
@@ -184,13 +190,13 @@ mod agent_cmds;
 pub use agent_cmds::{get_agent_alerts, delete_agent_alert, clear_all_agent_alerts, set_alert_feedback, get_reflection_prompt, report_behavior_events, get_agent_memory, set_agent_memory, list_agent_memory, delete_agent_memory, get_agent_status, analyze_snapshot, chat_app, get_chat_log, clear_chat_log, trigger_agent_now, query_events, explore_events};
 
 mod agent_data_cmds;
-pub use agent_data_cmds::{search_clips, list_alert_conditions, create_alert_condition, delete_alert_condition, toggle_alert_condition, read_memory_file, write_memory_file, read_all_memory_files, report_crowd_count, delete_motion_event, delete_events, clear_nvr_recordings, clear_all_events, purge_orphaned_clips, delete_footage_in_range};
+pub use agent_data_cmds::{search_clips, list_alert_conditions, create_alert_condition, delete_alert_condition, toggle_alert_condition, read_memory_file, write_memory_file, read_all_memory_files, delete_motion_event, delete_events, clear_nvr_recordings, clear_all_events, purge_orphaned_clips, delete_footage_in_range};
 
 mod persons;
 pub use persons::{enroll_person, enroll_person_multi, add_person_embedding, list_known_persons, delete_person,
             forget_person, rename_person, mark_person_seen, list_recent_unknown_faces, assign_face_to_person, create_person_from_face, list_person_faces, delete_face_embedding, list_recent_recognitions, list_unknown_clusters, get_person_sightings, get_person_events, list_vehicles, list_audio_events, get_person_stats, get_audio_stats, assign_faces_to_person, clear_unknown_faces, get_face_context, correct_face};
 mod correlation;
-pub use correlation::{record_face_sighting, get_camera_correlations, detect_anomalies};
+pub use correlation::record_face_sighting;
 
 mod agent_tools;
 pub use agent_tools::{get_person_history, search_similar_events, trigger_alarm, send_telegram_test, telegram_connect, set_auth_password};
@@ -578,7 +584,6 @@ pub fn run() {
             read_memory_file,
             write_memory_file,
             read_all_memory_files,
-            report_crowd_count,
             analyze_snapshot,
             enroll_person,
             enroll_person_multi,
@@ -591,6 +596,7 @@ pub fn run() {
             add_person_embedding,
             list_known_persons,
             delete_person,
+            forget_person,
             rename_person,
             mark_person_seen,
             list_recent_unknown_faces,
@@ -610,6 +616,9 @@ pub fn run() {
             list_recent_recognitions,
             create_person_from_face,
             correct_face,
+            search_people,
+            find_similar_person,
+            get_people_day,
             send_telegram_test,
             telegram_connect,
             tailscale_status,
@@ -635,8 +644,6 @@ pub fn run() {
             search_similar_events,
             trigger_alarm,
             record_face_sighting,
-            get_camera_correlations,
-            detect_anomalies,
             list_provider_models,
             test_ai_provider,
             get_hw_encoder,

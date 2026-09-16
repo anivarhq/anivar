@@ -182,14 +182,11 @@ impl KnownBodyGalleries {
 // compares same-length descriptors, so different backbones never cross-contaminate
 // across a model switch. Falls back to HSV when no deep skill is installed.
 //
-// Backbones are tried in PRIORITY order (best first). The default OSNet x0.25
-// (`reid_osnet`) over-specialises on its training domain (mAP collapses cross-domain),
-// so `reid_osnet_ain` (instance-norm, domain-generalisable) is preferred when present,
-// and `reid_clip` (CLIP-ReID, GPU) above that. Each carries its own preprocessing +
-// cosine match floor (deep spaces match at a lower cosine than the HSV histogram).
+// Backbones are tried in PRIORITY order (first installed wins). Each carries its
+// own preprocessing + cosine match floor (deep spaces match at a lower cosine
+// than the HSV histogram).
 
 const IN_MEAN: [f32; 3] = [0.485, 0.456, 0.406]; // ImageNet (torchreid/OSNet/most ReID)
-const IN_STD:  [f32; 3] = [0.229, 0.224, 0.225];
 
 struct ReidBackbone {
     skill: &'static str,
@@ -201,11 +198,13 @@ struct ReidBackbone {
     floor: f32,            // cosine match floor for this embedding space
 }
 
-// Priority order — first installed wins. Only the verified OSNet ONNX
-// (anriha/osnet_x0_25_msmt17, 256×128 ImageNet-norm, 512-d) ships today; extra
-// backbones can be added here as their ONNX exports are verified.
+// NVIDIA TAO ReIdentificationNet v1.2 — the commercial-clean choice (OSNet x0.25
+// was trained on research-only MSMT17). RGB 256×128; DeepStream feeds it
+// (px − 255·IN_MEAN) × 0.01735207, i.e. std 0.226 on the 0..1 scale. 256-d,
+// un-normalised output (L2'd below).
+// ponytail: 0.62 floor carried over from OSNet — recalibrate from logged match scores.
 const REID_BACKBONES: &[ReidBackbone] = &[
-    ReidBackbone { skill: "reid_osnet", label: "Deep (OSNet)", w: 128, h: 256, mean: IN_MEAN, std: IN_STD, floor: 0.62 },
+    ReidBackbone { skill: "reid_tao", label: "Deep (NVIDIA ReID)", w: 128, h: 256, mean: IN_MEAN, std: [0.226, 0.226, 0.226], floor: 0.62 },
 ];
 
 fn active_backbone(data_dir: &Path) -> Option<&'static ReidBackbone> {
@@ -233,17 +232,9 @@ pub(crate) fn active_deep_floor(data_dir: &Path) -> f32 {
     active_backbone(data_dir).map(|b| b.floor).unwrap_or(0.62)
 }
 
-// Cached deep session: (session, input_name, skill_id, batch). `batch` is the
-// model's required batch size, probed on first use (0 = not yet probed). Some
-// real exports (e.g. the public OSNet ONNX) are compiled with a FIXED batch
-// (16), not dynamic — feeding [1,...] is rejected, so we must tile the single
-// crop to the model's batch and read row 0. Keyed by skill id → switching
-// backbones reloads cleanly.
-static REID_SESSION: OnceLock<Mutex<Option<(OrtSession, String, &'static str, usize)>>> = OnceLock::new();
-
-// Batch sizes to probe, in order. 1 = dynamic/batch-1 exports; 16 = the common
-// fixed-batch OSNet export. First one that runs is cached.
-const REID_BATCH_CANDIDATES: &[usize] = &[1, 16];
+// Cached deep session: (session, input_name, skill_id). Keyed by skill id, so
+// switching backbones reloads cleanly. Exports must take a dynamic batch.
+static REID_SESSION: OnceLock<Mutex<Option<(OrtSession, String, &'static str)>>> = OnceLock::new();
 
 /// QUALITY GATE for trusting a person crop with DURABLE identity (cross-camera match +
 /// gallery storage). Tiny, low-confidence, or non-person-shaped (wide/merged) boxes give
@@ -257,81 +248,78 @@ pub(crate) fn crop_is_reliable(box_: &[f32; 4], score: f32) -> bool {
     score >= 0.5 && h >= 64.0 && w >= 24.0 && h >= w * 1.1
 }
 
-/// Body descriptor for Re-ID: deep embedding when a skill is installed, else the
-/// HSV histogram. Caller doesn't need to know which.
-pub(crate) fn body_descriptor(data_dir: &Path, jpeg: &[u8], box_: &[f32; 4]) -> Option<Vec<f32>> {
+/// Re-ID descriptors for every box in ONE frame: one JPEG decode and one batched
+/// model run (the old per-box path decoded the frame and ran the model once per
+/// person). Deep embedding when a skill is installed, else the HSV histogram per
+/// box — a missing or failing deep model never costs the tracker its cue.
+pub(crate) fn body_descriptors(data_dir: &Path, jpeg: &[u8], boxes: &[[f32; 4]]) -> Vec<Option<Vec<f32>>> {
+    if boxes.is_empty() { return Vec::new(); }
     if let Some(b) = active_backbone(data_dir) {
-        if let Some(v) = compute_body_descriptor_deep(data_dir, b, jpeg, box_) {
-            return Some(v);
+        if let Some(v) = compute_body_descriptors_deep(data_dir, b, jpeg, boxes) {
+            return v;
         }
-        // Deep model present but inference failed → fall through to HSV (never lose tracking).
     }
-    compute_body_descriptor(jpeg, box_)
+    boxes.iter().map(|bx| compute_body_descriptor(jpeg, bx)).collect()
 }
 
-fn compute_body_descriptor_deep(data_dir: &Path, b: &ReidBackbone, jpeg: &[u8], box_: &[f32; 4]) -> Option<Vec<f32>> {
+fn compute_body_descriptors_deep(data_dir: &Path, b: &ReidBackbone, jpeg: &[u8], boxes: &[[f32; 4]]) -> Option<Vec<Option<Vec<f32>>>> {
     let model_path = data_dir.join("skills").join(b.skill).join("model.onnx");
     let cell = REID_SESSION.get_or_init(|| Mutex::new(None));
     let mut guard = cell.lock().ok()?;
-    let need_reload = guard.as_ref().map(|(_, _, s, _)| *s) != Some(b.skill);
-    if need_reload {
-        // Enrichment lane = CPU (event cadence; keeps the GPU lock YOLO-only
-        // and avoids a per-model TRT engine build that would block YOLO).
+    if guard.as_ref().map(|(_, _, s)| *s) != Some(b.skill) {
+        // Enrichment lane = CPU (keeps the GPU lock YOLO-only and avoids a
+        // per-model TRT engine build that would block YOLO).
         match crate::inference::build_ort_session_cpu(&model_path) {
             Ok(s) => {
                 let input = s.inputs().first().map(|i| i.name().to_string())
-                    .unwrap_or_else(|| "images".into());
-                *guard = Some((s, input, b.skill, 0)); // batch 0 = probe on first run
+                    .unwrap_or_else(|| "input".into());
+                *guard = Some((s, input, b.skill));
             }
             Err(e) => { tracing::debug!("{} load failed: {e}", b.skill); return None; }
         }
     }
-    let (session, input_name, _, batch) = guard.as_mut()?;
+    let (session, input_name, _) = guard.as_mut()?;
 
     let img = image::load_from_memory(jpeg).ok()?;
     let (iw, ih) = (img.width() as f32, img.height() as f32);
-    let x1 = box_[0].max(0.0).min(iw - 1.0) as u32;
-    let y1 = box_[1].max(0.0).min(ih - 1.0) as u32;
-    let x2 = box_[2].max(0.0).min(iw) as u32;
-    let y2 = box_[3].max(0.0).min(ih) as u32;
-    if x2 <= x1 || y2 <= y1 { return None; }
-    let crop = img.crop_imm(x1, y1, x2 - x1, y2 - y1)
-        .resize_exact(b.w, b.h, image::imageops::FilterType::Triangle).to_rgb8();
     let (w, h) = (b.w as usize, b.h as usize);
     let plane = w * h;
-    // One image worth of CHW input.
-    let mut chw = vec![0.0f32; 3 * plane];
-    for y in 0..h {
-        for x in 0..w {
-            let p = crop.get_pixel(x as u32, y as u32);
-            let d = y * w + x;
+    let n = boxes.len();
+    let mut data = vec![0.0f32; n * 3 * plane];
+    let mut valid = vec![false; n];
+    for (k, box_) in boxes.iter().enumerate() {
+        let x1 = box_[0].max(0.0).min(iw - 1.0) as u32;
+        let y1 = box_[1].max(0.0).min(ih - 1.0) as u32;
+        let x2 = box_[2].max(0.0).min(iw) as u32;
+        let y2 = box_[3].max(0.0).min(ih) as u32;
+        if x2 <= x1 || y2 <= y1 { continue; }
+        let crop = img.crop_imm(x1, y1, x2 - x1, y2 - y1)
+            .resize_exact(b.w, b.h, image::imageops::FilterType::Triangle).to_rgb8();
+        let chw = &mut data[k * 3 * plane..(k + 1) * 3 * plane];
+        for (x, y, p) in crop.enumerate_pixels() {
+            let d = y as usize * w + x as usize;
             for c in 0..3 {
                 chw[c * plane + d] = ((p[c] as f32 / 255.0) - b.mean[c]) / b.std[c];
             }
         }
+        valid[k] = true;
     }
+    if !valid.iter().any(|v| *v) { return Some(vec![None; n]); }
 
-    // Probe the model's required batch on first use (some exports are fixed-batch);
-    // then reuse the cached size. We tile the single crop across the batch and read
-    // row 0 — every row is identical, so the first embedding is the one we want.
-    let candidates: Vec<usize> = if *batch == 0 { REID_BATCH_CANDIDATES.to_vec() } else { vec![*batch] };
-    for &bs in &candidates {
-        let mut data = Vec::with_capacity(bs * chw.len());
-        for _ in 0..bs { data.extend_from_slice(&chw); }
-        let Ok(tensor) = Tensor::<f32>::from_array(([bs, 3, h, w], data)) else { continue };
-        let Ok(outputs) = ({ let _t = crate::inference::infer_timer("reid");
-            session.run(ort::inputs![input_name.as_str() => tensor]) }) else { continue };
-        let Ok((_, raw)) = outputs[0].try_extract_tensor::<f32>() else { continue };
-        if raw.is_empty() { continue; }
-        // Row 0 = first (len / batch) floats (the per-image embedding).
-        let dim = (raw.len() / bs).max(1);
-        let mut v = raw[..dim.min(raw.len())].to_vec();
-        let n: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if n > 0.0 { v.iter_mut().for_each(|x| *x /= n); }
-        *batch = bs; // remember the working batch
-        return if v.is_empty() { None } else { Some(v) };
-    }
-    None
+    let tensor = Tensor::<f32>::from_array(([n, 3, h, w], data)).ok()?;
+    let outputs = { let _t = crate::inference::infer_timer("reid");
+        session.run(ort::inputs![input_name.as_str() => tensor]).ok()? };
+    let (_, raw) = outputs[0].try_extract_tensor::<f32>().ok()?;
+    let dim = raw.len() / n;
+    if dim == 0 { return None; }
+    Some((0..n).map(|k| {
+        if !valid[k] { return None; }
+        let mut v = raw[k * dim..(k + 1) * dim].to_vec();
+        let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm <= 0.0 { return None; }
+        v.iter_mut().for_each(|x| *x /= norm);
+        Some(v)
+    }).collect())
 }
 
 /// Query body_embeddings for the person whose descriptor best matches `desc`.
@@ -475,6 +463,8 @@ pub(crate) async fn link_body_to_known(
     known_id: &str,
     desc: &[f32],
     cam_id: u8,
+    // The motion event open on this camera, so the sample says which event it came from.
+    event_id: Option<&str>,
     thumb: Option<&str>,
     attrs: Option<&str>,
     // The consensus-confirmed FACE score that anchors this fusion — provenance
@@ -496,8 +486,8 @@ pub(crate) async fn link_body_to_known(
     let id = uuid::Uuid::new_v4().to_string();
     let _ = sqlx::query(
         "INSERT INTO body_embeddings(id, person_id, descriptor, cam_id, event_id, thumbnail_b64, known_person_id, attrs, match_method, match_score)
-         VALUES(?, ?, ?, ?, NULL, ?, ?, ?, 'fusion', ?)"
-    ).bind(&id).bind(&pid).bind(&blob).bind(cam_id as i64).bind(thumb).bind(known_id).bind(attrs)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'fusion', ?)"
+    ).bind(&id).bind(&pid).bind(&blob).bind(cam_id as i64).bind(event_id).bind(thumb).bind(known_id).bind(attrs)
      .bind(face_score as f64)
      .execute(db).await;
     // Prune to the most-recent CAP for this person's gallery.

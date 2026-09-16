@@ -85,6 +85,11 @@ export interface Settings {
   loitering_threshold_secs?: number; // seconds before loitering alert (default 30)
   crowd_detection?: boolean;         // alert when > N people in frame
   crowd_threshold?: number;          // person count threshold (default 3)
+  intrusion_alerts?: boolean;        // zone "alert on enter" (default on)
+  running_alerts?: boolean;
+  person_down_alerts?: boolean;      // needs the body-pose model
+  climbing_alerts?: boolean;         // needs a line marked as a fence
+  behaviour_alerts_unfamiliar_only?: boolean; // skip recognised faces (never person-down)
   repeat_visitor_detection?: boolean;
   repeat_visitor_threshold?: number; // appearances in 24h before alert (default 3)
   // assistant-parity / Cookbook fields. These exist in the Rust Settings struct;
@@ -216,6 +221,10 @@ export interface CameraMask {
   /** Minimum seconds an object must linger inside before it counts as "in zone"
    *  (mature NVRs loitering_time). 0 = register immediately. */
   loitering_secs?: number;
+  /** Zone: lying down here is normal (sofa, bed, lawn) — no person-down alert. */
+  ignore_down?: boolean;
+  /** Line: a fence or wall top — feet going over it alert as climbing. */
+  fence?: boolean;
 }
 
 export type CameraMaskMap = Record<string, CameraMask[]>; // camId → masks

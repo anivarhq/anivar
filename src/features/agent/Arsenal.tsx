@@ -147,7 +147,9 @@ export function Arsenal() {
     // missing provider as local — otherwise the model serving chat right now would
     // show as unused and get the weaker removal warning.
     if ((settings?.ai_provider ?? "local") === "local" || settings?.ai_provider === "") s.add("local_llm");
-    if (settings?.auto_reid) s.add("reid_osnet");
+    // The backend uses deep Re-ID whenever it is installed — there is no toggle.
+    s.add("reid_tao");
+    if (settings?.person_down_alerts || settings?.climbing_alerts) s.add("pose_movenet");
     // Depth model is "in use" whenever any camera has anonymization enabled.
     try {
       const anon = JSON.parse(settings?.depth_anonymize || "{}");
@@ -590,7 +592,8 @@ function RecommendationGrid({
 
 const ENHANCEMENT_SKILLS = [
   { id: "audio_yamnet", label: "Audio detection", hint: "scream / glass / alarm — enable in Settings" },
-  { id: "reid_osnet",   label: "Deep person Re-ID", hint: "OSNet · durable cross-camera tracking" },
+  { id: "reid_tao",     label: "Deep person Re-ID", hint: "NVIDIA ReIdentificationNet · cross-camera matching" },
+  { id: "pose_movenet", label: "Body pose",         hint: "MoveNet · person-down + climbing alerts" },
 ] as const;
 
 function EnhancementsCard({
@@ -606,11 +609,12 @@ function EnhancementsCard({
   // Which enhancement is actively being used right now (drives the "In use" pill).
   const isActive = (id: string) =>
     id === "audio_yamnet" ? !!settings?.audio_detection
-  : id === "reid_osnet"   ? !!settings?.auto_reid
+  : id === "reid_tao"     ? true
+  : id === "pose_movenet" ? !!(settings?.person_down_alerts || settings?.climbing_alerts)
   : false;
   return (
     <Card title="Enhancements"
-      subtitle="Audio events + deep person Re-ID.">
+      subtitle="Audio events, person Re-ID and body pose.">
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {ENHANCEMENT_SKILLS.map(row => {
           const def = findSkill(row.id);

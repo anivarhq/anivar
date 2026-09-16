@@ -38,8 +38,10 @@ export type SkillId =
   | "mobileclip_s0" | "clip_b32" | "jina_clip"
   // Audio event detection — YAMNet (AudioSet) sound classifier.
   | "audio_yamnet"
-  // Deep person Re-ID — OSNet x0.25 (verified ONNX). edge-AI-style.
-  | "reid_osnet"
+  // Deep person Re-ID — NVIDIA TAO ReIdentificationNet (commercial-use terms).
+  | "reid_tao"
+  // Body pose — MoveNet SinglePose Lightning (Apache-2.0) for behaviour alerts.
+  | "pose_movenet"
   | "depth_anything"
   // On-device language model (llama.cpp in-process) — replaces the Ollama daemon.
   | "local_llm"
@@ -55,6 +57,9 @@ export interface SkillFile {
   url:      string;
   filename: string;   // stored at <data>/skills/<id>/<filename>
   label:    string;
+  /** Expected SHA-256 (hex). When set, a download that doesn't match is deleted
+   *  and the install fails — for URLs that redirect through signed storage. */
+  sha256?:  string;
 }
 
 export interface SkillDef {
@@ -446,25 +451,48 @@ export const SKILL_REGISTRY: SkillDef[] = [
     license:     "LFM Open License v1.0",
     licenseNote: LFM_LICENCE_NOTE,
   },
-  // ── Deep person Re-ID (edge-AI-style). Deep CNN embedding for durable
-  //    cross-camera identity (robust to clothing/lighting), upgrading the
-  //    People → Tracked view from the lightweight colour-histogram matcher.
-  //    VERIFIED model: anriha/osnet_x0_25_msmt17 (real, loads, 512-d output).
-  //    The Rust `reid.rs` handles its fixed batch-16 export and falls back to
-  //    the colour histogram when no deep model is installed.
+  // ── Deep person Re-ID — NVIDIA TAO ReIdentificationNet v1.2 (ResNet-50,
+  //    256-d, RGB 256×128). Replaced OSNet x0.25, whose MSMT17 training data is
+  //    research-only; NVIDIA states this model is ready for commercial use.
+  //    VERIFIED 2026-09-15: anonymous NGC download (302 → signed storage),
+  //    dynamic batch, output un-normalised (reid.rs L2s it). 16% of its weights
+  //    are subnormal floats — ORT flush-to-zero takes CPU from 3.3 s to 21 ms.
   {
-    id:          "reid_osnet",
-    name:        "Person Re-ID — OSNet",
+    id:          "reid_tao",
+    name:        "Person Re-ID — NVIDIA ReIdentificationNet",
     slot:        "reid",
-    description: "Deep person re-identification (OSNet x0.25, trained on MSMT17). Durable cross-camera tracking that survives clothing and lighting changes — strengthens People → Tracked. Falls back to the built-in colour matcher when absent.",
-    sizeLabel:   "~1 MB",
+    description: "Deep person re-identification (ResNet-50). Follows people across cameras by appearance and powers Find similar person. Falls back to the built-in colour matcher when absent.",
+    sizeLabel:   "~92 MB",
     badge:       "RE-ID",
     badgeColor:  "var(--status-idle)",
     installUrl:  "",
     files: [
-      { url: "https://huggingface.co/anriha/osnet_x0_25_msmt17/resolve/main/osnet_x0_25_msmt17.onnx",
-        filename: "model.onnx", label: "OSNet x0.25 (MSMT17)" },
+      { url: "https://api.ngc.nvidia.com/v2/models/org/nvidia/team/tao/reidentificationnet/deployable_v1.2/files?redirect=true&path=resnet50_market1501_aicity156.onnx",
+        filename: "model.onnx", label: "ReIdentificationNet v1.2 (ResNet-50)",
+        sha256: "0e21d09278508ec835955f422a9fdd3cd59b2a6ecdef98d705f388f33cebac2b" },
     ],
+    license:     "NVIDIA TAO model terms",
+    licenseNote: "NVIDIA states this model is ready for commercial use. Downloaded from NVIDIA NGC at your request; not distributed with this app.",
+  },
+  // ── Body pose — MoveNet SinglePose Lightning (Apache-2.0; COCO + Google's own
+  //    "Active" set). Top-down on person crops, only for behaviour candidates and
+  //    clothing-colour regions. VERIFIED 2026-09-15: int32 [1,192,192,3] →
+  //    [1,1,17,3] (y, x, score); ~6 ms on CPU.
+  {
+    id:          "pose_movenet",
+    name:        "Body Pose — MoveNet",
+    slot:        "reid",
+    description: "Body keypoints for person-down and climbing alerts, and sharper shirt and trouser colours. Runs only on people a rule is watching.",
+    sizeLabel:   "~9 MB",
+    badge:       "POSE",
+    badgeColor:  "var(--status-idle)",
+    installUrl:  "",
+    files: [
+      { url: "https://huggingface.co/Xenova/movenet-singlepose-lightning/resolve/main/onnx/model.onnx",
+        filename: "model.onnx", label: "MoveNet SinglePose Lightning",
+        sha256: "1ad4f8d6c2f776a9967db3993c9ca740bc350104f9d37c151dc183fc29a464ad" },
+    ],
+    license:     "Apache-2.0",
   },
 ];
 
@@ -520,7 +548,7 @@ export async function downloadSkill(
           const overall = Math.round(((i + pct / 100) / fileCount) * 100);
           lastDl = dl; lastTot = tot;
           onProgress?.(overall, dl, tot);
-        }, f.filename);
+        }, f.filename, f.sha256);
         onProgress?.(Math.round(((i + 1) / fileCount) * 100), lastDl, lastTot);
       }
     } catch (e) {

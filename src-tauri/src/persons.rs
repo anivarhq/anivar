@@ -10,13 +10,27 @@ use uuid::Uuid;
 use crate::AppState;
 
 
-/// Fire-and-forget retrain of the hybrid face classifier after a roster change.
-/// Training is cheap and these mutations are user-paced, so a debounce isn't worth
-/// it; spawned with a cloned pool so the command returns immediately. The mutation's
-/// awaits have already committed by the time this reads the DB.
+static RETRAIN_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static RETRAIN_AGAIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Retrain the hybrid face classifier after a roster change — SINGLE-FLIGHT.
+/// Tagging a cluster fires one mutation per face, and each used to spawn its own
+/// overlapping retrain racing to write the same model row. Now one pass runs at a
+/// time and every request made meanwhile collapses into one more pass. The
+/// mutation's awaits have already committed by the time this reads the DB.
 fn schedule_classifier_retrain(db: &sqlx::SqlitePool) {
+    use std::sync::atomic::Ordering::SeqCst;
+    RETRAIN_AGAIN.store(true, SeqCst);
+    if RETRAIN_RUNNING.swap(true, SeqCst) { return; } // the running pass picks it up
     let db = db.clone();
-    tokio::spawn(async move { crate::face_classifier::retrain(&db).await; });
+    tokio::spawn(async move {
+        while RETRAIN_AGAIN.swap(false, SeqCst) {
+            crate::face_classifier::retrain(&db).await;
+        }
+        RETRAIN_RUNNING.store(false, SeqCst);
+        // A request that landed between the last check and the store above.
+        if RETRAIN_AGAIN.load(SeqCst) { schedule_classifier_retrain(&db); }
+    });
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -154,8 +168,11 @@ pub async fn rename_person(
         }
     }
     if old != name {
-        let _ = sqlx::query("UPDATE face_sightings SET person_name=? WHERE person_name=?")
-            .bind(&name).bind(&old).execute(&state.db).await;
+        // By id, so a second person who shares the old name keeps their history.
+        // Rows from before the person_id migration can only be matched by name.
+        let _ = sqlx::query("UPDATE face_sightings SET person_name=? \
+                             WHERE person_id=? OR (person_id IS NULL AND person_name=?)")
+            .bind(&name).bind(&id).bind(&old).execute(&state.db).await;
         // The EVENT label has to move too.
         //
         // `motion_events.sub_label` stores the recognised person as a name string
@@ -165,11 +182,44 @@ pub async fn rename_person(
         // could then fuzzy-match a DIFFERENT person whose name contains the old
         // one. `forget_person` already clears this column; rename must maintain
         // it for the same reason.
-        let _ = sqlx::query("UPDATE motion_events SET sub_label=? WHERE sub_label=?")
-            .bind(&name).bind(&old).execute(&state.db).await;
+        relabel_events(&state.db, &old, Some(&name)).await;
     }
     schedule_classifier_retrain(&state.db);
     Ok(())
+}
+
+/// Rewrite one name inside `motion_events.sub_label`, which holds EVERY name
+/// recognised in the event joined with ", " (agent/clip.rs). `new = None`
+/// removes the name. The old exact-match UPDATE never touched "Alice, Bob", so a
+/// rename or an erasure silently skipped every event two people shared.
+pub(crate) async fn relabel_events(db: &sqlx::SqlitePool, old: &str, new: Option<&str>) {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, sub_label FROM motion_events WHERE sub_label LIKE ?"
+    ).bind(format!("%{old}%")).fetch_all(db).await.unwrap_or_default();
+    for (id, label) in rows {
+        let Some(next) = replace_name(&label, old, new) else { continue };
+        let q = if next.is_empty() {
+            sqlx::query("UPDATE motion_events SET sub_label=NULL, sub_label_score=NULL WHERE id=?").bind(id)
+        } else {
+            sqlx::query("UPDATE motion_events SET sub_label=? WHERE id=?").bind(next).bind(id)
+        };
+        if let Err(e) = q.execute(db).await {
+            tracing::error!("relabel_events: {old} → {new:?} failed: {e}");
+        }
+    }
+}
+
+/// The label with `old` replaced (or removed), when `old` is one of its
+/// comma-joined names; `None` when it isn't (the LIKE prefilter is substring).
+fn replace_name(label: &str, old: &str, new: Option<&str>) -> Option<String> {
+    let names: Vec<&str> = label.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+    if !names.iter().any(|n| n.eq_ignore_ascii_case(old)) { return None; }
+    let mut out: Vec<&str> = Vec::new();
+    for n in names {
+        let n = if n.eq_ignore_ascii_case(old) { match new { Some(x) => x, None => continue } } else { n };
+        if !out.iter().any(|o| o.eq_ignore_ascii_case(n)) { out.push(n); }
+    }
+    Some(out.join(", "))
 }
 
 #[tauri::command]
@@ -200,11 +250,21 @@ pub async fn delete_person(state: State<'_, Arc<AppState>>, id: String) -> Resul
                 person_id='body_' || substr(lower(hex(randomblob(4))),1,8)
           WHERE known_person_id=?"
     ).bind(&id).execute(&state.db).await;
-    // Sightings log: a removed person's activity must not linger in stats.
-    if let Some(n) = &name {
-        let _ = sqlx::query("DELETE FROM face_sightings WHERE person_name=?")
-            .bind(n).execute(&state.db).await;
-    }
+    // Body hard negatives encode this person's appearance boundary — gone with
+    // them (they used to outlive the person forever).
+    let _ = sqlx::query("DELETE FROM body_negatives WHERE known_person_id=?")
+        .bind(&id).execute(&state.db).await;
+    // Their tracks go back to unfamiliar. The rows stay — they record presence,
+    // not identity — but no name or body proposal points at them any more.
+    let _ = sqlx::query("UPDATE person_tracks SET known_person_id=NULL, identity_method='none', identity_score=NULL \
+                         WHERE known_person_id=?").bind(&id).execute(&state.db).await;
+    let _ = sqlx::query("UPDATE person_tracks SET body_person_id=NULL WHERE body_person_id=?")
+        .bind(format!("kp_{id}")).execute(&state.db).await;
+    // Sightings log: a removed person's activity must not linger in stats. By id,
+    // so a second person with the same name keeps theirs; pre-migration rows
+    // (person_id NULL) can only be matched by name.
+    let _ = sqlx::query("DELETE FROM face_sightings WHERE person_id=? OR (person_id IS NULL AND person_name=?)")
+        .bind(&id).bind(name.as_deref().unwrap_or("")).execute(&state.db).await;
     schedule_classifier_retrain(&state.db);
     Ok(())
 }
@@ -260,8 +320,15 @@ pub(crate) async fn erase_biometrics(
     let body_refs: Vec<(Option<String>,)> = sqlx::query_as(
         "SELECT thumbnail_b64 FROM body_embeddings WHERE known_person_id=?"
     ).bind(id).fetch_all(db).await.unwrap_or_default();
+    // Person tracks named by their face OR proposed by their body gallery — both
+    // carry a crop and an appearance vector of this person.
+    let kp = format!("kp_{id}");
+    let track_refs: Vec<(Option<String>,)> = sqlx::query_as(
+        "SELECT crop FROM person_tracks WHERE known_person_id=? OR body_person_id=?"
+    ).bind(id).bind(&kp).fetch_all(db).await.unwrap_or_default();
     for r in face_refs.iter().flat_map(|(a, b)| [a, b])
         .chain(body_refs.iter().map(|(a,)| a))
+        .chain(track_refs.iter().map(|(a,)| a))
         .flatten()
     {
         crate::blobstore::delete(data_dir, r);
@@ -270,8 +337,8 @@ pub(crate) async fn erase_biometrics(
     let mut removed = 0u64;
     // The descriptors themselves — the biometric identifiers.
     //
-    // NOT in this list: face_sightings, which has no person_id column at all
-    // (db.rs:83) — it is keyed by person_name, and is handled by name below.
+    // NOT in this list: face_sightings, whose pre-migration rows carry a NULL
+    // person_id and can only be matched by name — handled below.
     for sql in [
         "DELETE FROM face_embeddings WHERE person_id=?",
         "DELETE FROM face_negatives  WHERE person_id=?",
@@ -286,18 +353,23 @@ pub(crate) async fn erase_biometrics(
             Err(e) => tracing::error!("forget_person: {sql} failed: {e}"),
         }
     }
+    match sqlx::query("DELETE FROM person_tracks WHERE known_person_id=? OR body_person_id=?")
+        .bind(id).bind(&kp).execute(db).await
+    {
+        Ok(r)  => removed += r.rows_affected(),
+        Err(e) => tracing::error!("forget_person: person_tracks failed: {e}"),
+    }
+    match sqlx::query("DELETE FROM face_sightings WHERE person_id=? OR (person_id IS NULL AND person_name=?)")
+        .bind(id).bind(name.as_deref().unwrap_or("")).execute(db).await
+    {
+        Ok(r)  => removed += r.rows_affected(),
+        Err(e) => tracing::error!("forget_person: face_sightings failed: {e}"),
+    }
+    // And the name must stop appearing on past events — including ones shared
+    // with someone else ("Alice, Bob") — or the identification survives the
+    // erasure in every list the agent can read.
     if let Some(n) = &name {
-        match sqlx::query("DELETE FROM face_sightings WHERE person_name=?")
-            .bind(n).execute(db).await
-        {
-            Ok(r)  => removed += r.rows_affected(),
-            Err(e) => tracing::error!("forget_person: face_sightings failed: {e}"),
-        }
-        // And the name must stop appearing on past events, or the identification
-        // survives the erasure in every list the agent can read.
-        let _ = sqlx::query("UPDATE motion_events SET sub_label=NULL, sub_label_score=NULL \
-                             WHERE sub_label=? COLLATE NOCASE")
-            .bind(n).execute(db).await;
+        relabel_events(db, n, None).await;
     }
 
     // The trained classifier still encodes this face in its weights until it is
@@ -561,6 +633,37 @@ pub(crate) async fn prune_linked_face_crops(db: sqlx::SqlitePool, data_dir: std:
     }
 }
 
+/// Hourly hard cap on the stranger pool (`face_embeddings` with no person): keep
+/// the newest 5000. Which strangers to keep long-term (recurring vs one-off) is
+/// `consolidate_unknown_faces`' job; this only bounds a busy camera between its
+/// runs. Replaces a per-tick "keep newest 150" DELETE that starved clustering.
+pub(crate) async fn prune_unknown_faces(db: sqlx::SqlitePool, data_dir: std::path::PathBuf) {
+    const KEEP: i64 = 5000;
+    let refs: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id, thumbnail_b64, context_b64 FROM face_embeddings
+          WHERE person_id IS NULL AND id NOT IN (
+            SELECT id FROM face_embeddings WHERE person_id IS NULL ORDER BY seen_at DESC LIMIT ?)"
+    ).bind(KEEP).fetch_all(&db).await.unwrap_or_default();
+    if refs.is_empty() { return; }
+    let n = refs.len();
+    let ids: Vec<String> = refs.iter().map(|(id, _, _)| id.clone()).collect();
+    tokio::task::spawn_blocking(move || {
+        for (_, t, c) in &refs {
+            for r in [t, c].into_iter().flatten() { crate::blobstore::delete(&data_dir, r); }
+        }
+    }).await.ok();
+    for chunk in ids.chunks(500) {
+        let sql = format!("DELETE FROM face_embeddings WHERE person_id IS NULL AND id IN ({})",
+                          vec!["?"; chunk.len()].join(","));
+        let mut q = sqlx::query(&sql);
+        for id in chunk { q = q.bind(id); }
+        if let Err(e) = q.execute(&db).await {
+            tracing::warn!("stranger cap: chunk delete failed ({e}) — the next hourly pass heals it");
+        }
+    }
+    tracing::info!("stranger cap: pruned {n} oldest unknown face(s) (kept newest {KEEP})");
+}
+
 /// The full source frame a captured face came from (downscaled JPEG, base64) for
 /// the Train UI's click-to-expand. Falls back to the face crop for rows stored
 /// before context was captured.
@@ -765,7 +868,10 @@ pub async fn correct_face(
             } else {
                 return Err("correct person not found".into());
             }
-            sqlx::query("UPDATE face_embeddings SET person_id=? WHERE id=?")
+            // A human decided this: provenance says so, and the margin that put it
+            // in the "worth confirming" queue no longer applies (the card used to
+            // sit there for a week after "Yes").
+            sqlx::query("UPDATE face_embeddings SET person_id=?, match_method='manual', match_margin=NULL WHERE id=?")
                 .bind(correct).bind(&face_id).execute(&state.db).await.map_err(|e| e.to_string())?;
         }
         _ => {
@@ -1790,10 +1896,15 @@ mod tests {
                 .bind(format!("bn_{id}")).bind(id).execute(&pool).await.unwrap();
             sqlx::query("INSERT INTO face_sightings(id, person_name) VALUES(?,?)")
                 .bind(format!("s_{id}")).bind(name).execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO person_tracks(id, cam_id, started_at, ended_at, known_person_id)
+                         VALUES(?, 0, datetime('now'), datetime('now'), ?)")
+                .bind(format!("t_{id}")).bind(id).execute(&pool).await.unwrap();
         }
         // A past event identified as Alice — the name must stop appearing there
         // too, or the identification outlives the erasure everywhere it is read.
         sqlx::query("INSERT INTO motion_events(id, started_at, sub_label) VALUES('e1', datetime('now'), 'Alice')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO motion_events(id, started_at, sub_label) VALUES('e2', datetime('now'), 'Alice, Bob')")
             .execute(&pool).await.unwrap();
 
         let n = erase_biometrics(&pool, std::path::Path::new("."), "p1").await;
@@ -1804,6 +1915,7 @@ mod tests {
             ("face_negatives",  "person_id",       "p1"),
             ("body_embeddings", "known_person_id", "p1"),
             ("body_negatives",  "known_person_id", "p1"),
+            ("person_tracks",   "known_person_id", "p1"),
             ("known_persons",   "id",              "p1"),
             ("face_sightings",  "person_name",     "Alice"),
         ] {
@@ -1822,5 +1934,19 @@ mod tests {
         let label: Option<String> = sqlx::query_scalar("SELECT sub_label FROM motion_events WHERE id='e1'")
             .fetch_one(&pool).await.unwrap();
         assert_eq!(label, None, "the name survived on a past event");
+        let shared: Option<String> = sqlx::query_scalar("SELECT sub_label FROM motion_events WHERE id='e2'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(shared.as_deref(), Some("Bob"), "a shared event must keep only the other name");
+    }
+
+    #[test]
+    fn replace_name_handles_joined_labels() {
+        assert_eq!(replace_name("Alice, Bob", "alice", None).as_deref(), Some("Bob"));
+        assert_eq!(replace_name("Alice, Bob", "Bob", Some("Rob")).as_deref(), Some("Alice, Rob"));
+        assert_eq!(replace_name("Alice", "Alice", None).as_deref(), Some(""));
+        // A longer name that merely CONTAINS the old one is someone else.
+        assert_eq!(replace_name("Alicia", "Alice", None), None);
+        // Renaming into a name already on the label doesn't duplicate it.
+        assert_eq!(replace_name("Al, Bob", "Al", Some("Bob")).as_deref(), Some("Bob"));
     }
 }

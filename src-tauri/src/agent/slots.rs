@@ -21,7 +21,7 @@
 use std::collections::HashSet;
 
 /// Split a question into lowercase alphanumeric tokens, in order.
-pub(super) fn tokens(q: &str) -> Vec<String> {
+pub(crate) fn tokens(q: &str) -> Vec<String> {
     q.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())
@@ -293,8 +293,13 @@ const BOTTOMS: &[&str] = &[
 ///
 /// Used by the answer's grounding check: if the search gave up on "red", the
 /// reply must not come back claiming a red jacket was found.
-pub(super) fn is_colour(w: &str) -> bool {
+pub(crate) fn is_colour(w: &str) -> bool {
     COLOURS.iter().any(|(k, v)| *k == w || *v == w)
+}
+
+/// "top" / "bottom" for a garment word the colour parser knows.
+pub(crate) fn garment_band(w: &str) -> Option<&'static str> {
+    if TOPS.contains(&w) { Some("top") } else if BOTTOMS.contains(&w) { Some("bottom") } else { None }
 }
 
 /// Garment colours mentioned in the question.
@@ -307,16 +312,14 @@ pub(super) fn is_colour(w: &str) -> bool {
 /// `skip` holds tokens already claimed by something more specific — an enrolled
 /// person's name, above all. Someone called Rose or Amber must not turn their own
 /// question into a colour filter.
-pub(super) fn outfit_slots(
+pub(crate) fn outfit_slots(
     toks: &[String],
     skip: &HashSet<String>,
 ) -> (Vec<(&'static str, &'static str)>, Vec<String>) {
     let mut slots: Vec<(&'static str, &'static str)> = Vec::new();
     let mut garments: Vec<String> = Vec::new();
 
-    let band_of = |w: &str| -> Option<&'static str> {
-        if TOPS.contains(&w) { Some("top") } else if BOTTOMS.contains(&w) { Some("bottom") } else { None }
-    };
+    let band_of = garment_band;
 
     for (i, tok) in toks.iter().enumerate() {
         if skip.contains(tok) { continue; }
@@ -335,7 +338,7 @@ pub(super) fn outfit_slots(
 }
 
 /// Residual search terms: what is left once every other slot has taken its words.
-pub(super) fn keywords(toks: &[String], consumed: &HashSet<String>) -> Vec<String> {
+pub(crate) fn keywords(toks: &[String], consumed: &HashSet<String>) -> Vec<String> {
     const STOP: &[&str] = &[
         "the", "a", "an", "and", "or", "of", "in", "on", "at", "to", "for", "with",
         "who", "what", "when", "where", "which", "was", "were", "is", "are", "did",

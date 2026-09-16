@@ -273,7 +273,11 @@ pub async fn retrain(db: &SqlitePool) -> ClassifierStatus {
     match gather(db).await {
         Some((people, negatives)) => {
             let now = chrono::Utc::now().to_rfc3339();
-            let model = train_model(&people, &negatives, now.clone());
+            // 250 full-batch gradient-descent iterations are real CPU work — run
+            // them on the blocking pool, not on an async runtime worker.
+            let at = now.clone();
+            let Ok(model) = tokio::task::spawn_blocking(move || train_model(&people, &negatives, at)).await
+                else { return ClassifierStatus::inactive() };
             let json = serde_json::to_string(&model).unwrap_or_default();
             let _ = sqlx::query(
                 "INSERT INTO face_classifier_model(id, model_json, trained_at) VALUES(1, ?, ?)

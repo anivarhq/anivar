@@ -197,7 +197,6 @@ pub async fn tick_motion_event(
             cs.last_burst_at = None;
             cs.classes_seen.clear();
             cs.last_dominant = None;
-            cs.crowd_alerted_count = 0;
             just_opened = Some(id.clone());
             event_id = Some(id);
         } else {
@@ -324,7 +323,6 @@ pub async fn tick_motion_event(
                 cs.last_analysis_at = None;
                 cs.last_burst_at = None;
                 cs.classes_seen.clear();
-                cs.crowd_alerted_count = 0;
             }
             event_id = None;
         } else {

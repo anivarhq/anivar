@@ -164,6 +164,18 @@ pub async fn run_backfill_scheduler(storage: EmbedStorage, state: Arc<AppState>)
 
         let model = state.settings.read().await.search_model.clone();
         if !crate::embed::is_installed(&state.data_dir, &model) { continue; }
+
+        // Person tracks recorded before this search model was installed (or under
+        // another one) — their best crop gets embedded so people search can rank them.
+        let tracks: Vec<(String, String)> = sqlx::query_as(
+            "SELECT id, crop FROM person_tracks
+              WHERE crop IS NOT NULL AND (clip IS NULL OR clip_model IS NOT ?)
+              ORDER BY started_at DESC LIMIT 200"
+        ).bind(&model).fetch_all(&state.db).await.unwrap_or_default();
+        for (id, crop) in tracks {
+            let b64 = crate::blobstore::resolve(&state.data_dir, &crop);
+            if !b64.is_empty() { crate::person_track::embed_track_clip(&state, &id, &b64).await; }
+        }
         // Catch events missing EITHER embedding kind they should have (image if a
         // thumbnail exists, text if an ai_summary exists) — so a re-embed also
         // backfills text for events that only got an image (e.g. after the CLIP
