@@ -42,6 +42,8 @@ export type SkillId =
   | "reid_tao"
   // Body pose — MoveNet SinglePose Lightning (Apache-2.0) for behaviour alerts.
   | "pose_movenet"
+  // Person attributes — PaddleClas PULC (Apache-2.0, PA-100K) for People search.
+  | "par_pulc"
   | "depth_anything"
   // On-device language model (llama.cpp in-process) — replaces the Ollama daemon.
   | "local_llm"
@@ -493,6 +495,29 @@ export const SKILL_REGISTRY: SkillDef[] = [
         sha256: "1ad4f8d6c2f776a9967db3993c9ca740bc350104f9d37c151dc183fc29a464ad" },
     ],
     license:     "Apache-2.0",
+  },
+  // ── Person attributes — PaddleClas PULC person_attribute (PP-LCNet x1.0).
+  //    Apache-2.0 weights trained on PA-100K only (CC-BY 4.0) — NOT PP-Human's own
+  //    attribute weights, which also saw research-only data. Baidu publishes only
+  //    the Paddle format, so the ONNX conversion is hosted on anivarhq/models with
+  //    its licence and model card. VERIFIED 2026-09-16: the anonymous public
+  //    download matches the sha256 below; input `x` [N,3,256,192] → [N,26] sigmoid.
+  {
+    id:          "par_pulc",
+    name:        "Person Attributes — PP-LCNet",
+    slot:        "reid",
+    description: "Clothing, bags and accessories on each person — the evidence on a visit, and search terms like \"backpack\" or \"no hat\". Runs once per person, not every frame.",
+    sizeLabel:   "~7 MB",
+    badge:       "ATTR",
+    badgeColor:  "var(--status-idle)",
+    installUrl:  "",
+    files: [
+      { url: "https://github.com/anivarhq/models/releases/download/pulc-person-attribute-v1/model.onnx",
+        filename: "model.onnx", label: "PULC person attribute (PP-LCNet x1.0)",
+        sha256: "8f180a2e58e7c582feb5eac031657c38e06f7df4271e3e846b0f0fa4e57667f5" },
+    ],
+    license:     "Apache-2.0",
+    licenseNote: "PaddleClas model (© PaddlePaddle Authors), trained on PA-100K (CC-BY 4.0). Converted to ONNX by Anivar; not affiliated with or endorsed by Baidu.",
   },
 ];
 

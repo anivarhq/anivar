@@ -147,8 +147,10 @@ export function Arsenal() {
     // missing provider as local — otherwise the model serving chat right now would
     // show as unused and get the weaker removal warning.
     if ((settings?.ai_provider ?? "local") === "local" || settings?.ai_provider === "") s.add("local_llm");
-    // The backend uses deep Re-ID whenever it is installed — there is no toggle.
+    // The backend uses deep Re-ID and person attributes whenever they are
+    // installed — neither has a toggle.
     s.add("reid_tao");
+    s.add("par_pulc");
     if (settings?.person_down_alerts || settings?.climbing_alerts) s.add("pose_movenet");
     // Depth model is "in use" whenever any camera has anonymization enabled.
     try {
@@ -594,6 +596,7 @@ const ENHANCEMENT_SKILLS = [
   { id: "audio_yamnet", label: "Audio detection", hint: "scream / glass / alarm — enable in Settings" },
   { id: "reid_tao",     label: "Deep person Re-ID", hint: "NVIDIA ReIdentificationNet · cross-camera matching" },
   { id: "pose_movenet", label: "Body pose",         hint: "MoveNet · person-down + climbing alerts" },
+  { id: "par_pulc",     label: "Person attributes", hint: "PP-LCNet · clothing and bags for People search" },
 ] as const;
 
 function EnhancementsCard({
@@ -611,10 +614,11 @@ function EnhancementsCard({
     id === "audio_yamnet" ? !!settings?.audio_detection
   : id === "reid_tao"     ? true
   : id === "pose_movenet" ? !!(settings?.person_down_alerts || settings?.climbing_alerts)
+  : id === "par_pulc"     ? true
   : false;
   return (
     <Card title="Enhancements"
-      subtitle="Audio events, person Re-ID and body pose.">
+      subtitle="Audio events, person Re-ID, body pose and person attributes.">
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {ENHANCEMENT_SKILLS.map(row => {
           const def = findSkill(row.id);
