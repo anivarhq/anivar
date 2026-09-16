@@ -194,7 +194,7 @@ pub use agent_data_cmds::{search_clips, list_alert_conditions, create_alert_cond
 
 mod persons;
 pub use persons::{enroll_person, enroll_person_multi, add_person_embedding, list_known_persons, delete_person,
-            forget_person, rename_person, mark_person_seen, list_recent_unknown_faces, assign_face_to_person, create_person_from_face, list_person_faces, delete_face_embedding, list_recent_recognitions, list_unknown_clusters, get_person_sightings, get_person_events, list_vehicles, list_audio_events, get_person_stats, get_audio_stats, assign_faces_to_person, clear_unknown_faces, get_face_context, correct_face};
+            forget_person, rename_person, mark_person_seen, list_recent_unknown_faces, assign_face_to_person, create_person_from_face, list_person_faces, delete_face_embedding, list_recent_recognitions, list_unknown_clusters, get_person_sightings, get_person_events, list_vehicles, list_audio_events, get_person_stats, get_audio_stats, assign_faces_to_person, clear_unknown_faces, delete_unknown_faces, get_face_context, correct_face};
 mod correlation;
 pub use correlation::record_face_sighting;
 
@@ -612,6 +612,7 @@ pub fn run() {
             list_person_faces,
             delete_face_embedding,
             clear_unknown_faces,
+            delete_unknown_faces,
             get_face_context,
             list_recent_recognitions,
             create_person_from_face,

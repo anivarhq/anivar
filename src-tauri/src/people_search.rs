@@ -287,11 +287,20 @@ pub struct PeopleSearchResult {
     pub ignored: Vec<String>,
 }
 
+/// Which visit a track belongs to: a known person, else a body identity, else
+/// "someone anonymous on this camera".
+///
+/// The last case used to be the track's own id, so every fragment was its own
+/// visit. On real footage one man at a desk broke into 164 such fragments in a
+/// day, and Today showed ~170 "Unfamiliar" tiles of him. Keyed by camera,
+/// `build_visits`' gap rule merges back-to-back fragments into one stay.
+/// ponytail: two strangers overlapping on one camera share a visit — fine for
+/// "who was here, when"; split by appearance if that ever matters.
 fn group_key(t: &TrackRow) -> String {
     match (&t.known_person_id, &t.body_person_id) {
         (Some(k), _) => format!("p:{k}"),
         (None, Some(b)) => format!("b:{b}"),
-        _ => format!("t:{}", t.id),
+        _ => format!("u:{}", t.cam_id),
     }
 }
 
@@ -696,6 +705,27 @@ mod tests {
         assert_eq!(morning.cameras, vec![0, 1], "Door → Garden, in order");
         assert_eq!(morning.tracks.len(), 2);
         assert_eq!(morning.end, "2026-09-15T08:04:00Z");
+    }
+
+    #[test]
+    fn anonymous_fragments_on_one_camera_are_one_visit() {
+        // One unidentified person at a desk: the tracker drops and re-acquires
+        // them every few seconds, and no fragment carries a person or body id.
+        let mk = |id: &str, cam: i64, s: &str, e: &str| TrackRow {
+            id: id.into(), cam_id: cam, started_at: s.into(), ended_at: e.into(), ..Default::default()
+        };
+        let rows = vec![
+            mk("f1", 0, "2026-09-16T09:00:00Z", "2026-09-16T09:00:04Z"),
+            mk("f2", 0, "2026-09-16T09:00:06Z", "2026-09-16T09:00:09Z"),
+            mk("f3", 0, "2026-09-16T09:01:00Z", "2026-09-16T09:01:30Z"),
+            mk("f4", 0, "2026-09-16T15:00:00Z", "2026-09-16T15:00:05Z"), // hours later → new visit
+            mk("g1", 1, "2026-09-16T09:00:02Z", "2026-09-16T09:00:08Z"), // other camera → its own visit
+        ];
+        let v = build_visits(rows, 180, &HashMap::new());
+        assert_eq!(v.len(), 3, "not five tiles");
+        let morning = v.iter().find(|v| v.key == "u:0" && v.start.starts_with("2026-09-16T09")).unwrap();
+        assert_eq!(morning.tracks.len(), 3);
+        assert_eq!((morning.name.as_deref(), morning.maybe_name.as_deref()), (None, None), "still unfamiliar, not guessed");
     }
 
     #[test]

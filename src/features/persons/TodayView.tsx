@@ -23,11 +23,15 @@ import {
 } from "../review/Card";
 import { VisitSheet } from "./VisitSheet";
 
-export function TodayView({ day, cams, cameraName, persons, onChanged, onFindSimilar, showToast }: {
+export function TodayView({ day, cams, cameraName, persons, toName, onReview, onChanged, onFindSimilar, showToast }: {
   /** Local `YYYY-MM-DD`, owned by the panel's date button. */
   day: string;
   /** Camera ids (as strings) from the toolbar dropdown; empty = every camera. */
   cams: Set<string>;
+  /** People waiting for a name in Review. Naming them is what turns this page's
+   *  "Unfamiliar" into names, so Today points there while any are waiting. */
+  toName: number;
+  onReview: () => void;
   cameraName: (id: number) => string;
   persons: KnownPerson[];
   onChanged: () => void;
@@ -72,6 +76,15 @@ export function TodayView({ day, cams, cameraName, persons, onChanged, onFindSim
 
   return (
     <>
+      {toName > 0 && (
+        <button type="button" onClick={onReview} style={{
+          flexShrink: 0, margin: "0 16px 8px", padding: 0, border: "none", background: "none",
+          textAlign: "left", cursor: "pointer", fontSize: 12, color: "var(--accent)",
+        }}>
+          {toName === 1 ? "1 person" : `${toName} people`} your cameras keep seeing {toName === 1 ? "has" : "have"} no
+          name yet — name them and they'll show here by name →
+        </button>
+      )}
       {summary && (
         <div style={{ flexShrink: 0, padding: "0 16px 8px", fontSize: 12, color: "var(--text-secondary)" }}>
           {summary}

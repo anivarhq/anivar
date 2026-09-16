@@ -81,6 +81,16 @@ export function PersonDetail({ person, stats, cameraName, onClose, onDeleted, on
     try { await api.deleteFaceEmbedding(id); }
     catch { showToast("Couldn't remove that shot", "error"); load(); }
   };
+  // "Not this person" — the only place a wrong recognition is fixed now that the
+  // roster's confirm queues are gone. Unlike Remove, it TEACHES: a hard negative
+  // for this person, the sample dropped from their gallery, a retrain.
+  const notThem = async (id: string) => {
+    setFaces(fs => fs.filter(f => f.id !== id));
+    try {
+      await api.correctFace(id, null);
+      showToast(`Marked as not ${displayName} — recognition learns from it`, "success");
+    } catch { showToast("Couldn't correct that shot", "error"); load(); }
+  };
 
   const roleColor: Record<string, string> = {
     resident: "var(--accent)", family: "var(--accent)",
@@ -240,7 +250,7 @@ export function PersonDetail({ person, stats, cameraName, onClose, onDeleted, on
 
         {/* Face gallery */}
         <Section icon={<Camera size={12} />} title={`Face gallery (${faces.length})`}
-          more="What the cameras matched to this person. Remove blurry shots to keep recognition sharp.">
+          hint={`Not ${displayName}? Mark it and recognition learns. Blurry? Remove it.`}>
           {faces.length === 0 ? (
             <Empty text={loading ? "Loading…" : "No sightings yet"} />
           ) : (
@@ -248,18 +258,20 @@ export function PersonDetail({ person, stats, cameraName, onClose, onDeleted, on
               {faces.map(f => (
                 <div key={f.id} style={{ position: "relative", borderRadius: 12, overflow: "hidden", aspectRatio: "1/1" }}>
                   <ZoomableImg src={`data:image/jpeg;base64,${f.thumbnail_b64}`}
-                    caption={`CAM ${f.cam_id + 1} · ${fmtWhen(f.seen_at)} · quality ${Math.round(f.quality * 100)}`}
+                    caption={`${cameraName(f.cam_id)} · ${fmtWhen(f.seen_at)}`}
                     style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                  <button onClick={() => removeShot(f.id)} title="Remove this shot" style={{
+                  <button onClick={() => removeShot(f.id)} title="Remove this shot (blurry or unusable)" style={{
                     position: "absolute", top: 4, right: 4, width: 20, height: 20, borderRadius: 999,
                     border: "none", cursor: "pointer", background: "rgba(0,0,0,0.6)", color: "#fff",
                     display: "flex", alignItems: "center", justifyContent: "center" }}>
                     <X size={11} />
                   </button>
-                  <div style={{ position: "absolute", bottom: 3, left: 4, fontSize: 8,
-                    color: "rgb(var(--ink) / 0.85)", textShadow: "0 1px 2px rgba(0,0,0,0.8)" }}>
-                    CAM {f.cam_id + 1}
-                  </div>
+                  <button onClick={() => notThem(f.id)} title={`This isn't ${displayName}`} style={{
+                    position: "absolute", bottom: 4, left: 4, right: 4, padding: "2px 0", borderRadius: 999,
+                    border: "none", cursor: "pointer", background: "rgba(0,0,0,0.6)", color: "#fff",
+                    fontSize: 9, fontWeight: 700 }}>
+                    Not them
+                  </button>
                 </div>
               ))}
             </div>

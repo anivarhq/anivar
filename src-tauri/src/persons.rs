@@ -639,29 +639,52 @@ pub(crate) async fn prune_linked_face_crops(db: sqlx::SqlitePool, data_dir: std:
 /// runs. Replaces a per-tick "keep newest 150" DELETE that starved clustering.
 pub(crate) async fn prune_unknown_faces(db: sqlx::SqlitePool, data_dir: std::path::PathBuf) {
     const KEEP: i64 = 5000;
-    let refs: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT id, thumbnail_b64, context_b64 FROM face_embeddings
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM face_embeddings
           WHERE person_id IS NULL AND id NOT IN (
             SELECT id FROM face_embeddings WHERE person_id IS NULL ORDER BY seen_at DESC LIMIT ?)"
     ).bind(KEEP).fetch_all(&db).await.unwrap_or_default();
-    if refs.is_empty() { return; }
-    let n = refs.len();
-    let ids: Vec<String> = refs.iter().map(|(id, _, _)| id.clone()).collect();
+    if ids.is_empty() { return; }
+    match delete_unknown_rows(&db, &data_dir, &ids).await {
+        Ok(n) => tracing::info!("stranger cap: pruned {n} oldest unknown face(s) (kept newest {KEEP})"),
+        Err(e) => tracing::warn!("stranger cap: delete failed ({e}) — the next hourly pass heals it"),
+    }
+}
+
+/// Delete UNKNOWN faces by id, with their picture files.
+///
+/// The `person_id IS NULL` guard is inside the DELETE itself, so an enrolled
+/// person's face survives even if its id is passed. Files go only for rows the
+/// DELETE actually removed (`RETURNING`): a face tagged a moment ago keeps its
+/// picture. The old prune removed files first and rows second, which could orphan
+/// a just-tagged face's crop. Returns rows removed.
+async fn delete_unknown_rows(db: &sqlx::SqlitePool, data_dir: &std::path::Path, ids: &[String]) -> Result<u64, sqlx::Error> {
+    let mut refs: Vec<(Option<String>, Option<String>)> = Vec::new();
+    for chunk in ids.chunks(500) {
+        let sql = format!(
+            "DELETE FROM face_embeddings WHERE person_id IS NULL AND id IN ({})
+             RETURNING thumbnail_b64, context_b64",
+            vec!["?"; chunk.len()].join(","));
+        let mut q = sqlx::query_as::<_, (Option<String>, Option<String>)>(&sql);
+        for id in chunk { q = q.bind(id); }
+        refs.extend(q.fetch_all(db).await?);
+    }
+    let n = refs.len() as u64;
+    let data_dir = data_dir.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        for (_, t, c) in &refs {
+        for (t, c) in &refs {
             for r in [t, c].into_iter().flatten() { crate::blobstore::delete(&data_dir, r); }
         }
     }).await.ok();
-    for chunk in ids.chunks(500) {
-        let sql = format!("DELETE FROM face_embeddings WHERE person_id IS NULL AND id IN ({})",
-                          vec!["?"; chunk.len()].join(","));
-        let mut q = sqlx::query(&sql);
-        for id in chunk { q = q.bind(id); }
-        if let Err(e) = q.execute(&db).await {
-            tracing::warn!("stranger cap: chunk delete failed ({e}) — the next hourly pass heals it");
-        }
-    }
-    tracing::info!("stranger cap: pruned {n} oldest unknown face(s) (kept newest {KEEP})");
+    Ok(n)
+}
+
+/// Remove one group of unknown faces — "Remove" on a People → Review "Who is
+/// this?" card (a face on a TV, a passer-by nobody will name). Never touches an
+/// enrolled person's faces; see `delete_unknown_rows`. Returns rows removed.
+#[tauri::command]
+pub async fn delete_unknown_faces(state: State<'_, Arc<AppState>>, ids: Vec<String>) -> Result<u64, String> {
+    delete_unknown_rows(&state.db, &state.data_dir, &ids).await.map_err(|e| e.to_string())
 }
 
 /// The full source frame a captured face came from (downscaled JPEG, base64) for
@@ -1802,6 +1825,25 @@ pub async fn create_person_from_face(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// "Remove" on an unknown group must never delete an enrolled person's face,
+    /// even when that face's id is in the list.
+    #[tokio::test]
+    async fn removing_unknown_faces_never_touches_an_enrolled_face() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::db::init_db(&pool).await.unwrap();
+        for (id, person) in [("u1", None), ("u2", None), ("named", Some("p1"))] {
+            sqlx::query("INSERT INTO face_embeddings(id, person_id, descriptor, dim) VALUES(?, ?, x'00', 1)")
+                .bind(id).bind(person).execute(&pool).await.unwrap();
+        }
+        let dir = std::env::temp_dir();
+        let ids: Vec<String> = ["u1", "named", "missing"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(delete_unknown_rows(&pool, &dir, &ids).await.unwrap(), 1, "only the unknown face goes");
+        let mut left: Vec<String> = sqlx::query_scalar("SELECT id FROM face_embeddings")
+            .fetch_all(&pool).await.unwrap();
+        left.sort();
+        assert_eq!(left, vec!["named".to_string(), "u2".into()]);
+    }
 
     /// Two people, one name. They must NOT merge.
     ///

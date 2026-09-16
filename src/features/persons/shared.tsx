@@ -179,27 +179,6 @@ export function PersonPickList({ persons, onPick, disabled = false, emptyHint }:
   );
 }
 
-/** Section divider inside the unified People tab — one identity home, clearly
- *  segmented (mature NVRs Face Library model). */
-export function SectionHeader({ icon, title, subtitle, count }: {
-  icon: React.ReactNode; title: string; subtitle: string; count?: number;
-}) {
-  return (
-    <div style={{ display: "flex", alignItems: "baseline", gap: 10, margin: "0 2px 12px" }}>
-      <span style={{ color: "var(--accent)", position: "relative", top: 2 }}>{icon}</span>
-      <span style={{ fontWeight: 800, fontSize: 14, letterSpacing: -0.01 }}>{title}</span>
-      {count != null && count > 0 && (
-        <span style={{
-          display: "inline-flex", alignItems: "center", justifyContent: "center",
-          minWidth: 18, height: 18, padding: "0 6px", borderRadius: 999,
-          fontSize: 10, fontWeight: 700, background: "var(--accent-glow)", color: "var(--accent)",
-        }}>{count}</span>
-      )}
-      <span style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{subtitle}</span>
-    </div>
-  );
-}
-
 /** A thumbnail that expands into a full-screen lightbox on click. The stored
  *  face/body crops are small, so the cards render them tiny — this lets the user
  *  click to see the person at full size. Portaled to <body> so the overlay is
@@ -281,8 +260,6 @@ export function FaceContextZoom({ faceId, thumb }: { faceId: string; thumb: stri
   );
 }
 
-// ── Train (standard "tag from recent unknowns") ────────────────────────
-
 export function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div style={{ flex: 1, minWidth: 78, padding: "8px 12px", borderRadius: 12,
@@ -318,28 +295,6 @@ export function summaryText(ai: string | null): string {
   try { const o = JSON.parse(ai); return o.text || o.description || "Event"; } catch { return ai; }
 }
 
-/** Human label for a naming-provenance method (identity traceability). */
-export function methodLabel(m: string | null | undefined): string {
-  switch (m) {
-    case "face_cosine":     return "face match";
-    case "face_classifier": return "face match (trained)";
-    case "event_consensus": return "event consensus";
-    case "fusion":          return "face+body fusion";
-    case "body_reid":       return "body appearance";
-    case "face_override":   return "face override";
-    case "manual":          return "manual";
-    default:                 return "unrecorded (pre-traceability)";
-  }
-}
-
-/** One-line "why this name?" explanation from a row's provenance fields. */
-export function whyNamed(method: string | null | undefined, score: number | null | undefined, margin: number | null | undefined): string {
-  const parts = [`named by ${methodLabel(method)}`];
-  if (score != null)  parts.push(`score ${score.toFixed(2)}`);
-  if (margin != null) parts.push(`margin over runner-up ${margin.toFixed(2)}`);
-  return parts.join(" · ");
-}
-
 export function formatRelative(d: Date): string {
   const diff = (Date.now() - d.getTime()) / 1000;
   if (diff < 60)        return "just now";
@@ -349,8 +304,6 @@ export function formatRelative(d: Date): string {
   return d.toLocaleDateString();
 }
 
-// One tracked-person card (named or anonymous). Anonymous cards offer "looks like X"
-// (one-tap confirm) + a "This is…" action so the user can train the system.
 /** "Ravi" · "Maybe Priya?" · "Unfamiliar" — identity in words, never a
  *  percentage. A body match only ever reads as a question. */
 export function whoLabel(v: { name: string | null; maybe_name: string | null }): string {
@@ -391,24 +344,3 @@ export function fmtLocalDay(day: string): string {
 
 /// CSS swatch for each classifier color word (11 bins from the HSV vote).
 export const OUTFIT_DOT = OBJECT_COLOR_SWATCH;
-
-/** "blue top · black bottom" rendered with color dots — the human-readable
- *  outfit line that makes anonymous tracks recognizable at a glance. */
-export function OutfitLine({ outfit }: { outfit: string }) {
-  const segs = outfit.split("·").map(s => s.trim()).filter(Boolean);
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
-      fontSize: 10.5, color: "var(--text-secondary)", marginTop: 3 }}>
-      {segs.map(seg => {
-        const color = OUTFIT_DOT[seg.split(" ")[0]] ?? "transparent";
-        return (
-          <span key={seg} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 999, background: color,
-              border: "1px solid rgb(var(--ink) / 0.25)", flexShrink: 0 }} />
-            {seg}
-          </span>
-        );
-      })}
-    </div>
-  );
-}

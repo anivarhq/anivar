@@ -210,12 +210,6 @@ export const api = {
   // on an optional frame). Drives the Enroll status line + bundled-models dots.
   faceDebug: (jpegB64?: string) =>
     invoke<FaceDebug>("face_debug", { jpegB64: jpegB64 ?? null }),
-  // Hybrid matching head: is the trained classifier active, and who does it cover?
-  faceClassifierStatus: () =>
-    invoke<FaceClassifierStatus>("face_classifier_status"),
-  // Force a retrain of the classifier (Roster "Retrain" affordance).
-  retrainFaceClassifier: () =>
-    invoke<FaceClassifierStatus>("retrain_face_classifier"),
   addPersonEmbedding: (id: string, embedding: number[]) =>
     invoke<void>("add_person_embedding", { id, embedding }),
   listKnownPersons: () =>
@@ -237,12 +231,6 @@ export const api = {
   markPersonSeen: (id: string) =>
     invoke<void>("mark_person_seen", { id }),
 
-  // standard: face sightings the agent saw but couldn't identify.
-  // Use these in the "Train" tab to tag unknowns into known persons.
-  listRecentUnknownFaces: (limit = 60, days = 14, minQuality = 0.20) =>
-    invoke<UnknownFace[]>("list_recent_unknown_faces", { limit, days, minQuality }),
-  assignFaceToPerson: (faceId: string, personId: string) =>
-    invoke<void>("assign_face_to_person", { faceId, personId }),
   // Distinct-individual clustering: group repeat unknowns so a whole person can
   // be named at once.
   listUnknownClusters: (days?: number, minQuality?: number) =>
@@ -299,34 +287,13 @@ export const api = {
     invoke<FaceShot[]>("list_person_faces", { personId, limit: limit ?? null }),
   deleteFaceEmbedding: (id: string) =>
     invoke<void>("delete_face_embedding", { id }),
-  clearUnknownFaces: () => invoke<number>("clear_unknown_faces"),
+  // Remove one group of UNKNOWN faces (Review → Remove). The backend refuses to
+  // delete any face that belongs to a named person. Returns rows removed.
+  deleteUnknownFaces: (ids: string[]) => invoke<number>("delete_unknown_faces", { ids }),
   getFaceContext: (faceId: string) => invoke<string | null>("get_face_context", { faceId }),
-  // Mature NVRs "Recent Recognitions" — recent matches of enrolled people.
-  listRecentRecognitions: (limit?: number, days?: number) =>
-    invoke<Recognition[]>("list_recent_recognitions", { limit: limit ?? null, days: days ?? null }),
-  // Body Re-ID cross-camera tracked persons (appearance-based, soft signal).
-  listTrackedPersons: () =>
-    invoke<TrackedPerson[]>("list_tracked_persons"),
-  // Which Re-ID backbone is active ("Deep (OSNet-AIN)" / "Color histogram" …).
-  reidBackendStatus: () =>
-    invoke<string>("reid_backend_status"),
-  // "Train" a tracked body: bind anonymous body group(s) to an enrolled person.
+  // Name a visit from its body tracks (visit sheet → "This is…").
   assignTrackedToKnown: (bodyPersonIds: string[], knownId: string) =>
     invoke<void>("assign_tracked_to_known", { bodyPersonIds, knownId }),
-  // Self-grouping: clusters of anonymous body tracks that look like the same person.
-  listTrackedClusters: (days?: number) =>
-    invoke<TrackedCluster[]>("list_tracked_clusters", { days: days ?? null }),
-  // Name a body group with no enrolled face → a "soft" identity (no face yet).
-  nameTrackedGroup: (bodyPersonIds: string[], name: string, role: string) =>
-    invoke<string>("name_tracked_group", { bodyPersonIds, name, role }),
-  // Correction: detach mis-grouped tracks back to anonymous so they re-cluster.
-  unnameTrackedGroup: (bodyPersonIds: string[]) =>
-    invoke<void>("unname_tracked_group", { bodyPersonIds }),
-  // DURABLE correction: record a hard negative for the wrong person (so matching/
-  // clustering won't re-attribute this appearance), then reassign to the correct person
-  // or detach. wrongKnownId / correctKnownId are optional (either or both).
-  correctTrack: (bodyPersonId: string, wrongKnownId: string | null, correctKnownId: string | null) =>
-    invoke<void>("correct_track", { bodyPersonId, wrongKnownId, correctKnownId }),
 
   getLocalIp: () => invoke<string>("get_local_ip"),
 
