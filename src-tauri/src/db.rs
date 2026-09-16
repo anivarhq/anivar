@@ -535,6 +535,43 @@ pub(crate) async fn init_db(pool: &SqlitePool) -> anyhow::Result<()> {
         let _ = sqlx::query(ddl).execute(pool).await;
     }
 
+    // ── Person tracks (People v2) ────────────────────────────────────────
+    // One row per person's continuous presence on one camera, voted once when
+    // the track ends (person_track.rs). `known_person_id` is set ONLY by a
+    // consensus-confirmed face; a body match to a known person rides in
+    // `body_person_id` (kp_<id>) as a proposal. `colors` = 22 LE-f32 shares
+    // (top 11 + bottom 11, alpr::COLOR_NAMES order); `par` = 26 LE-f32
+    // attribute probabilities; `reid` = mean appearance descriptor; `clip` = CLIP
+    // image embedding of `crop` under `clip_model`. Identity data: excluded from
+    // footage wipes; anonymous rows follow NVR retention.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS person_tracks (
+            id              TEXT PRIMARY KEY,
+            cam_id          INTEGER NOT NULL,
+            event_id        TEXT,
+            started_at      TEXT NOT NULL,
+            ended_at        TEXT NOT NULL,
+            body_person_id  TEXT,
+            known_person_id TEXT,
+            identity_method TEXT,
+            identity_score  REAL,
+            crop            TEXT,
+            quality         REAL,
+            top_color       TEXT,
+            bottom_color    TEXT,
+            colors          BLOB,
+            par             BLOB,
+            behaviours      TEXT,
+            reid            BLOB,
+            clip            BLOB,
+            clip_model      TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_pt_started ON person_tracks(started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_pt_known   ON person_tracks(known_person_id, started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_pt_body    ON person_tracks(body_person_id);
+        CREATE INDEX IF NOT EXISTS idx_pt_event   ON person_tracks(event_id);"
+    ).execute(pool).await?;
+
     // ── Review segments (`ReviewSegment` parity) ────────────────
     // A "review item" is a non-overlapping per-camera time window that bundles
     // overlapping `motion_events` into ONE reviewable unit with a single

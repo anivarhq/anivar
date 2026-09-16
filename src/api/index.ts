@@ -187,8 +187,6 @@ export const api = {
   // on-device assistants-inspired intelligence
   queryEvents: (question: string, history?: { role: string; content: string }[]) =>
     invoke<string>("query_events", { question, history: history ?? null }),
-  reportCrowdCount: (camId: number, count: number, eventId: string | null) =>
-    invoke<void>("report_crowd_count", { camId, count, eventId: eventId ?? null }),
   analyzeSnapshot: (imageB64: string, detections: { label: string; score: number }[], sceneContext?: string) =>
     invoke<string>("analyze_snapshot", { imageB64, detections, sceneContext: sceneContext ?? null }),
 
@@ -212,12 +210,6 @@ export const api = {
   // on an optional frame). Drives the Enroll status line + bundled-models dots.
   faceDebug: (jpegB64?: string) =>
     invoke<FaceDebug>("face_debug", { jpegB64: jpegB64 ?? null }),
-  // Hybrid matching head: is the trained classifier active, and who does it cover?
-  faceClassifierStatus: () =>
-    invoke<FaceClassifierStatus>("face_classifier_status"),
-  // Force a retrain of the classifier (Roster "Retrain" affordance).
-  retrainFaceClassifier: () =>
-    invoke<FaceClassifierStatus>("retrain_face_classifier"),
   addPersonEmbedding: (id: string, embedding: number[]) =>
     invoke<void>("add_person_embedding", { id, embedding }),
   listKnownPersons: () =>
@@ -239,12 +231,6 @@ export const api = {
   markPersonSeen: (id: string) =>
     invoke<void>("mark_person_seen", { id }),
 
-  // standard: face sightings the agent saw but couldn't identify.
-  // Use these in the "Train" tab to tag unknowns into known persons.
-  listRecentUnknownFaces: (limit = 60, days = 14, minQuality = 0.20) =>
-    invoke<UnknownFace[]>("list_recent_unknown_faces", { limit, days, minQuality }),
-  assignFaceToPerson: (faceId: string, personId: string) =>
-    invoke<void>("assign_face_to_person", { faceId, personId }),
   // Distinct-individual clustering: group repeat unknowns so a whole person can
   // be named at once.
   listUnknownClusters: (days?: number, minQuality?: number) =>
@@ -255,6 +241,16 @@ export const api = {
    *  Identity = enrolled personId OR an unknown cluster's faceIds. Events ship
    *  the '@thumb' marker (render via eventThumbSrc); person_crop = the face
    *  crop of this person in that event (the mature NVRs object-crop preview). */
+  // People v2 — person tracks (people_search.rs): search by description,
+  // find-similar by appearance, and a day's visits.
+  searchPeople: (query: string, opts?: { from?: string; to?: string; cams?: number[] }) =>
+    invoke<PeopleSearchResult>("search_people", {
+      query, from: opts?.from ?? null, to: opts?.to ?? null, cams: opts?.cams ?? null,
+    }),
+  findSimilarPerson: (trackId: string, days?: number) =>
+    invoke<PeopleSearchResult>("find_similar_person", { trackId, days: days ?? null }),
+  getPeopleDay: (from: string, to: string, personId?: string) =>
+    invoke<PeopleDay>("get_people_day", { from, to, personId: personId ?? null }),
   getPersonEvents: (opts: { personId?: string; faceIds?: string[]; days?: number; limit?: number }) =>
     invoke<PersonEvent[]>("get_person_events", {
       personId: opts.personId ?? null, faceIds: opts.faceIds ?? null,
@@ -291,34 +287,13 @@ export const api = {
     invoke<FaceShot[]>("list_person_faces", { personId, limit: limit ?? null }),
   deleteFaceEmbedding: (id: string) =>
     invoke<void>("delete_face_embedding", { id }),
-  clearUnknownFaces: () => invoke<number>("clear_unknown_faces"),
+  // Remove one group of UNKNOWN faces (Review → Remove). The backend refuses to
+  // delete any face that belongs to a named person. Returns rows removed.
+  deleteUnknownFaces: (ids: string[]) => invoke<number>("delete_unknown_faces", { ids }),
   getFaceContext: (faceId: string) => invoke<string | null>("get_face_context", { faceId }),
-  // Mature NVRs "Recent Recognitions" — recent matches of enrolled people.
-  listRecentRecognitions: (limit?: number, days?: number) =>
-    invoke<Recognition[]>("list_recent_recognitions", { limit: limit ?? null, days: days ?? null }),
-  // Body Re-ID cross-camera tracked persons (appearance-based, soft signal).
-  listTrackedPersons: () =>
-    invoke<TrackedPerson[]>("list_tracked_persons"),
-  // Which Re-ID backbone is active ("Deep (OSNet-AIN)" / "Color histogram" …).
-  reidBackendStatus: () =>
-    invoke<string>("reid_backend_status"),
-  // "Train" a tracked body: bind anonymous body group(s) to an enrolled person.
+  // Name a visit from its body tracks (visit sheet → "This is…").
   assignTrackedToKnown: (bodyPersonIds: string[], knownId: string) =>
     invoke<void>("assign_tracked_to_known", { bodyPersonIds, knownId }),
-  // Self-grouping: clusters of anonymous body tracks that look like the same person.
-  listTrackedClusters: (days?: number) =>
-    invoke<TrackedCluster[]>("list_tracked_clusters", { days: days ?? null }),
-  // Name a body group with no enrolled face → a "soft" identity (no face yet).
-  nameTrackedGroup: (bodyPersonIds: string[], name: string, role: string) =>
-    invoke<string>("name_tracked_group", { bodyPersonIds, name, role }),
-  // Correction: detach mis-grouped tracks back to anonymous so they re-cluster.
-  unnameTrackedGroup: (bodyPersonIds: string[]) =>
-    invoke<void>("unname_tracked_group", { bodyPersonIds }),
-  // DURABLE correction: record a hard negative for the wrong person (so matching/
-  // clustering won't re-attribute this appearance), then reassign to the correct person
-  // or detach. wrongKnownId / correctKnownId are optional (either or both).
-  correctTrack: (bodyPersonId: string, wrongKnownId: string | null, correctKnownId: string | null) =>
-    invoke<void>("correct_track", { bodyPersonId, wrongKnownId, correctKnownId }),
 
   getLocalIp: () => invoke<string>("get_local_ip"),
 
@@ -400,10 +375,6 @@ export const api = {
   // Multi-camera + anomaly
   recordFaceSighting: (personName: string, cameraId: number, eventId: string | null, confidence: number) =>
     invoke<void>("record_face_sighting", { personName, cameraId, eventId, confidence }),
-  getCameraCorrelations: (sinceHours?: number) =>
-    invoke<{ person_name: string; sightings: { camera_id: number; seen_at: string; confidence: number; event_id: string | null }[] }[]>("get_camera_correlations", { sinceHours: sinceHours ?? 24 }),
-  detectAnomalies: (sinceHours?: number) =>
-    invoke<{ event_id: string; started_at: string; anomaly_type: string; duration_secs: number; peak_score: number; detail: string }[]>("detect_anomalies", { sinceHours: sinceHours ?? 24 }),
 
   // Tunnel — v11: just lifecycle. QR + pair flow + Tailscale + libp2p went
   // with the remote-access pivot. start_tunnel/stop_tunnel still drive the
@@ -480,6 +451,7 @@ export const api = {
     url: string,
     onProgress?: (pct: number, downloaded?: number, total?: number | null) => void,
     filename?: string,
+    sha256?: string,
   ) => {
     const unlisten = await listen<{
       skill_id:    string;
@@ -491,7 +463,7 @@ export const api = {
       onProgress?.(payload.percent, payload.downloaded, payload.total ?? null);
     });
     try {
-      await invoke<void>("download_skill", { skillId, url, filename });
+      await invoke<void>("download_skill", { skillId, url, filename, sha256 });
     } finally {
       unlisten();
     }
@@ -807,6 +779,62 @@ export interface PersonSighting {
 export interface PersonEvent {
   event:       MotionEvent;
   person_crop: string | null;
+}
+
+/** One person's continuous presence on one camera (person_tracks row). */
+export interface TrackHit {
+  id:              string;
+  cam_id:          number;
+  event_id:        string | null;
+  body_person_id:  string | null;
+  started_at:      string;
+  ended_at:        string;
+  top_color:       string | null;
+  bottom_color:    string | null;
+  /** What they visibly wear or carry — never gender or age. */
+  evidence:        string[];
+  behaviours:      string[];
+  /** "face" names the track; "body_reid" only proposes (Maybe X?). */
+  identity_method: string | null;
+  score:           number;
+}
+
+export interface PersonGroup {
+  key:        string;
+  person_id:  string | null;
+  name:       string | null;
+  maybe_name: string | null;
+  score:      number;
+  first_seen: string;
+  last_seen:  string;
+  cameras:    number[];
+  tracks:     TrackHit[];
+}
+
+export interface PeopleSearchResult {
+  groups:     PersonGroup[];
+  understood: string[];
+  ignored:    string[];
+}
+
+/** One continuous stay across cameras. */
+export interface Visit {
+  key:        string;
+  person_id:  string | null;
+  name:       string | null;
+  maybe_name: string | null;
+  start:      string;
+  end:        string;
+  cameras:    number[];
+  behaviours: string[];
+  tracks:     TrackHit[];
+}
+
+export interface PeopleDay {
+  visits:            Visit[];
+  known_visits:      number;
+  unfamiliar_visits: number;
+  unfamiliar_repeat: number;
 }
 
 export interface FaceSample {

@@ -16,6 +16,7 @@ import { api, KnownPerson } from "../../api";
 import { useStore } from "../../store";
 import { faceCropSrc } from "../../lib/eventThumb";
 import { Modal, useDismiss } from "../../components/ui/Modal";
+import { CardEmpty } from "../review/Card";
 import { OBJECT_COLOR_SWATCH } from "../../lib/palette";
 
 /**
@@ -178,27 +179,6 @@ export function PersonPickList({ persons, onPick, disabled = false, emptyHint }:
   );
 }
 
-/** Section divider inside the unified People tab — one identity home, clearly
- *  segmented (mature NVRs Face Library model). */
-export function SectionHeader({ icon, title, subtitle, count }: {
-  icon: React.ReactNode; title: string; subtitle: string; count?: number;
-}) {
-  return (
-    <div style={{ display: "flex", alignItems: "baseline", gap: 10, margin: "0 2px 12px" }}>
-      <span style={{ color: "var(--accent)", position: "relative", top: 2 }}>{icon}</span>
-      <span style={{ fontWeight: 800, fontSize: 14, letterSpacing: -0.01 }}>{title}</span>
-      {count != null && count > 0 && (
-        <span style={{
-          display: "inline-flex", alignItems: "center", justifyContent: "center",
-          minWidth: 18, height: 18, padding: "0 6px", borderRadius: 999,
-          fontSize: 10, fontWeight: 700, background: "var(--accent-glow)", color: "var(--accent)",
-        }}>{count}</span>
-      )}
-      <span style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{subtitle}</span>
-    </div>
-  );
-}
-
 /** A thumbnail that expands into a full-screen lightbox on click. The stored
  *  face/body crops are small, so the cards render them tiny — this lets the user
  *  click to see the person at full size. Portaled to <body> so the overlay is
@@ -280,8 +260,6 @@ export function FaceContextZoom({ faceId, thumb }: { faceId: string; thumb: stri
   );
 }
 
-// ── Train (standard "tag from recent unknowns") ────────────────────────
-
 export function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div style={{ flex: 1, minWidth: 78, padding: "8px 12px", borderRadius: 12,
@@ -306,35 +284,15 @@ export function Section({ icon, title, hint, more, children }: {
   );
 }
 
+/** One empty state for the whole app — the same icon-over-sentence block Review
+ *  shows. People had three unrelated shapes for "there is nothing here". */
 export function Empty({ text }: { text: string }) {
-  return <div style={{ fontSize: 12, color: "var(--text-tertiary)", padding: "14px 0", textAlign: "center" }}>{text}</div>;
+  return <CardEmpty>{text}</CardEmpty>;
 }
 
 export function summaryText(ai: string | null): string {
   if (!ai) return "Motion event";
   try { const o = JSON.parse(ai); return o.text || o.description || "Event"; } catch { return ai; }
-}
-
-/** Human label for a naming-provenance method (identity traceability). */
-export function methodLabel(m: string | null | undefined): string {
-  switch (m) {
-    case "face_cosine":     return "face match";
-    case "face_classifier": return "face match (trained)";
-    case "event_consensus": return "event consensus";
-    case "fusion":          return "face+body fusion";
-    case "body_reid":       return "body appearance";
-    case "face_override":   return "face override";
-    case "manual":          return "manual";
-    default:                 return "unrecorded (pre-traceability)";
-  }
-}
-
-/** One-line "why this name?" explanation from a row's provenance fields. */
-export function whyNamed(method: string | null | undefined, score: number | null | undefined, margin: number | null | undefined): string {
-  const parts = [`named by ${methodLabel(method)}`];
-  if (score != null)  parts.push(`score ${score.toFixed(2)}`);
-  if (margin != null) parts.push(`margin over runner-up ${margin.toFixed(2)}`);
-  return parts.join(" · ");
 }
 
 export function formatRelative(d: Date): string {
@@ -346,39 +304,43 @@ export function formatRelative(d: Date): string {
   return d.toLocaleDateString();
 }
 
-/** Day header for the person-events timeline: "Today", "Yesterday", or "Jul 12". */
-export function fmtDay(day: string): string {
-  const today = new Date();
-  const toKey = (d: Date) => d.toISOString().slice(0, 10);
-  if (day === toKey(today)) return "Today";
-  const y = new Date(today); y.setDate(y.getDate() - 1);
-  if (day === toKey(y)) return "Yesterday";
-  const d = new Date(day + "T12:00:00");
+/** "Ravi" · "Maybe Priya?" · "Unfamiliar" — identity in words, never a
+ *  percentage. A body match only ever reads as a question. */
+export function whoLabel(v: { name: string | null; maybe_name: string | null }): string {
+  return v.name ?? (v.maybe_name ? `Maybe ${v.maybe_name}?` : "Unfamiliar");
+}
+
+/** Local "08:02–08:15" (one time when both ends fall in the same minute). */
+export function timeSpan(start: string, end: string): string {
+  const f = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const a = f(start), b = f(end);
+  return a === b ? a : `${a}–${b}`;
+}
+
+/** "Front Door → Hall" — cameras in the order the person passed them. */
+export function cameraPath(cams: number[], cameraName: (id: number) => string): string {
+  return cams.map(cameraName).join(" → ");
+}
+
+const BEHAVIOUR_PHRASE: Record<string, string> = {
+  loitering: "loitered", intrusion: "entered a zone", running: "ran",
+  person_down: "was down on the ground", climbing: "climbed", crowd: "in a crowd",
+};
+export function behaviourPhrase(b: string): string {
+  return BEHAVIOUR_PHRASE[b] ?? b.replace(/_/g, " ");
+}
+
+/** "Today" / "Yesterday" / "Sep 12" for a LOCAL YYYY-MM-DD key. (The `fmtDay` this
+ *  replaced compared against UTC dates, which mislabels local evenings.) */
+export function fmtLocalDay(day: string): string {
+  const key = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const now = new Date();
+  if (day === key(now)) return "Today";
+  if (day === key(new Date(now.getTime() - 86_400_000))) return "Yesterday";
+  const d = new Date(`${day}T12:00:00`);
   return isNaN(d.getTime()) ? day : d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-// One tracked-person card (named or anonymous). Anonymous cards offer "looks like X"
-// (one-tap confirm) + a "This is…" action so the user can train the system.
 /// CSS swatch for each classifier color word (11 bins from the HSV vote).
 export const OUTFIT_DOT = OBJECT_COLOR_SWATCH;
-
-/** "blue top · black bottom" rendered with color dots — the human-readable
- *  outfit line that makes anonymous tracks recognizable at a glance. */
-export function OutfitLine({ outfit }: { outfit: string }) {
-  const segs = outfit.split("·").map(s => s.trim()).filter(Boolean);
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
-      fontSize: 10.5, color: "var(--text-secondary)", marginTop: 3 }}>
-      {segs.map(seg => {
-        const color = OUTFIT_DOT[seg.split(" ")[0]] ?? "transparent";
-        return (
-          <span key={seg} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 999, background: color,
-              border: "1px solid rgb(var(--ink) / 0.25)", flexShrink: 0 }} />
-            {seg}
-          </span>
-        );
-      })}
-    </div>
-  );
-}

@@ -64,54 +64,6 @@ pub async fn read_all_memory_files(state: State<'_, Arc<AppState>>) -> Result<St
     Ok(crate::agent::read_all_memory_files(&state.db).await)
 }
 
-/// Assistant: crowd counting — called by frontend with person count per frame.
-/// Fires an alert when count exceeds the configured threshold.
-#[tauri::command]
-pub async fn report_crowd_count(
-    state: State<'_, Arc<AppState>>,
-    cam_id: u8,
-    count: u32,
-    event_id: Option<String>,
-) -> Result<(), String> {
-    let s = state.settings.read().await.clone();
-    if !s.crowd_detection { return Ok(()); }
-    let threshold = s.crowd_threshold;
-    drop(s);
-
-    if count < threshold { return Ok(()); }
-
-    // Sustained-crowd gate: over-threshold reports must keep arriving (≤3 s gaps)
-    // for ≥5 s before a crowd is real — a single frame of YOLO double-boxing or a
-    // group briefly walking past is not a crowd. The streak self-resets via the
-    // gap timeout (the frontend only reports frames with 2+ people).
-    const CROWD_SUSTAIN_SECS: u64 = 5;
-    const CROWD_GAP_SECS: u64 = 3;
-    let now = std::time::Instant::now();
-    let mut cs_map = state.cam_states.lock().await;
-    let cs = cs_map.entry(cam_id).or_default();
-    let since = match cs.crowd_over {
-        Some((since, last)) if now.duration_since(last).as_secs() <= CROWD_GAP_SECS => since,
-        _ => now,
-    };
-    cs.crowd_over = Some((since, now));
-    if now.duration_since(since).as_secs() < CROWD_SUSTAIN_SECS { return Ok(()); }
-    // Only alert once per crowd event (suppress repeats)
-    if cs.crowd_alerted_count >= count { return Ok(()); }
-    cs.crowd_alerted_count = count;
-    drop(cs_map);
-
-    let summary = format!(
-        "{} people detected simultaneously on cam{} (threshold: {}). {}",
-        count, cam_id + 1, threshold,
-        event_id.as_deref().map(|_| "Recording in progress.").unwrap_or("")
-    );
-    tracing::warn!("[on-device assistants] Crowd alert: {}", summary);
-    let state2 = Arc::clone(&*state);
-    tauri::async_runtime::spawn(async move {
-        crate::agent::dispatch_intelligence_alert(&state2, "crowd", &summary, cam_id, None).await;
-    });
-    Ok(())
-}
 
 #[tauri::command]
 pub async fn delete_motion_event(state: State<'_, Arc<AppState>>, id: String) -> Result<(), String> {

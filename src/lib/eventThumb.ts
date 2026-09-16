@@ -41,6 +41,16 @@ export function faceCropSrc(
   return thumbnail.startsWith("data:") ? thumbnail : `data:image/jpeg;base64,${thumbnail}`;
 }
 
+/** Person-track crop (GET /track/:id/crop) — the best crop of one person's
+ *  presence on one camera. Always URL-served; there is no inline form. */
+export function trackCropSrc(
+  trackId: string | null | undefined,
+  streamInfo: Pick<StreamInfo, "port" | "auth_token"> | null,
+): string | null {
+  if (!trackId || !streamInfo) return null;
+  return `http://localhost:${streamInfo.port}/track/${trackId}/crop?token=${streamInfo.auth_token}`;
+}
+
 /** Body-track crop ('@crop' marker → GET /body/:trackId/crop). Same legacy
  *  data-URI fallback contract as faceCropSrc. */
 export function bodyCropSrc(

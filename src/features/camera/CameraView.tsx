@@ -250,9 +250,8 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
           api.storeDetections(eventId, JSON.stringify(dets)).catch(() => {});
         }
 
-        // Crowd counting
-        const personCount = dets.filter(d => d.label.toLowerCase() === "person").length;
-        if (personCount > 1) api.reportCrowdCount(camId, personCount, eventId).catch(() => {});
+        // Crowd alerts are counted server-side from confirmed tracks (behaviour.rs),
+        // so every camera is covered whether or not this view is open.
 
         if (camId === 0) useStore.getState().setLatestDetections(dets.map(d => ({ label: d.label, score: d.score })));
 

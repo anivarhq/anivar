@@ -41,9 +41,12 @@ const POSE_PROMPTS = [
  *  (cosine-different) by drawing the video frame → backend ArcFace `embed_face`,
  *  then saves them all under one name (`enroll_person_multi`) — the same 512-d
  *  space as live + event recognition, so the person is recognised everywhere. */
-export function EnrollWizard({ onDone, showToast }: {
+export function EnrollWizard({ onDone, showToast, person }: {
   onDone: () => void;
   showToast: (msg: string, type?: "success" | "error" | "info") => void;
+  /** Set = add angles to this EXISTING person. Without it "Add more angles"
+   *  went through enrollPersonMulti and silently created a duplicate person. */
+  person?: { id: string; name: string };
 }) {
   const [name, setName] = useState("");
   const [role, setRole] = useState("resident");
@@ -267,16 +270,23 @@ export function EnrollWizard({ onDone, showToast }: {
   };
 
   const save = async () => {
-    if (!name.trim() || captures.length === 0) return;
+    if ((!person && !name.trim()) || captures.length === 0) return;
     setSaving(true);
     try {
-      const best = [...captures].sort((a, b) => b.quality - a.quality)[0];
-      await api.enrollPersonMulti(
-        name.trim(), role,
-        captures.map(c => c.embedding),
-        best ? `data:image/jpeg;base64,${best.thumbnail_b64}` : null,
-      );
-      showToast(`${name.trim()} enrolled (${captures.length} angle${captures.length === 1 ? "" : "s"})`, "success");
+      const angles = `${captures.length} angle${captures.length === 1 ? "" : "s"}`;
+      if (person) {
+        // Backend applies the same diversity gate + 30-shot cap as every append.
+        for (const c of captures) await api.addPersonEmbedding(person.id, c.embedding);
+        showToast(`Added ${angles} to ${person.name}`, "success");
+      } else {
+        const best = [...captures].sort((a, b) => b.quality - a.quality)[0];
+        await api.enrollPersonMulti(
+          name.trim(), role,
+          captures.map(c => c.embedding),
+          best ? `data:image/jpeg;base64,${best.thumbnail_b64}` : null,
+        );
+        showToast(`${name.trim()} enrolled (${angles})`, "success");
+      }
       onDone();
     } catch (e) {
       showToast(String(e), "error");
@@ -306,9 +316,13 @@ export function EnrollWizard({ onDone, showToast }: {
   }
 
   const progressPct = Math.round((captures.length / ENROLL_TARGET) * 100);
+  const cannotSave = saving || (!person && !name.trim()) || captures.length === 0;
 
   return (
     <div className="glass" style={{ padding: 24, maxWidth: 480, margin: "0 auto" }}>
+      {person ? (
+        <div style={{ marginBottom: 18, fontSize: 15, fontWeight: 700 }}>Add angles for {person.name}</div>
+      ) : (<>
       <div style={{ marginBottom: 16 }}>
         <label style={enrollLabel}>Full Name</label>
         <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. John Smith" style={enrollInput} />
@@ -321,6 +335,7 @@ export function EnrollWizard({ onDone, showToast }: {
           <option value="visitor">Trusted Visitor</option>
         </select>
       </div>
+      </>)}
 
       {/* Mode toggle — live webcam vs photo upload (mature NVRs "Add Face") */}
       <div style={{ display: "inline-flex", gap: 4, padding: 4, borderRadius: 999,
@@ -408,7 +423,7 @@ export function EnrollWizard({ onDone, showToast }: {
 
       {camError && (
         <div style={{ fontSize: 11, color: "var(--accent-red)", marginBottom: 12, textAlign: "center", lineHeight: 1.5 }}>
-          Camera unavailable — grant camera permission, or name people your security cameras saw in the <strong>Train</strong> tab.
+          Camera unavailable — grant camera permission, or name people your security cameras saw under <strong>Needs your review</strong>.
         </div>
       )}
 
@@ -476,8 +491,8 @@ export function EnrollWizard({ onDone, showToast }: {
             Pause
           </button>
         ))}
-        <button onClick={save} disabled={saving || !name.trim() || captures.length === 0} className="btn-primary"
-          style={{ flex: 1, padding: "10px 0", opacity: saving || !name.trim() || captures.length === 0 ? 0.5 : 1 }}>
+        <button onClick={save} disabled={cannotSave} className="btn-primary"
+          style={{ flex: 1, padding: "10px 0", opacity: cannotSave ? 0.5 : 1 }}>
           <UserPlus size={14} /> {saving ? "Saving…" : `Save${captures.length ? ` (${captures.length})` : ""}`}
         </button>
       </div>

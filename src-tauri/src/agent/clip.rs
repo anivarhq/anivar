@@ -2115,12 +2115,32 @@ pub async fn dispatch_intelligence_alert(state: &Arc<AppState>, alert_type: &str
         // A silently-dead camera is a security hole — critical, survives quiet hours.
         "camera_offline" => ("other", "critical"),
         "camera_online"  => ("other", "monitor"),
-        "crowd" | "loitering" | "repeat_visitor" => ("person", "suspicious"),
-        _ => ("other", "suspicious"), // line crossing, speeding, future types
+        "crowd" | "loitering" | "repeat_visitor" | "intrusion" | "running" | "climbing"
+            | "person crossing" => ("person", "suspicious"),
+        // Someone on the ground: "fall" is deliberately NOT a mutable category and
+        // critical survives quiet hours.
+        "person_down" => ("fall", "critical"),
+        _ => ("other", "suspicious"), // vehicle line crossing, speeding, future types
     };
     if !super::conditions::channel_alert_allowed(&s, risk, cam_id, category) {
         tracing::debug!("intelligence alert '{alert_type}' (cam{cam_id}) suppressed by alert settings");
         return;
+    }
+
+    // Alert history: these alerts used to reach Telegram and nowhere else, so a
+    // loitering or person-down alert vanished from the app's own alert list. Tied
+    // to the camera's most recent event, which is what the history view opens.
+    // (T-format bound: stored timestamps are RFC3339, datetime() is space-separated.)
+    let recent_event: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM motion_events
+          WHERE cam_id = ? AND started_at > strftime('%Y-%m-%dT%H:%M:%S','now','-10 minutes')
+          ORDER BY started_at DESC LIMIT 1"
+    ).bind(cam_id as i64).fetch_optional(&state.db).await.ok().flatten();
+    if let Some(eid) = &recent_event {
+        let _ = sqlx::query(
+            "INSERT INTO agent_alerts(id,event_id,risk_level,threat_type,summary,is_false_positive,created_at) VALUES(?,?,?,?,?,0,?)"
+        ).bind(Uuid::new_v4().to_string()).bind(eid).bind(risk).bind(alert_type).bind(summary)
+         .bind(Utc::now().to_rfc3339()).execute(&state.db).await;
     }
 
     // These nine alert types used to arrive as bare text carrying literal
@@ -2146,11 +2166,7 @@ pub async fn dispatch_intelligence_alert(state: &Arc<AppState>, alert_type: &str
 
         // The footage this alert is about, if the camera recorded anything in
         // the last ten minutes — so "download it right away" is one tap.
-        let recent: Option<String> = sqlx::query_scalar(
-            "SELECT id FROM motion_events
-              WHERE cam_id = ? AND started_at > datetime('now','-10 minutes')
-              ORDER BY started_at DESC LIMIT 1"
-        ).bind(cam_id as i64).fetch_optional(&state.db).await.ok().flatten();
+        let recent = recent_event.clone();
 
         let mut row = vec![serde_json::json!(
             { "text": "🔗 Live link", "callback_data": format!("getlive:{cam_id}") })];

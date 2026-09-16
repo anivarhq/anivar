@@ -156,6 +156,9 @@ pub async fn download_skill(
     skill_id: String,
     url: String,
     filename: Option<String>,
+    // Expected SHA-256 (hex). A mismatch deletes the file and fails the install —
+    // for URLs that redirect through signed storage we don't control.
+    sha256: Option<String>,
     state: State<'_, Arc<AppState>>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
@@ -218,6 +221,18 @@ pub async fn download_skill(
     if let Err(why) = reject_if_not_a_file(&dest, got).await {
         let _ = tokio::fs::remove_file(&dest).await;
         return Err(why);
+    }
+    if let Some(want) = sha256.filter(|s| !s.is_empty()) {
+        let (path, label) = (dest.clone(), skill_id.clone());
+        let check = tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+            provision::verify_sha256(&bytes, &want.to_ascii_lowercase(), &label)
+                .map_err(|e| e.to_string())
+        }).await.map_err(|e| e.to_string())?;
+        if let Err(why) = check {
+            let _ = tokio::fs::remove_file(&dest).await;
+            return Err(why);
+        }
     }
 
     tick(got, Some(got)); // final 100%
@@ -302,7 +317,9 @@ pub(crate) fn list_installed_skills(data_dir: &Path) -> Vec<SkillStatus> {
         ("clip_b32",        "Semantic Search — CLIP ViT-B/32"),
         ("jina_clip",       "Semantic Search — Jina-CLIP"),
         ("audio_yamnet",    "Audio Detection — YAMNet"),
-        ("reid_osnet",      "Person Re-ID — OSNet"),
+        ("reid_tao",        "Person Re-ID — NVIDIA ReIdentificationNet"),
+        ("pose_movenet",    "Body Pose — MoveNet"),
+        ("par_pulc",        "Person Attributes — PP-LCNet (PA-100K)"),
         ("depth_anything",  "Depth Anonymization — Depth-Anything-v2"),
         // The on-device language model. Absent from this table it had NO uninstall
         // path at all: "Installed models" is the only surface that renders a Remove

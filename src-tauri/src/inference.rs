@@ -20,7 +20,7 @@ use tauri::Emitter;
 
 use crate::{AppState, SceneObject};
 use crate::motion::is_point_in_polygon;
-use crate::reid::{body_descriptor, query_body_reid, store_body_embedding, crop_person_jpeg};
+use crate::reid::{query_body_reid, store_body_embedding, crop_person_jpeg};
 
 /// Mature NVRs two-tier scoring: detections must first pass `min_score`
 /// (yolo_confidence_threshold) just to be considered, then a HIGHER confirm
@@ -617,12 +617,6 @@ pub async fn run_inference_loop(state: Arc<AppState>) {
             (s.reid_threshold, s.face_recognition_threshold)
         };
         let reid_deep_floor = crate::reid::active_deep_floor(&state.data_dir);
-        let mut descriptors: Vec<Option<Vec<f32>>> = Vec::with_capacity(detections.len());
-        for (label, _score, box_) in &detections {
-            descriptors.push(if label == "person" {
-                body_descriptor(&state.data_dir, &frame, box_)
-            } else { None });
-        }
 
         // ── Continuous face capture (mature NVRs `save_attempts`) — throttled per camera ──
         // Populates People → Train and recognises known people live, server-side, even
@@ -642,23 +636,40 @@ pub async fn run_inference_loop(state: Arc<AppState>) {
                 Err(_) => false,
             }
         };
-        if detections.iter().any(|(l, _, _)| l == "person")
-            && face_due {
+        // The motion event open on this camera, if any. Every identity row stored
+        // this frame carries it, so an event can say WHO was in it — these rows
+        // were written with a NULL event_id, which left clip analysis's body block
+        // and every event→person lookup permanently empty.
+        let open_event: Option<String> = state.cam_states.lock().await
+            .get(&cam_id).and_then(|cs| cs.motion_active.clone());
+        if face_due {
                 // Only capture faces that sit on a detected person, and crop the
                 // PERSON box (Tracked-style) for the Train thumbnail.
                 let person_boxes: Vec<[f32; 4]> = detections.iter()
                     .filter(|(l, _, _)| l == "person")
                     .map(|(_, _, b)| *b)
                     .collect();
-                let _ = crate::face::recognize_faces(&state, &frame, cam_id, None, &person_boxes).await;
-                // Bound stranger growth (save_attempts): keep the most-recent ~150
-                // unknowns so the Train tab stays a readable, recent set (crops are
-                // now area-gated + de-duped in recognize_faces, so this is plenty).
-                let _ = sqlx::query(
-                    "DELETE FROM face_embeddings WHERE person_id IS NULL AND id NOT IN \
-                     (SELECT id FROM face_embeddings WHERE person_id IS NULL ORDER BY seen_at DESC LIMIT 150)"
-                ).execute(&state.db).await;
+                // Stranger growth is bounded hourly (persons::prune_unknown_faces).
+                // The per-tick "keep newest 150" DELETE that lived here starved
+                // recurring-stranger clustering, which reads 30 days of faces.
+                let _ = crate::face::recognize_faces(&state, &frame, cam_id, open_event.as_deref(), &person_boxes).await;
             }
+
+        // ── Body Re-ID descriptors: ONE batched run for every person ─────────────
+        // Feeds BOTH the StrongSORT-style tracker (appearance association) AND the
+        // tracklet identity step below. Runs every REID_EVERY-th frame per camera
+        // (PP-Human skip-frame scheduling — the tracker bridges the gap on motion +
+        // IoU) and always on a face tick, so face↔body fusion has something to link.
+        let mut descriptors: Vec<Option<Vec<f32>>> = vec![None; detections.len()];
+        if face_due || reid_frame_due(cam_id) {
+            let idx: Vec<usize> = detections.iter().enumerate()
+                .filter(|(_, (l, _, _))| l == "person").map(|(i, _)| i).collect();
+            if !idx.is_empty() {
+                let boxes: Vec<[f32; 4]> = idx.iter().map(|&i| detections[i].2).collect();
+                let descs = crate::reid::body_descriptors(&state.data_dir, &frame, &boxes);
+                for (&i, d) in idx.iter().zip(descs) { descriptors[i] = d; }
+            }
+        }
 
         // Store in scene_objects for Guardian agent
         let objects: Vec<SceneObject> = detections.iter()
@@ -674,7 +685,6 @@ pub async fn run_inference_loop(state: Arc<AppState>) {
         // history. Then evaluate any speed zones + line tripwires for this camera.
         let tracked = crate::tracking::update(cam_id, &detections, &descriptors, orig_w, orig_h);
         evaluate_zone_analytics(&state, cam_id, &tracked).await;
-        evaluate_loitering(&state, cam_id, &detections, &tracked).await;
 
         // ── Tracklet-consistent body identity (B) ───────────────────────────────
         // One body identity per tracklet — query_body_reid ONCE when a track first
@@ -696,16 +706,17 @@ pub async fn run_inference_loop(state: Arc<AppState>) {
         }
         for (i, (label, score, box_)) in detections.iter().enumerate() {
             if label != "person" { person_ids.push(None); continue; }
-            let Some(desc) = descriptors.get(i).and_then(|d| d.clone()) else { person_ids.push(None); continue; };
+            // None on a Re-ID skip frame — a tracklet's cached identity still applies.
+            let desc: Option<&[f32]> = descriptors.get(i).and_then(|d| d.as_deref());
             let track_id = tracked.get(i).map(|t| t.track_id).unwrap_or(0);
             // QUALITY GATE: only a reliable crop is trusted for cross-camera identity +
             // the durable gallery. A tracklet's identity is DEFERRED until its first
             // reliable crop, so a tiny/blurry first frame can't lock in a wrong match.
             let reliable = crate::reid::crop_is_reliable(box_, *score);
-            let pid: Option<(String, Option<f32>)> = match track_body_id_get(cam_id, track_id) {
-                Some(p) => Some(p),
-                None if reliable => {
-                    let matched = query_body_reid(&state.db, &desc, reid_threshold + 0.35, reid_deep_floor).await;
+            let pid: Option<(String, Option<f32>)> = match (track_body_id_get(cam_id, track_id), desc) {
+                (Some(p), _) => Some(p),
+                (None, Some(desc)) if reliable => {
+                    let matched = query_body_reid(&state.db, desc, reid_threshold + 0.35, reid_deep_floor).await;
                     let (p, mscore) = match matched {
                         // Same-frame uniqueness: this known person is already embodied
                         // by another track in this frame — two simultaneous bodies on
@@ -721,10 +732,10 @@ pub async fn run_inference_loop(state: Arc<AppState>) {
                     track_body_id_set(cam_id, track_id, &p, mscore);
                     Some((p, mscore))
                 }
-                None => None, // no reliable crop yet → don't commit an identity
+                (None, _) => None, // no reliable crop / no descriptor this frame → don't commit
             };
             // Grow the gallery ONLY from reliable crops (~1 s/track, bounded to 20).
-            if let Some((pid, mscore)) = &pid {
+            if let (Some((pid, mscore)), Some(desc)) = (&pid, desc) {
                 if reliable && track_store_due(cam_id, track_id) {
                     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM body_embeddings WHERE person_id=?")
                         .bind(pid).fetch_one(&state.db).await.unwrap_or(0);
@@ -735,12 +746,111 @@ pub async fn run_inference_loop(state: Arc<AppState>) {
                         let attrs = crate::reid::classify_person_colors(&frame, box_);
                         // Provenance: a kp_ identity here came from a body-Re-ID match.
                         let prov = pid.starts_with("kp_").then_some(("body_reid", *mscore));
-                        store_body_embedding(&state.db, pid, &desc, cam_id, None, thumb.as_deref(), attrs.as_deref(), prov).await;
+                        store_body_embedding(&state.db, pid, desc, cam_id, open_event.as_deref(), thumb.as_deref(), attrs.as_deref(), prov).await;
                     }
                 }
             }
             person_ids.push(pid.map(|(p, _)| p));
         }
+
+        // ── Person tracks: this frame's people → the per-track aggregator ─────────
+        // Identity, clothing and appearance are voted ONCE per track when it ends
+        // (person_track.rs), instead of per frame and per event.
+        for (i, (label, score, box_)) in detections.iter().enumerate() {
+            if label != "person" { continue; }
+            let Some(t) = tracked.get(i).filter(|t| t.track_id != 0) else { continue };
+            let overlap = detections.iter().enumerate()
+                .filter(|(j, (l, _, _))| *j != i && l == "person")
+                .map(|(_, (_, _, b))| iou(box_, b))
+                .fold(0.0f32, f32::max);
+            let body = track_body_id_get(cam_id, t.track_id);
+            let reliable = crate::reid::crop_is_reliable(box_, *score);
+            crate::person_track::observe(crate::person_track::Observation {
+                cam_id, track_id: t.track_id, event_id: open_event.as_deref(),
+                bbox: *box_, score: *score, frame_w: orig_w, frame_h: orig_h, overlap,
+                body_id: body.as_ref().map(|(p, _)| p.as_str()),
+                body_score: body.as_ref().and_then(|(_, s)| *s),
+                descriptor: if reliable { descriptors.get(i).and_then(|d| d.as_deref()) } else { None },
+            }, &frame);
+        }
+        let due = crate::person_track::take_due();
+        if !due.is_empty() {
+            tokio::spawn(crate::person_track::flush(state.clone(), due));
+        }
+
+        // ── Person behaviours (behaviour.rs): intrusion, dwell, running, down,
+        //    climbing, crowd — confirmed per track, alerted once ───────────────────
+        let pose_ok = crate::pose::is_installed(&state.data_dir);
+        let (rules, unfamiliar_only) = {
+            let s = state.settings.read().await;
+            let (zones, fences) = crate::behaviour::parse_masks(&s.camera_masks, cam_id);
+            (crate::behaviour::Rules {
+                zones, fences,
+                intrusion: s.intrusion_alerts,
+                loiter_secs: if s.loitering_detection { s.loitering_threshold_secs } else { 0 },
+                running: s.running_alerts,
+                down: s.person_down_alerts && pose_ok,
+                climbing: s.climbing_alerts && pose_ok,
+                crowd_threshold: if s.crowd_detection { s.crowd_threshold } else { 0 },
+            }, s.behaviour_alerts_unfamiliar_only)
+        };
+        let now = std::time::Instant::now();
+        let people_idx: Vec<usize> = detections.iter().enumerate()
+            .filter(|(i, (l, _, _))| l == "person" && tracked.get(*i).is_some_and(|t| t.track_id != 0))
+            .map(|(i, _)| i).collect();
+        // Pose only for behaviour candidates, decoded once per frame at full resolution.
+        let mut poses: std::collections::HashMap<usize, (crate::pose::Pose, Option<f32>)> = std::collections::HashMap::new();
+        if rules.wants_pose() {
+            let mut decoded: Option<image::RgbImage> = None;
+            for &i in &people_idx {
+                let b = detections[i].2;
+                let due = crate::behaviour::with_cam(cam_id, |c|
+                    crate::behaviour::pose_due(c, &rules, tracked[i].track_id, b[3] - b[1], now)).unwrap_or(false);
+                if !due { continue; }
+                if decoded.is_none() { decoded = image::load_from_memory(&frame).ok().map(|im| im.to_rgb8()); }
+                let Some(img) = decoded.as_ref() else { break };
+                let (x0, y0) = (b[0].max(0.0) as u32, b[1].max(0.0) as u32);
+                let (x1, y1) = ((b[2].max(0.0) as u32).min(img.width()), (b[3].max(0.0) as u32).min(img.height()));
+                if x1 <= x0 + 8 || y1 <= y0 + 16 { continue; }
+                let crop = image::imageops::crop_imm(img, x0, y0, x1 - x0, y1 - y0).to_image();
+                if let Some(p) = crate::pose::estimate(&state.data_dir, &crop) {
+                    let ankle = p.highest_ankle_y().map(|y| (y0 as f32 + y) / orig_h);
+                    poses.insert(i, (p, ankle));
+                }
+            }
+        }
+        let frames: Vec<crate::behaviour::PersonFrame> = people_idx.iter().map(|&i| {
+            let b = detections[i].2;
+            let t = &tracked[i];
+            let pose = poses.get(&i);
+            crate::behaviour::PersonFrame {
+                track_id: t.track_id,
+                foot: t.history.last().map(|p| (p.x, p.y))
+                    .unwrap_or(((b[0] + b[2]) / 2.0 / orig_w, b[3] / orig_h)),
+                box_h: b[3] - b[1], frame_w: orig_w, frame_h: orig_h,
+                history: &t.history,
+                pose: pose.map(|(p, _)| p),
+                ankle_y: pose.and_then(|(_, a)| *a),
+            }
+        }).collect();
+        let fired = crate::behaviour::with_cam(cam_id, |c| crate::behaviour::step(c, &rules, &frames, now))
+            .unwrap_or_default();
+        for f in fired {
+            let who = if f.track_id == 0 { None }
+                else { crate::person_track::known_person(cam_id, f.track_id, face_rec_threshold) };
+            // A recognised resident loitering on their own porch is not an alert —
+            // but a resident on the floor is exactly who person-down is for.
+            if unfamiliar_only && who.is_some() && f.kind != crate::behaviour::Kind::Down { continue; }
+            if f.track_id != 0 { crate::person_track::note_behaviour(cam_id, f.track_id, f.kind.alert_type()); }
+            let subject = who.map(|(_, name)| name).unwrap_or_else(|| "Unfamiliar person".into());
+            let summary = behaviour_summary(&subject, f.kind, &f.detail);
+            tracing::warn!("BEHAVIOUR cam{cam_id}: {summary}");
+            let (st, photo, kind) = (state.clone(), Some(frame.to_vec()), f.kind.alert_type());
+            tokio::spawn(async move {
+                crate::agent::dispatch_intelligence_alert(&st, kind, &summary, cam_id, photo).await;
+            });
+        }
+
         // Hourly hygiene: prune stale anonymous fragments, then reconcile ID-SPLITS.
         // (Body-based AUTO-promotion was removed: clothing similarity must never
         // COMMIT a name — industry consensus (mature NVRs/GEFF). Body matches surface
@@ -757,6 +867,8 @@ pub async fn run_inference_loop(state: Arc<AppState>) {
             // DETACHED: the first prune after a bloated history removes thousands
             // of rows + blob files — the detection tick must not wait on it.
             tokio::spawn(crate::persons::prune_linked_face_crops(
+                state.db.clone(), state.data_dir.clone()));
+            tokio::spawn(crate::persons::prune_unknown_faces(
                 state.db.clone(), state.data_dir.clone()));
         }
 
@@ -802,6 +914,9 @@ pub async fn run_inference_loop(state: Arc<AppState>) {
                 if !crate::reid::crop_is_reliable(&detections[idx].2, detections[idx].1) { continue; }
                 let Some(desc) = descriptors.get(idx).and_then(|d| d.clone()) else { continue };
                 let track_id = tracked.get(idx).map(|t| t.track_id).unwrap_or(0);
+                // Every named face inside the track's box is a vote; the track's
+                // own consensus decides at flush (same IdentityVote policy).
+                crate::person_track::note_face(cam_id, track_id, &lf.person_id, &lf.name, lf.score);
                 // Tracker-coupled consensus before committing — the SAME score-aware
                 // policy that names events (face::IdentityVote), not just "2 ticks of
                 // any match": a sustained look-alike at 0.5x scores no longer poisons
@@ -827,7 +942,7 @@ pub async fn run_inference_loop(state: Arc<AppState>) {
                     }
                     let thumb = crop_person_jpeg(&frame, &detections[idx].2);
                     let attrs = crate::reid::classify_person_colors(&frame, &detections[idx].2);
-                    crate::reid::link_body_to_known(&state.db, &lf.person_id, &desc, cam_id, thumb.as_deref(), attrs.as_deref(), lf.score).await;
+                    crate::reid::link_body_to_known(&state.db, &lf.person_id, &desc, cam_id, open_event.as_deref(), thumb.as_deref(), attrs.as_deref(), lf.score).await;
                 }
             }
         }
@@ -983,60 +1098,33 @@ pub async fn run_inference_loop(state: Arc<AppState>) {
     }
 }
 
-// ─── Loitering (track-dwell, uses the tracker) ────────────────────────────────
-//
-// A loiter alert requires the SAME tracked person to remain in view for the
-// configured dwell time (mature NVRs zone-loitering semantics: `loitering_time` is
-// per-object dwell). The old check used the open motion EVENT's age — any
-// long-running event (wind, a parked car holding it open) fired "person has
-// been in frame for Ns" with no person present at all.
-
-struct LoiterTrack { first: std::time::Instant, last: std::time::Instant, alerted: bool }
-
-static LOITER_TRACKS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<(u8, u64), LoiterTrack>>> =
+/// Body Re-ID cadence per camera (PP-Human `skip_frame_num`): a descriptor batch
+/// every `REID_EVERY` frames.
+// ponytail: fixed cadence; go adaptive (every frame on a GPU lane) if association suffers.
+const REID_EVERY: u32 = 3;
+static REID_TICK: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<u8, u32>>> =
     std::sync::OnceLock::new();
 
-/// A track's dwell resets once it's been out of view this long.
-const LOITER_GONE_SECS: u64 = 60;
+fn reid_frame_due(cam_id: u8) -> bool {
+    let Ok(mut m) = REID_TICK.get_or_init(Default::default).lock() else { return true };
+    let n = m.entry(cam_id).or_insert(0);
+    *n = n.wrapping_add(1);
+    *n % REID_EVERY == 1
+}
 
-async fn evaluate_loitering(
-    state: &Arc<AppState>,
-    cam_id: u8,
-    detections: &[(String, f32, [f32; 4])],
-    tracked: &[crate::tracking::TrackedDet],
-) {
-    let (on, thr_secs) = {
-        let s = state.settings.read().await;
-        (s.loitering_detection, s.loitering_threshold_secs)
-    };
-    if !on || thr_secs == 0 { return; }
-    let now = std::time::Instant::now();
-    let mut fire: Option<f32> = None;
-    {
-        let cell = LOITER_TRACKS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-        let Ok(mut map) = cell.lock() else { return };
-        map.retain(|_, t| now.duration_since(t.last).as_secs() < LOITER_GONE_SECS);
-        for (i, td) in tracked.iter().enumerate() {
-            // track_id 0 = the tracker's "unmatched" fallback — no continuity.
-            if td.track_id == 0 { continue; }
-            if detections.get(i).map_or(true, |(l, _, _)| l != "person") { continue; }
-            let t = map.entry((cam_id, td.track_id))
-                .or_insert(LoiterTrack { first: now, last: now, alerted: false });
-            t.last = now;
-            let dwell = now.duration_since(t.first).as_secs_f32();
-            if !t.alerted && dwell >= thr_secs as f32 {
-                t.alerted = true; // once per track — re-arms only via a fresh track
-                fire = Some(dwell);
-            }
-        }
-    }
-    if let Some(dwell) = fire {
-        tracing::warn!("LOITER: same person tracked ~{dwell:.0}s on cam{cam_id}");
-        crate::agent::dispatch_intelligence_alert(
-            state, "loitering",
-            &format!("Same person has stayed in view for ~{dwell:.0}s"),
-            cam_id, None,
-        ).await;
+// Loitering, intrusion, running, person-down, climbing and crowd live in
+// behaviour.rs — per-track state machines fed from the inference loop.
+
+/// "Who did what, where" — the first line a person-behaviour alert reads as.
+fn behaviour_summary(who: &str, kind: crate::behaviour::Kind, detail: &str) -> String {
+    use crate::behaviour::Kind::*;
+    match kind {
+        Intrusion => format!("{who} entered {detail}"),
+        Loitering => format!("{who} loitering — {detail}"),
+        Running   => format!("{who} running ({detail})"),
+        Down      => format!("{who} down on the ground for {detail}"),
+        Climbing  => format!("{who} climbing {detail}"),
+        Crowd     => format!("Crowd — {detail} at once"),
     }
 }
 
@@ -1257,7 +1345,9 @@ async fn fire_crossing_event(state: &Arc<AppState>, cam_id: u8, label: &str, lin
     crate::review_segments::upsert_review_segment(&state.db, &id).await;
     tracing::info!("CROSSING: cam{} {}", cam_id, dom);
     state.app_handle.emit("agent:analyzed", ()).ok();
-    crate::agent::dispatch_intelligence_alert(state, "line crossing", &dom, cam_id, None).await;
+    // A PERSON crossing is a people alert (muted with People, not "other").
+    let kind = if label == "person" { "person crossing" } else { "line crossing" };
+    crate::agent::dispatch_intelligence_alert(state, kind, &dom, cam_id, None).await;
 }
 
 /// Hardware-acceleration preference for ONNX inference, set once at boot from
@@ -1730,6 +1820,11 @@ fn build_ort_session_at(model_path: &std::path::Path, force_cpu: bool) -> anyhow
         .map_err(|e| anyhow::anyhow!("ORT opt-level: {e}"))?
         .with_intra_threads(4)
         .map_err(|e| anyhow::anyhow!("ORT threads: {e}"))?
+        // Subnormal floats trap into slow x86 microcode. 16% of the NVIDIA Re-ID
+        // model's weights are subnormal: one CPU crop took 3.3 s without this and
+        // 21 ms with it, with the same embedding (cosine 1.0).
+        .with_flush_to_zero()
+        .map_err(|e| anyhow::anyhow!("ORT flush-to-zero: {e}"))?
         .commit_from_file(model_path)
         .map_err(|e| anyhow::anyhow!("ORT load model: {e}"))?;
     Ok(session)

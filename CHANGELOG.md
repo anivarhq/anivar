@@ -7,6 +7,63 @@ and this project (will) adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-09-16
+
+### Changed: the People section, rebuilt around visits
+
+- **People now answers "who was here?"** It has three tabs. **Today** lists
+  visits: one continuous stay per person, across cameras. **People** is the
+  roster of people you've named. **Review** asks "Who is this?" once for each
+  person your cameras keep seeing but can't name. Name them once and every
+  sighting is theirs. When the app thinks it already knows someone, the card
+  asks "Is this Ravi?" instead.
+- **Search for people by description** in the search box: "blue top with a
+  backpack", "unfamiliar, no hat", or a name. Results are grouped by person, and
+  any visit can find others who look like that person.
+- **Less for you to do.** People no longer asks you to confirm body-appearance
+  matches or narrow face matches, and no longer shows match scores. Body
+  appearance still works in the background, linking a visit across cameras and
+  powering "find similar". To fix a wrong name, open that person and press
+  **Not them** on the shot; recognition learns from it.
+- **Face pictures show the face.** They were cut from the whole person, so
+  someone seated with an arm stretched out appeared as mostly wall.
+  Recognition never used that picture and is unchanged. Pictures saved before
+  this version are not redrawn.
+
+### Added: alerts about what people do
+
+- New alerts for **zone entry** (someone steps into a zone set to "Alert when
+  someone enters"), **climbing** (feet going over a line marked as a fence),
+  **running** and **person down**. They follow each person over time instead of
+  judging single frames. Loitering now measures how long one person stays.
+- **Zone entry and climbing are on by default, including after this update.** If
+  you already set zones to "Alert when someone enters", you'll now get those
+  alerts; the setting existed before, but nothing sent them. Running and person
+  down start off. All of them are in **Settings → Alerts**.
+- By default these alerts skip people whose face was recognised. Person down is
+  the exception, because a resident on the floor is exactly who it's for.
+- Person down and climbing need the **Body pose** model below, and climbing
+  also needs a fence line drawn on the camera.
+
+### Added: optional models in Arsenal → Enhancements
+
+- **Deep person Re-ID** (NVIDIA ReIdentificationNet), about 92 MB, downloaded
+  from NVIDIA when you install it: links a visit across cameras and powers
+  "find similar".
+- **Body pose** (MoveNet, Apache-2.0), about 9 MB: person down and climbing.
+- **Person attributes** (PaddleClas PP-LCNet, Apache-2.0, trained on PA-100K),
+  about 7 MB: clothing, bags and accessories for search. It only judges someone
+  whose whole body is in frame and standing. A camera that sees people from the
+  chest up, like a desk camera, gives it nothing to judge, so those searches
+  won't match there.
+
+### Fixed
+
+- The camera filter in People listed sixteen cameras no matter how many you
+  have. It lists your enabled cameras now.
+- Cards in People printed raw character codes such as `\u00b7` instead of the
+  characters themselves.
+
 ## [0.1.2] - 2026-09-14
 
 ### Fixed: recorded footage played in ten-second blocks

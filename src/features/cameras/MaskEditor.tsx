@@ -521,11 +521,31 @@ export function MaskEditor({ camId, onClose }: MaskEditorProps) {
                     </label>
 
                     <label className={styles.propLabel}>
-                      <span>Loitering before counted <em>{selected.loitering_secs ?? 0}s</em></span>
-                      <input type="range" min={0} max={60} step={1} value={selected.loitering_secs ?? 0}
+                      <span>Loitering alert after <em>{(selected.loitering_secs ?? 0) === 0 ? "off" : `${selected.loitering_secs}s`}</em></span>
+                      <input type="range" min={0} max={300} step={5} value={selected.loitering_secs ?? 0}
                         onChange={e => updateMask(selected.id, m => ({ ...m, loitering_secs: Number(e.target.value) }))} />
                     </label>
+
+                    <label className={styles.propLabel} style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                      <input type="checkbox" checked={selected.alert_on_enter ?? true}
+                        onChange={e => updateMask(selected.id, m => ({ ...m, alert_on_enter: e.target.checked }))} />
+                      <span>Alert when someone enters</span>
+                    </label>
+
+                    <label className={styles.propLabel} style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                      <input type="checkbox" checked={!!selected.ignore_down}
+                        onChange={e => updateMask(selected.id, m => ({ ...m, ignore_down: e.target.checked }))} />
+                      <span>Lying down here is normal <em>sofa, bed, lawn</em></span>
+                    </label>
                   </>
+                )}
+
+                {selected.type === "line" && (
+                  <label className={styles.propLabel} style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <input type="checkbox" checked={!!selected.fence}
+                      onChange={e => updateMask(selected.id, m => ({ ...m, fence: e.target.checked }))} />
+                    <span>Fence or wall top <em>alert on climbing</em></span>
+                  </label>
                 )}
               </div>
             )}

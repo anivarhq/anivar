@@ -1373,6 +1373,44 @@ export function SettingsPanel() {
               })}
             </div>
           </Field>
+          {/* People behaviours (behaviour.rs) — confirmed per tracked person and
+              sent once per person. Zones and fence lines are drawn per camera. */}
+          <Field label="Zone entry" more="Alert when a person's feet enter a zone set to 'Alert when someone enters' (camera → Zones).">
+            <Toggle checked={form.intrusion_alerts ?? true} onChange={v => patch("intrusion_alerts", v)} />
+          </Field>
+          <Field label="Loitering" more="Alert when the same tracked person stays in view this many seconds. A zone can set its own time.">
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              {(form.loitering_detection ?? true) && (
+                <input type="number" min="10" max="3600" step="5" value={form.loitering_threshold_secs ?? 30}
+                  onChange={e => patch("loitering_threshold_secs", parseInt(e.target.value, 10) || 30)}
+                  className={styles.numInput} style={{ width: 70 }} />
+              )}
+              <Toggle checked={form.loitering_detection ?? true} onChange={v => patch("loitering_detection", v)} />
+            </div>
+          </Field>
+          <Field label="Running" more="Alert when a person moves faster than about two body-heights per second.">
+            <Toggle checked={!!form.running_alerts} onChange={v => patch("running_alerts", v)} />
+          </Field>
+          <Field label="Person down" hint="Needs Body pose" more="Alert when someone who was standing has been lying on the ground for 10 seconds. Zones can mark places where lying down is normal. Alerts for everyone, including people you know.">
+            <Toggle checked={!!form.person_down_alerts} onChange={v => patch("person_down_alerts", v)} />
+          </Field>
+          <Field label="Climbing" hint="Needs a fence line + Body pose" more="Alert when someone's feet go over a line marked as a fence or wall top (camera → Zones).">
+            <Toggle checked={form.climbing_alerts ?? true} onChange={v => patch("climbing_alerts", v)} />
+          </Field>
+          <Field label="Crowd" more="Alert when this many people are in view at once for 5 seconds.">
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              {form.crowd_detection && (
+                <input type="number" min="2" max="50" step="1" value={form.crowd_threshold ?? 3}
+                  onChange={e => patch("crowd_threshold", parseInt(e.target.value, 10) || 3)}
+                  className={styles.numInput} style={{ width: 60 }} />
+              )}
+              <Toggle checked={!!form.crowd_detection} onChange={v => patch("crowd_detection", v)} />
+            </div>
+          </Field>
+          <Field label="Only unfamiliar people" more="Skip entry, loitering, running, climbing and crowd alerts for people whose face was recognised. Person down always alerts.">
+            <Toggle checked={form.behaviour_alerts_unfamiliar_only ?? true}
+              onChange={v => patch("behaviour_alerts_unfamiliar_only", v)} />
+          </Field>
           <Field label="Quiet hours" more="When enabled, only critical alerts are pushed during the window below.">
             <Toggle checked={!!form.quiet_hours_enabled} onChange={v => patch("quiet_hours_enabled", v)} />
           </Field>

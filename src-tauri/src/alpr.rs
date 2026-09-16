@@ -200,7 +200,10 @@ fn ocr_region(session: &mut OrtSession, input_name: &str, crop: &image::DynamicI
 //     bbox are already in hand. Returns None rather than guessing when no
 //     color wins a clear plurality (dusk/sodium light stays honest). ─────────
 
-/// Classify the dominant body color of a vehicle crop. `bbox` in pixels.
+/// The 11 colour bins every colour classifier and filter in the app speaks.
+pub(crate) const COLOR_NAMES: [&str; 11] =
+    ["black", "white", "silver", "gray", "red", "orange", "yellow", "green", "blue", "purple", "brown"];
+
 /// SHARED HSV plurality-vote color classifier over one BAND of a bbox — the
 /// core behind vehicle body color AND person clothing colors (reid.rs). Band
 /// fractions are relative to the bbox: (top_frac, bottom_frac, side_trim_frac).
@@ -211,6 +214,24 @@ pub(crate) fn dominant_color_in_band(
     bbox: [f32; 4],
     band: (f32, f32, f32),
 ) -> Option<(String, f32)> {
+    let shares = color_shares_in_band(img, bbox, band)?;
+    let (best, &share) = shares.iter().enumerate()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))?;
+    // Plurality floor: a real dominant color owns the band. Below it we
+    // return None (unknown) — never a coin-flip label.
+    if share < 0.25 { return None; }
+    Some((COLOR_NAMES[best].to_string(), share))
+}
+
+/// The SOFT form of the vote: each bin's share of the band's sampled pixels
+/// (sums to 1), so several crops of one person can be averaged before a name is
+/// chosen (person_track.rs) and a search can score "blue" without a hard label.
+/// `None` when the band is too small or too sparsely sampled to judge.
+pub(crate) fn color_shares_in_band(
+    img: &image::RgbImage,
+    bbox: [f32; 4],
+    band: (f32, f32, f32),
+) -> Option<[f32; 11]> {
     let (w, h) = (img.width() as f32, img.height() as f32);
     let x0 = bbox[0].clamp(0.0, w - 2.0);
     let y0 = bbox[1].clamp(0.0, h - 2.0);
@@ -226,8 +247,7 @@ pub(crate) fn dominant_color_in_band(
     let sx1 = (x1 - bw * trim_frac) as u32;
     if sy1 <= sy0 || sx1 <= sx0 { return None; }
 
-    // 11 bins: black white silver gray red orange yellow green blue purple brown
-    const NAMES: [&str; 11] = ["black","white","silver","gray","red","orange","yellow","green","blue","purple","brown"];
+    // 11 bins, in COLOR_NAMES order.
     let mut votes = [0u32; 11];
     let mut total = 0u32;
     let step = (((sx1 - sx0) * (sy1 - sy0)) as f32 / 4000.0).sqrt().max(1.0) as u32; // ~≤4k samples
@@ -270,12 +290,9 @@ pub(crate) fn dominant_color_in_band(
         y += step;
     }
     if total < 200 { return None; }
-    let (best, &n) = votes.iter().enumerate().max_by_key(|(_, n)| **n)?;
-    let share = n as f32 / total as f32;
-    // Plurality floor: a real dominant color owns the band. Below it we
-    // return None (unknown) — never a coin-flip label.
-    if share < 0.25 { return None; }
-    Some((NAMES[best].to_string(), share))
+    let mut shares = [0.0f32; 11];
+    for (s, v) in shares.iter_mut().zip(votes) { *s = v as f32 / total as f32; }
+    Some(shares)
 }
 
 pub(crate) fn classify_vehicle_color(jpeg: &[u8], bbox: [f32; 4]) -> Option<(String, f32)> {

@@ -590,7 +590,6 @@ pub async fn recognize_faces(
     struct FrameFace<'a> {
         det:  &'a FaceDetection,
         emb:  &'a FaceEmbedding,
-        pbox: Option<&'a [f32; 4]>,
         m:    Option<FaceMatch>,
     }
     let mut frame_faces: Vec<FrameFace> = Vec::new();
@@ -604,10 +603,9 @@ pub async fn recognize_faces(
         // Person-gate: only keep faces that sit on a DETECTED PERSON (drops
         // background clutter — e.g. a ceiling corner the detector mistook for a
         // face). When no person boxes are passed (live/event paths) we don't gate.
-        let pbox = containing_person(&det.bbox, person_boxes);
-        if !person_boxes.is_empty() && pbox.is_none() { continue; }
+        if !person_boxes.is_empty() && containing_person(&det.bbox, person_boxes).is_none() { continue; }
         let m = match_face(&state.db, &emb.vector, rec_thr, unk_thr, class_conf).await;
-        frame_faces.push(FrameFace { det, emb, pbox, m });
+        frame_faces.push(FrameFace { det, emb, m });
     }
 
     // Pass 2: per-frame identity uniqueness — one person cannot be two faces at
@@ -628,7 +626,7 @@ pub async fn recognize_faces(
 
     // Pass 3: side effects (liveness, crop storage, last-seen, sightings).
     let mut matches = Vec::new();
-    for FrameFace { det, emb, pbox, m } in frame_faces {
+    for FrameFace { det, emb, m } in frame_faces {
         let mut m = m;
         let area = (det.bbox[2]-det.bbox[0]).max(0.0) * (det.bbox[3]-det.bbox[1]).max(0.0);
         // Tag the stored sighting with the matched known person so the People
@@ -652,12 +650,9 @@ pub async fn recognize_faces(
         // camera. (Matching above still ran for smaller faces, so a distant enrolled
         // person is still named — we just don't flood Train with tiny near-dupes.)
         if area >= MIN_STORE_FACE_AREA && !is_recent_duplicate(cam_id, &emb.vector) {
-            // DISPLAY crop = the Tracked-style PERSON crop (upright, head-to-torso,
-            // recognisable — the same `crop_person_jpeg` the Tracked tab uses), so
-            // Train never shows the tilted aligned warp. Fall back to the padded
-            // face crop when there's no person box.
-            let thumb = pbox
-                .and_then(|pb| crate::reid::crop_person_jpeg(jpeg, pb))
+            // DISPLAY crop only: head and shoulders around this face (`head_box`),
+            // upright, never the tilted aligned warp the descriptor was taken from.
+            let thumb = crate::reid::crop_person_jpeg(jpeg, &head_box(&det.bbox))
                 .unwrap_or_else(|| emb.thumbnail_b64.clone());
             // Provenance rides along only when the crop was actually NAMED.
             let prov = matched_pid.as_ref().and(m.as_ref())
@@ -1031,9 +1026,24 @@ fn cosine_sim(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
+/// The picture stored for a face: head and shoulders centred on the FACE box.
+///
+/// It used to be the whole containing person box. Seated at a desk with an arm
+/// out to the mouse, that box is mostly wall, so every face in People → Review
+/// showed a light switch with a sliver of head at the edge. Display only — the
+/// descriptor comes from the aligned face and never sees this crop.
+/// `crop_person_jpeg` clamps it to the frame, which keeps an edge face as close
+/// to centre as the frame allows. Slightly taller than wide (~1.2:1) because
+/// every face tile is square with cover-cropping, which trims top and bottom.
+fn head_box(face: &[f32; 4]) -> [f32; 4] {
+    let (w, h) = ((face[2] - face[0]).max(1.0), (face[3] - face[1]).max(1.0));
+    let cx = (face[0] + face[2]) * 0.5;
+    [cx - 1.1 * w, face[1] - 0.5 * h, cx + 1.1 * w, face[3] + 0.8 * h]
+}
+
 /// The detected person box whose (slightly-expanded) area contains the face's
-/// center — used to (a) gate out clutter that isn't on a person and (b) take a
-/// Tracked-style person crop for display. `None` when the face is on no person.
+/// center — gates out clutter that isn't on a person. `None` when the face is on
+/// no person.
 fn containing_person<'a>(face_bbox: &[f32; 4], person_boxes: &'a [[f32; 4]]) -> Option<&'a [f32; 4]> {
     let fcx = (face_bbox[0] + face_bbox[2]) * 0.5;
     let fcy = (face_bbox[1] + face_bbox[3]) * 0.5;
@@ -1368,6 +1378,21 @@ mod tests {
         // Order-independent.
         let boxes2 = vec![small, big];
         assert_eq!(containing_person(&face, &boxes2), Some(&boxes2[0]));
+    }
+
+    #[test]
+    fn a_face_picture_is_cut_around_the_face_not_the_person() {
+        // From real footage, 2026-09-16: seated at a desk, face at the right edge
+        // of a 1280×720 frame, arm reaching left to the mouse — the person box is
+        // mostly wall.
+        let face = [1180.0, 120.0, 1260.0, 210.0];
+        let person = [560.0, 90.0, 1280.0, 720.0];
+        let b = head_box(&face);
+        assert!(((b[0] + b[2]) * 0.5 - (face[0] + face[2]) * 0.5).abs() < 1e-3, "centred on the face");
+        assert!(b[0] <= face[0] && b[1] <= face[1] && b[2] >= face[2] && b[3] >= face[3], "the whole face is in it");
+        assert!(b[2] - b[0] < (person[2] - person[0]) * 0.5, "nowhere near the width of the person box");
+        let aspect = (b[3] - b[1]) / (b[2] - b[0]);
+        assert!((1.0..1.5).contains(&aspect), "about square, so a square tile keeps the head: {aspect}");
     }
 
     #[test]

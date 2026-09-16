@@ -230,6 +230,21 @@ pub struct Settings {
     pub crowd_detection: bool,
     #[serde(default = "default_crowd_threshold")]
     pub crowd_threshold: u32,
+    /// Person-behaviour alerts (behaviour.rs). Intrusion honours each zone's
+    /// "alert on enter" (the zone editor always promised it); climbing needs a
+    /// line marked as a fence; person-down needs the pose model.
+    #[serde(default = "default_true")]
+    pub intrusion_alerts: bool,
+    #[serde(default)]
+    pub running_alerts: bool,
+    #[serde(default)]
+    pub person_down_alerts: bool,
+    #[serde(default = "default_true")]
+    pub climbing_alerts: bool,
+    /// Skip behaviour alerts for people whose FACE was recognised. Never applies to
+    /// person-down — a resident on the floor is exactly who that alert is for.
+    #[serde(default = "default_true")]
+    pub behaviour_alerts_unfamiliar_only: bool,
     #[serde(default = "default_true")]
     pub repeat_visitor_detection: bool,
     #[serde(default = "default_repeat_threshold")]
@@ -491,6 +506,11 @@ impl Default for Settings {
             loitering_threshold_secs: 30,
             crowd_detection: false,
             crowd_threshold: 3,
+            intrusion_alerts: true,
+            running_alerts: false,
+            person_down_alerts: false,
+            climbing_alerts: true,
+            behaviour_alerts_unfamiliar_only: true,
             repeat_visitor_detection: true,
             repeat_visitor_threshold: 3,
             ai_provider: "local".into(),
@@ -634,11 +654,6 @@ pub struct PerCamState {
     pub(crate) motion_peak:    f32,
     /// Wall-clock time of the last frame that triggered motion.
     pub(crate) last_motion_at: Option<Instant>,
-    /// Track max crowd count seen this event (for repeat suppression)
-    pub(crate) crowd_alerted_count: u32,
-    /// Crowd streak: (streak start, last over-threshold report). A crowd must be
-    /// SUSTAINED before it alerts — one frame of YOLO double-boxes is not a crowd.
-    pub(crate) crowd_over: Option<(Instant, Instant)>,
     /// YOLO26 detections accumulated during the current motion event.
     /// Keeps the best-confidence detection per class — flushed to DB atomically
     /// when the event closes (mature NVRs ReviewSegment pattern).
