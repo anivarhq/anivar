@@ -32,10 +32,17 @@ const SPLIT: Duration = Duration::from_secs(600);
 const CROP_EVERY: Duration = Duration::from_millis(700);
 /// Observations below this are tracker noise, not a person worth a row.
 const MIN_OBSERVATIONS: u32 = 3;
-/// Crops below this quality never vote on clothing colour or attributes (see
-/// `quality`). A wide box cut off by the frame edge scores ~0.25, a small
-/// standing person ~0.4.
+/// Crops below this quality never vote on clothing colour or attributes, even
+/// when whole (see `quality`): tiny, low-confidence or crowded boxes. A small
+/// standing person scores ~0.4.
 const MIN_VOTE_QUALITY: f32 = 0.3;
+/// A box must be at least this much taller than wide to vote — a standing person,
+/// which is what the attribute model was trained on (PA-100K pedestrians).
+/// ponytail: a whole person sitting or crouching (~1.3–1.6) never votes; use pose
+/// keypoints instead if seated people ever need attributes.
+const STANDING_ASPECT: f32 = 1.8;
+/// Pixels from the frame edge that count as "cut off".
+const EDGE: f32 = 2.0;
 
 use crate::alpr::COLOR_NAMES;
 
@@ -59,7 +66,13 @@ pub(crate) struct Observation<'a> {
 }
 
 #[derive(Clone)]
-pub(crate) struct Crop { pub quality: f32, pub b64: String }
+pub(crate) struct Crop {
+    pub quality: f32,
+    /// May vote on colour and attributes (`votes`). Decided per crop, never from
+    /// `quality`, which is a soft ranking score.
+    pub votes: bool,
+    pub b64: String,
+}
 
 pub(crate) struct Agg {
     pub cam_id: u8,
@@ -119,18 +132,42 @@ pub(crate) fn quality(bbox: &[f32; 4], score: f32, frame_w: f32, frame_h: f32, o
     let h = (bbox[3] - bbox[1]).max(0.0);
     if w < 8.0 || h < 16.0 { return 0.0; }
     let size = (h / 192.0).min(1.0);
-    let edge = 2.0;
-    let truncated = bbox[0] <= edge || bbox[1] <= edge || bbox[2] >= frame_w - edge || bbox[3] >= frame_h - edge;
-    let trunc = if truncated { 0.6 } else { 1.0 };
+    let trunc = if truncated(bbox, frame_w, frame_h) { 0.6 } else { 1.0 };
     // A standing person is taller than wide; a wide box is a merge or a crouch.
     let shape = if h >= w * 1.1 { 1.0 } else { 0.5 };
     let clear = (1.0 - overlap).clamp(0.0, 1.0);
     score.clamp(0.0, 1.0) * size * trunc * shape * clear
 }
 
+fn truncated(bbox: &[f32; 4], frame_w: f32, frame_h: f32) -> bool {
+    bbox[0] <= EDGE || bbox[1] <= EDGE || bbox[2] >= frame_w - EDGE || bbox[3] >= frame_h - EDGE
+}
+
+/// Whether a crop may vote on clothing colour and attributes: the WHOLE person,
+/// inside the frame, standing-shaped.
+///
+/// This used to be `quality >= MIN_VOTE_QUALITY`, where being cut off only
+/// multiplied the score by 0.6 — so a large, confident, cut-off box (0.9 × 0.6 =
+/// 0.54) always voted. On a desk webcam every attribute crop was head and
+/// shoulders cut off by the frame, and the model answered for what it could not
+/// see: trousers on every track, a handbag on half, the window blinds as a "white
+/// top". A cut-off crop is still fine for the thumbnail and identity; it just
+/// never gets a say in what someone wore.
+pub(crate) fn votes(bbox: &[f32; 4], frame_w: f32, frame_h: f32) -> bool {
+    let w = (bbox[2] - bbox[0]).max(0.0);
+    let h = (bbox[3] - bbox[1]).max(0.0);
+    w > 0.0 && !truncated(bbox, frame_w, frame_h) && h >= w * STANDING_ASPECT
+}
+
+/// Voting crops first, then by quality — so a small full-body frame is never
+/// pushed out of the top crops by large cut-off ones.
+fn outranks(votes: bool, quality: f32, other: &Crop) -> bool {
+    (votes, quality) > (other.votes, other.quality)
+}
+
 /// Insert keeping the best `TOP_CROPS`, best first.
 fn push_crop(crops: &mut Vec<Crop>, c: Crop) {
-    let at = crops.iter().position(|x| x.quality < c.quality).unwrap_or(crops.len());
+    let at = crops.iter().position(|x| outranks(c.votes, c.quality, x)).unwrap_or(crops.len());
     crops.insert(at, c);
     crops.truncate(TOP_CROPS);
 }
@@ -140,6 +177,7 @@ fn push_crop(crops: &mut Vec<Crop>, c: Crop) {
 pub(crate) fn observe(o: Observation, frame_jpeg: &[u8]) {
     let now = Instant::now();
     let q = quality(&o.bbox, o.score, o.frame_w, o.frame_h, o.overlap);
+    let v = votes(&o.bbox, o.frame_w, o.frame_h);
     let wants_crop = {
         let Ok(mut map) = tracks().lock() else { return };
         let a = map.entry((o.cam_id, o.track_id)).or_insert_with(|| Agg::new(o.cam_id, o.track_id, now));
@@ -158,7 +196,7 @@ pub(crate) fn observe(o: Observation, frame_jpeg: &[u8]) {
                 a.reid_n += 1;
             }
         }
-        let beats = a.crops.len() < TOP_CROPS || a.crops.last().is_some_and(|c| q > c.quality);
+        let beats = a.crops.len() < TOP_CROPS || a.crops.last().is_some_and(|c| outranks(v, q, c));
         let spaced = a.last_crop.map_or(true, |t| now.duration_since(t) >= CROP_EVERY);
         let want = q > 0.0 && beats && spaced;
         if want { a.last_crop = Some(now); }
@@ -168,7 +206,7 @@ pub(crate) fn observe(o: Observation, frame_jpeg: &[u8]) {
     let Some(b64) = crate::reid::crop_person_jpeg(frame_jpeg, &o.bbox) else { return };
     if let Ok(mut map) = tracks().lock() {
         if let Some(a) = map.get_mut(&(o.cam_id, o.track_id)) {
-            push_crop(&mut a.crops, Crop { quality: q, b64 });
+            push_crop(&mut a.crops, Crop { quality: q, votes: v, b64 });
         }
     }
 }
@@ -316,11 +354,10 @@ pub(crate) async fn flush(state: Arc<AppState>, due: Vec<Agg>) {
     let voted = tokio::task::spawn_blocking(move || {
         due.into_iter().map(|a| {
             // Decode each kept crop ONCE; colour and attributes both read it. Only
-            // person-shaped, un-truncated crops vote: on real footage a wide box cut
-            // off by the bottom of a desk webcam's frame read as "female, handbag,
-            // seen from the back". Unknown is the honest answer for those.
+            // whole, standing people vote (`votes`); for anyone else unknown is the
+            // honest answer.
             let imgs: Vec<(f32, image::RgbImage)> = a.crops.iter()
-                .filter(|c| c.quality >= MIN_VOTE_QUALITY)
+                .filter(|c| c.votes && c.quality >= MIN_VOTE_QUALITY)
                 .filter_map(|c| {
                 let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &c.b64).ok()?;
                 Some((c.quality, image::load_from_memory(&bytes).ok()?.to_rgb8()))
@@ -394,21 +431,44 @@ mod tests {
     }
 
     #[test]
-    fn only_person_shaped_uncut_crops_vote() {
-        // From real footage: a 769×305 "person" box cut off by the bottom edge of a
-        // 1280×720 frame — attributes on it came out as nonsense.
-        let cut = quality(&[511.0, 415.0, 1280.0, 719.0], 0.84, 1280.0, 720.0, 0.0);
-        assert!(cut < MIN_VOTE_QUALITY, "truncated wide box must not vote: {cut}");
-        let small_standing = quality(&[600.0, 300.0, 640.0, 396.0], 0.8, 1280.0, 720.0, 0.0);
-        assert!(small_standing >= MIN_VOTE_QUALITY, "a small standing person still votes: {small_standing}");
+    fn only_whole_standing_people_vote() {
+        let (fw, fh) = (1280.0, 720.0);
+        // A small standing person, fully in frame, votes.
+        let standing = [600.0, 300.0, 640.0, 396.0];
+        assert!(votes(&standing, fw, fh));
+        assert!(quality(&standing, 0.8, fw, fh, 0.0) >= MIN_VOTE_QUALITY);
+
+        // From real footage: a 769×305 "person" box (an arm over a keyboard) cut
+        // off by the bottom edge. Attributes on it read "female, handbag, back".
+        assert!(!votes(&[511.0, 415.0, 1280.0, 719.0], fw, fh));
+
+        // From real footage, 2026-09-16: head and shoulders at a desk webcam, cut
+        // off by the bottom edge. Its QUALITY clears the bar — which is exactly how
+        // 31 of these voted "trousers" and "handbag" under the old soft gate.
+        let desk = [700.0, 120.0, 1180.0, 720.0];
+        assert!(quality(&desk, 0.9, fw, fh, 0.0) >= MIN_VOTE_QUALITY, "the regression's precondition");
+        assert!(!votes(&desk, fw, fh), "a cut-off person must never vote");
+
+        // A thin sliver of someone half out of frame at the side.
+        assert!(!votes(&[1180.0, 200.0, 1280.0, 710.0], fw, fh));
+        // Whole and inside the frame, but squat head-and-shoulders, not a pedestrian.
+        assert!(!votes(&[500.0, 200.0, 800.0, 560.0], fw, fh));
     }
 
     #[test]
     fn top_crops_stay_best_first_and_bounded() {
+        let c = |quality: f32, votes: bool| Crop { quality, votes, b64: String::new() };
         let mut v = Vec::new();
-        for q in [0.2, 0.9, 0.5, 0.1, 0.7] { push_crop(&mut v, Crop { quality: q, b64: String::new() }); }
+        for q in [0.2, 0.9, 0.5, 0.1, 0.7] { push_crop(&mut v, c(q, false)); }
         let qs: Vec<f32> = v.iter().map(|c| c.quality).collect();
         assert_eq!(qs, vec![0.9, 0.7, 0.5]);
+
+        // One small full-body frame among large cut-off ones still makes the cut,
+        // and leads — otherwise the only crop allowed to vote would be discarded.
+        push_crop(&mut v, c(0.35, true));
+        assert_eq!(v.len(), TOP_CROPS);
+        assert!(v[0].votes && v[0].quality == 0.35);
+        assert!(!outranks(false, 0.95, &v[0]), "a cut-off crop never displaces a voting one");
     }
 
     #[test]
