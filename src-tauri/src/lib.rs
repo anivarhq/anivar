@@ -170,7 +170,7 @@ pub use timeline::get_event_timeline;
 
 
 mod nvr_recording;
-pub use nvr_recording::{start_nvr, stop_nvr, save_nvr_segment, get_nvr_segments, list_nvr_recordings, get_events_in_range, get_event_markers, list_recorded_days, search_events, find_similar_events, reindex_semantic_search, list_bookmarked_events};
+pub use nvr_recording::{start_nvr, stop_nvr, get_nvr_segments, list_nvr_recordings, get_events_in_range, get_event_markers, list_recorded_days, search_events, find_similar_events, reindex_semantic_search, list_bookmarked_events};
 
 mod rtsp;
 pub use rtsp::{start_rtsp_relay, stop_rtsp_relay, probe_stream};
@@ -522,7 +522,6 @@ pub fn run() {
             save_clip_blob,
             start_nvr,
             stop_nvr,
-            save_nvr_segment,
             get_nvr_segments,
             list_nvr_recordings,
             list_recorded_days,
