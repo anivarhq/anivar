@@ -76,8 +76,6 @@ export const api = {
   startNvr: (camId: number, sourceUrl?: string) =>
     invoke<{ mode: string; segment_mins: number }>("start_nvr", { camId, sourceUrl: sourceUrl ?? "" }),
   stopNvr: (camId: number) => invoke<void>("stop_nvr", { camId }),
-  saveNvrSegment: (camId: number, filename: string, blobB64: string, mimeType: string) =>
-    invoke<void>("save_nvr_segment", { camId, filename, blobB64, mimeType }),
   getNvrSegments: (camId?: number, limit?: number) =>
     invoke<{ id: string; cam_id: number; path: string; started_at: string; ended_at: string | null; size_bytes: number }[]>("get_nvr_segments", { camId: camId ?? null, limit: limit ?? 100 }),
   startRtspRelay: (camId: number, url: string) =>
