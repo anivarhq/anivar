@@ -62,10 +62,12 @@ pub async fn fix_firewall(state: State<'_, Arc<AppState>>) -> Result<String, Str
     Ok("Not needed on this platform".to_string())
 }
 
-/// ONVIF WS-Discovery — sends UDP multicast probe, returns discovered devices.
+/// ONVIF WS-Discovery: a multicast Probe, plus the same Probe sent to every host
+/// in the local /24. A device that can't do multicast (an iPhone without Apple's
+/// multicast entitlement) still answers a Probe sent straight to it.
 #[tauri::command]
 pub async fn discover_onvif(timeout_ms: Option<u64>) -> Result<Vec<serde_json::Value>, String> {
-    use std::net::{UdpSocket, SocketAddr};
+    use std::net::{IpAddr, Ipv4Addr, UdpSocket, SocketAddr};
     use std::time::Duration;
 
     let timeout  = Duration::from_millis(timeout_ms.unwrap_or(3000));
@@ -82,33 +84,58 @@ pub async fn discover_onvif(timeout_ms: Option<u64>) -> Result<Vec<serde_json::V
         s.set_read_timeout(Some(timeout)).ok();
         let dest: SocketAddr = "239.255.255.250:3702".parse().unwrap();
         s.send_to(probe.as_bytes(), dest).map_err(|e| e.to_string())?;
-
-        let mut results: Vec<serde_json::Value> = Vec::new();
-        let mut buf = vec![0u8; 65536];
-        let deadline = std::time::Instant::now() + timeout;
-        loop {
-            if std::time::Instant::now() >= deadline { break; }
-            match s.recv_from(&mut buf) {
-                Ok((n, addr)) => {
-                    let xml = String::from_utf8_lossy(&buf[..n]).to_string();
-                    let xaddrs = extract_xml_text(&xml, "XAddrs").unwrap_or_default();
-                    if xaddrs.is_empty() { continue; }
-                    let device_url = xaddrs.split_whitespace().next().unwrap_or("").to_string();
-                    results.push(serde_json::json!({
-                        "device_url": device_url,
-                        "xaddrs": xaddrs,
-                        "source_ip": addr.ip().to_string(),
-                    }));
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
-                       || e.kind() == std::io::ErrorKind::TimedOut => break,
-                Err(_) => break,
+        if let Ok(IpAddr::V4(me)) = local_ip_address::local_ip() {
+            let [a, b, c, _] = me.octets();
+            for d in 1..=254 {
+                let host = Ipv4Addr::new(a, b, c, d);
+                if host != me { let _ = s.send_to(probe.as_bytes(), (host, 3702)); }
             }
         }
-        Ok(results)
+        Ok(collect_probe_matches(&s, std::time::Instant::now() + timeout))
     }).await.map_err(|e| e.to_string())??;
 
     Ok(results)
+}
+
+/// ProbeMatch replies received on `s` until `deadline`, one per device.
+fn collect_probe_matches(s: &std::net::UdpSocket, deadline: std::time::Instant) -> Vec<serde_json::Value> {
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    let mut buf = vec![0u8; 65536];
+    loop {
+        if std::time::Instant::now() >= deadline { break; }
+        match s.recv_from(&mut buf) {
+            Ok((n, addr)) => {
+                let ip = addr.ip().to_string();
+                // A device can answer both the multicast and the unicast Probe.
+                if results.iter().any(|r| r["source_ip"] == ip) { continue; }
+                let xml = String::from_utf8_lossy(&buf[..n]).to_string();
+                let xaddrs = extract_xml_text(&xml, "XAddrs").unwrap_or_default();
+                // Dual-stack cameras list an IPv6 address too; prefer IPv4.
+                let Some(device_url) = xaddrs.split_whitespace().find(|u| !u.contains('['))
+                    .or_else(|| xaddrs.split_whitespace().next()) else { continue };
+                results.push(serde_json::json!({
+                    "device_url": device_url,
+                    "xaddrs": xaddrs,
+                    "source_ip": ip,
+                }));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
+                   || e.kind() == std::io::ErrorKind::TimedOut => break,
+            // Windows reports a host's ICMP port-unreachable (it got a unicast
+            // Probe but isn't a camera) as a reset on the next receive. The
+            // other replies are still on their way.
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => continue,
+            Err(_) => break,
+        }
+    }
+    results
+}
+
+/// `rtsp://host/…` → `rtsp://user:pass@host/…`, both percent-encoded so a
+/// password with `@ : / #` can't break the URL (as AddCameraModal does).
+fn with_credentials(uri: &str, user: &str, pass: &str) -> String {
+    let userinfo = format!("rtsp://{}:{}@", urlencoding::encode(user), urlencoding::encode(pass));
+    uri.replacen("rtsp://", &userinfo, 1)
 }
 
 /// Fetch ONVIF media profiles and RTSP stream URIs from a specific device.
@@ -136,10 +163,9 @@ pub async fn get_onvif_streams(
         let uri_body = format!(r#"<trt:GetStreamUri xmlns:trt="http://www.onvif.org/ver10/media/wsdl"><trt:StreamSetup><tt:Stream xmlns:tt="http://www.onvif.org/ver10/schema">RTP-Unicast</tt:Stream><tt:Transport xmlns:tt="http://www.onvif.org/ver10/schema"><tt:Protocol>RTSP</tt:Protocol></tt:Transport></trt:StreamSetup><trt:ProfileToken>{token}</trt:ProfileToken></trt:GetStreamUri>"#);
         let uri_xml = onvif_request(&device_url, &uri_body, &username, &password).await.unwrap_or_default();
         let mut rtsp = extract_xml_text(&uri_xml, "Uri").unwrap_or_default();
-        // Inject credentials into RTSP URL if provided
         if let (Some(u), Some(p)) = (&username, &password) {
             if !u.is_empty() && rtsp.starts_with("rtsp://") {
-                rtsp = rtsp.replacen("rtsp://", &format!("rtsp://{}:{}@", u, p), 1);
+                rtsp = with_credentials(&rtsp, u, p);
             }
         }
         if !rtsp.is_empty() {
@@ -196,4 +222,39 @@ pub async fn discover_and_configure_onvif(
         }
     }
     Ok(all)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credentials_are_percent_encoded() {
+        assert_eq!(
+            with_credentials("rtsp://192.168.1.64:554/main", "admin", "p@ss:w/rd#"),
+            "rtsp://admin:p%40ss%3Aw%2Frd%23@192.168.1.64:554/main"
+        );
+    }
+
+    #[test]
+    fn a_reset_does_not_end_the_scan() {
+        use std::net::UdpSocket;
+        use std::time::{Duration, Instant};
+
+        let s = UdpSocket::bind("127.0.0.1:0").unwrap();
+        s.set_read_timeout(Some(Duration::from_millis(300))).unwrap();
+        // A Probe to a closed port: on Windows the ICMP reply becomes a
+        // ConnectionReset on the next receive, ahead of the camera's answer.
+        let closed = UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+        s.send_to(b"probe", closed).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        let camera = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let reply = "<d:ProbeMatches><d:XAddrs>http://[fe80::1]/onvif/device_service http://127.0.0.1/onvif/device_service</d:XAddrs></d:ProbeMatches>";
+        camera.send_to(reply.as_bytes(), s.local_addr().unwrap()).unwrap();
+        camera.send_to(reply.as_bytes(), s.local_addr().unwrap()).unwrap();
+
+        let found = collect_probe_matches(&s, Instant::now() + Duration::from_millis(600));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0]["device_url"], "http://127.0.0.1/onvif/device_service");
+    }
 }
