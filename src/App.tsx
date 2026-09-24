@@ -79,10 +79,10 @@ const TABS = [
 export default function App() {
   // Shallow selector: App re-renders ONLY when tab/liveView/toast change — not on the
   // per-tick camera churn (motionScore/fps/latestFrame) that lives in the same store.
-  const { tab, setTab, liveView, setLiveView, setFocusedCam, toast, clearToast, setSettings, setStreamInfo, setEvents } = useStore(useShallow(s => ({
+  const { tab, setTab, liveView, setLiveView, setFocusedCam, toast, clearToast, setSettings, setStreamInfo } = useStore(useShallow(s => ({
     tab: s.tab, setTab: s.setTab, liveView: s.liveView, setLiveView: s.setLiveView,
     setFocusedCam: s.setFocusedCam, toast: s.toast, clearToast: s.clearToast,
-    setSettings: s.setSettings, setStreamInfo: s.setStreamInfo, setEvents: s.setEvents,
+    setSettings: s.setSettings, setStreamInfo: s.setStreamInfo,
   })));
 
   // The Live drill-down (grid → camera → player) drives two side-nav behaviours:
@@ -169,7 +169,6 @@ export default function App() {
   useEffect(() => {
     api.getSettings().then(setSettings).catch(console.error);
     api.getStreamInfo().then(setStreamInfo).catch(console.error);
-    api.getMotionEvents(500).then(setEvents).catch(console.error);
   }, []);
 
   // Live settings sync: the backend emits `settings:updated` whenever settings

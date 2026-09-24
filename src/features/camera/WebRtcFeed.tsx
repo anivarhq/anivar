@@ -23,7 +23,18 @@ export function WebRtcFeed({ port, token, camId, className }: {
     const video = videoRef.current;
     if (!video) return;
     let dead = false;
+    let warmup = 0;
     const pc = new RTCPeerConnection();
+    // Every route to the HLS rung closes the peer connection first. They used
+    // to just flip `fallback`, which left the connection open (it only closed
+    // on unmount) while HlsFeed streamed the same camera again.
+    const fallBack = () => {
+      if (dead) return;
+      dead = true;
+      window.clearTimeout(warmup);
+      pc.close();
+      setFallback(true);
+    };
     pc.ontrack = (e) => {
       if (video.srcObject !== e.streams[0]) video.srcObject = e.streams[0];
       video.play().catch(() => {});
@@ -31,7 +42,7 @@ export function WebRtcFeed({ port, token, camId, className }: {
     pc.addTransceiver("video", { direction: "recvonly" });
     pc.addTransceiver("audio", { direction: "recvonly" });
     pc.onconnectionstatechange = () => {
-      if (!dead && ["failed", "closed"].includes(pc.connectionState)) setFallback(true);
+      if (["failed", "closed"].includes(pc.connectionState)) fallBack();
     };
 
     (async () => {
@@ -57,13 +68,13 @@ export function WebRtcFeed({ port, token, camId, className }: {
         if (dead) return;
         await pc.setRemoteDescription({ type: "answer", sdp: answer });
       } catch {
-        if (!dead) setFallback(true);
+        fallBack();
       }
     })();
 
     // No playable frame within a few seconds → drop to the HLS rung.
-    const warmup = window.setTimeout(() => {
-      if (!dead && video.readyState < 2) setFallback(true);
+    warmup = window.setTimeout(() => {
+      if (video.readyState < 2) fallBack();
     }, 6000);
 
     return () => { dead = true; window.clearTimeout(warmup); pc.close(); };

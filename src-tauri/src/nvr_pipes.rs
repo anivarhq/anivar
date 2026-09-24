@@ -331,16 +331,61 @@ pub(crate) async fn spawn_nvr_pipe(
 }
 
 
-/// Does this finalized MP4 contain an audio stream? One quick `ffmpeg -i` probe
-/// (stderr parse — we ship ffmpeg, not ffprobe). Powers the per-segment
-/// `has_audio` flag that playback uses to decide whether to map audio.
+/// Does this MP4 carry an audio track? Walks the top-level boxes to `moov`
+/// (front or back of the file) and looks for a `hdlr` whose handler type is
+/// `soun`. Same answer as `ffmpeg -i` (checked on real segments, a video-only
+/// copy and the oldest archive segment) without a process per segment.
+/// `None` when the file isn't a parseable MP4.
+pub(crate) fn mp4_has_audio<R: std::io::Read + std::io::Seek>(r: &mut R) -> Option<bool> {
+    use std::io::SeekFrom;
+    let len = r.seek(SeekFrom::End(0)).ok()?;
+    let mut pos = 0u64;
+    while pos + 8 <= len {
+        r.seek(SeekFrom::Start(pos)).ok()?;
+        let mut hdr = [0u8; 8];
+        r.read_exact(&mut hdr).ok()?;
+        let kind: [u8; 4] = hdr[4..8].try_into().ok()?;
+        let mut size = u32::from_be_bytes(hdr[..4].try_into().ok()?) as u64;
+        let mut hdr_len = 8u64;
+        if size == 1 {
+            let mut big = [0u8; 8];
+            r.read_exact(&mut big).ok()?;
+            size = u64::from_be_bytes(big);
+            hdr_len = 16;
+        } else if size == 0 {
+            size = len - pos; // box runs to end of file
+        }
+        if size < hdr_len { return None; }
+        if &kind == b"moov" {
+            let body = (size - hdr_len).min(16 << 20) as usize;
+            let mut buf = vec![0u8; body];
+            r.read_exact(&mut buf).ok()?;
+            // hdlr box: size, "hdlr", version+flags, pre_defined, handler_type.
+            return Some((0..buf.len().saturating_sub(15)).any(|i|
+                &buf[i..i + 4] == b"hdlr" && &buf[i + 12..i + 16] == b"soun"));
+        }
+        pos = pos.checked_add(size)?;
+    }
+    None
+}
+
+/// Powers the per-segment `has_audio` flag that playback uses to decide
+/// whether to map audio. Reads the MP4 header; only an unparseable file falls
+/// back to an `ffmpeg -i` probe, which is bounded so a hung ffmpeg can't stall
+/// the single postprocessor loop every camera's indexing goes through.
 async fn file_has_audio(ffmpeg: &std::path::Path, file: &std::path::Path) -> bool {
-    let out = crate::proc::tokio_cmd(ffmpeg)
+    let p = file.to_path_buf();
+    let scanned = tokio::task::spawn_blocking(move ||
+        std::fs::File::open(&p).ok().and_then(|mut f| mp4_has_audio(&mut f)))
+        .await.ok().flatten();
+    if let Some(v) = scanned { return v; }
+    let probe = crate::proc::tokio_cmd(ffmpeg)
         .args(["-hide_banner", "-i", &file.to_string_lossy()])
-        .output().await;
-    match out {
-        Ok(o) => String::from_utf8_lossy(&o.stderr).contains(" Audio:"),
-        Err(_) => false,
+        .kill_on_drop(true)
+        .output();
+    match tokio::time::timeout(std::time::Duration::from_secs(20), probe).await {
+        Ok(Ok(o)) => String::from_utf8_lossy(&o.stderr).contains(" Audio:"),
+        _ => false,
     }
 }
 
@@ -404,8 +449,10 @@ pub(crate) async fn postprocess_nvr_segments(
                 continue;
             }
 
-            // Run +faststart conversion
-            let result = crate::proc::tokio_cmd(&ffmpeg)
+            // Run +faststart conversion. Bounded: this one loop indexes every
+            // camera, so a hung ffmpeg (locked or corrupt file) used to stop all
+            // indexing. A timeout counts as a failed attempt like any other.
+            let remux = crate::proc::tokio_cmd(&ffmpeg)
                 .args([
                     "-hide_banner", "-loglevel", "error", "-y",
                     "-i", &path.to_string_lossy(),
@@ -413,7 +460,10 @@ pub(crate) async fn postprocess_nvr_segments(
                     "-movflags", "+faststart",
                     &final_path.to_string_lossy(),
                 ])
-                .status().await;
+                .kill_on_drop(true)
+                .status();
+            let result = tokio::time::timeout(std::time::Duration::from_secs(120), remux).await
+                .unwrap_or_else(|_| Err(std::io::Error::other("faststart remux timed out")));
 
             if !result.map(|s| s.success()).unwrap_or(false) {
                 let count = fail_counts.entry(fname.clone()).or_insert(0);
@@ -572,14 +622,21 @@ pub(crate) async fn reindex_existing_nvr_segments(nvr_dir: &std::path::Path, db:
         let ended_at_rfc = chrono::DateTime::<Utc>::from_timestamp(ended_unix as i64, 0)
             .unwrap_or_else(Utc::now).to_rfc3339();
 
+        // has_audio was left out here, so it defaulted to 0: every segment
+        // recovered after a DB reset played silent, and exports dropped audio.
+        let p = path.clone();
+        let has_audio = tokio::task::spawn_blocking(move ||
+            std::fs::File::open(&p).ok().and_then(|mut f| mp4_has_audio(&mut f)))
+            .await.ok().flatten().unwrap_or(false);
+
         let seg_id = uuid::Uuid::new_v4().to_string();
         sqlx::query(
-            "INSERT OR IGNORE INTO nvr_segments(id,cam_id,path,started_at,ended_at,duration_secs,size_bytes) VALUES(?,?,?,?,?,?,?)"
+            "INSERT OR IGNORE INTO nvr_segments(id,cam_id,path,started_at,ended_at,duration_secs,size_bytes,has_audio) VALUES(?,?,?,?,?,?,?,?)"
         )
         .bind(&seg_id).bind(cam_num as i64)
         .bind(path.to_string_lossy().as_ref())
         .bind(&started_at_rfc).bind(&ended_at_rfc)
-        .bind(duration_secs).bind(size_bytes)
+        .bind(duration_secs).bind(size_bytes).bind(has_audio as i64)
         .execute(db).await.ok();
         indexed += 1;
     }
@@ -693,6 +750,50 @@ pub(crate) async fn pipe_frames_to_ffmpeg(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mp4_box(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut v = ((8 + body.len()) as u32).to_be_bytes().to_vec();
+        v.extend_from_slice(kind);
+        v.extend_from_slice(body);
+        v
+    }
+    /// ftyp + moov{trak{mdia{hdlr <handler>}}}, optionally with a big mdat first.
+    fn mp4_with(handlers: &[&[u8; 4]], mdat_first: usize) -> Vec<u8> {
+        let traks: Vec<u8> = handlers.iter().flat_map(|h| {
+            let mut hdlr = vec![0u8; 8];            // version+flags, pre_defined
+            hdlr.extend_from_slice(*h);              // handler_type
+            hdlr.extend_from_slice(&[0u8; 13]);      // reserved + empty name
+            mp4_box(b"trak", &mp4_box(b"mdia", &mp4_box(b"hdlr", &hdlr)))
+        }).collect();
+        let mut f = mp4_box(b"ftyp", b"isom\0\0\0\0isom");
+        if mdat_first > 0 { f.extend(mp4_box(b"mdat", &vec![0u8; mdat_first])); }
+        f.extend(mp4_box(b"moov", &traks));
+        f
+    }
+
+    #[test]
+    fn mp4_has_audio_reads_the_moov_handlers() {
+        use std::io::Cursor;
+        let has = |b: Vec<u8>| mp4_has_audio(&mut Cursor::new(b));
+        assert_eq!(has(mp4_with(&[b"vide", b"soun"], 0)), Some(true), "video + audio");
+        assert_eq!(has(mp4_with(&[b"vide"], 0)), Some(false), "video only");
+        assert_eq!(has(mp4_with(&[b"vide", b"soun"], 50_000)), Some(true), "moov after mdat");
+        // "soun" inside the media data must not count: only moov is scanned.
+        let mut decoy = mp4_box(b"ftyp", b"isom");
+        decoy.extend(mp4_box(b"mdat", b"hdlr\0\0\0\0\0\0\0\0soun"));
+        decoy.extend(mp4_box(b"moov", &mp4_box(b"trak", b"")));
+        assert_eq!(has(decoy), Some(false), "mdat bytes are not handlers");
+        // 64-bit box size (size field == 1): a 24-byte mdat between ftyp and moov.
+        let base = mp4_with(&[b"soun"], 0);
+        let (ftyp, moov) = base.split_at(20); // ftyp box is 8 + 12 bytes
+        let mut big = ftyp.to_vec();
+        big.extend(1u32.to_be_bytes()); big.extend(b"mdat");
+        big.extend(24u64.to_be_bytes()); big.extend([0u8; 8]);
+        big.extend_from_slice(moov);
+        assert_eq!(has(big), Some(true), "largesize box skipped correctly");
+        assert_eq!(has(b"not an mp4 at all".to_vec()), None);
+        assert_eq!(has(Vec::new()), None);
+    }
 
     // `segment_local_name_to_utc` is the ONE place ffmpeg's LOCAL-time segment filename
     // (`-strftime`) becomes the UTC the DB stores. A bug here silently misplaces every
