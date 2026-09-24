@@ -7,6 +7,59 @@ and this project (will) adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-09-24
+
+### Security: a shared link could leave your server on the internet
+
+- **Sharing a clip opened a public tunnel that nothing ever closed.** It
+  survived reboots, and even "Revoke all" left it open, so one shared link
+  could leave the whole server reachable from the internet indefinitely.
+  Revoking all shares now closes it, and so does the last share link
+  expiring. A tunnel you turned on yourself is left alone.
+- **A forgotten sign-in page has been removed.** It skipped the rate limiter,
+  stored its password without a salt, and handed back the master token.
+  Nothing in the app could ever set that password.
+- **Fifteen bad requests could lock you out of your own app.** The rate
+  limiter ran before the token check and counted requests by a header any
+  caller can set. The token is checked first now.
+- **Camera passwords no longer appear in the logs**, and the site check that
+  guards the local web address no longer accepts a lookalike domain.
+- **Depth Anonymization is refused on network cameras** instead of being shown
+  as on. Only USB cameras can record depth-only video; an RTSP camera kept
+  recording ordinary video while the screen said otherwise.
+- **The firewall no longer opens ports 4002-4003.** They belonged to a feature
+  that was removed, and the old rule is deleted.
+
+### Fixed
+
+- **Exporting a video works again.** Every export failed because the app was
+  not allowed to write the file.
+- **Today's recorded footage plays past the moment you opened it.** It used to
+  stop at the time the panel was opened and refuse to go further.
+- **Footage recovered after a database reset has its sound again.** The
+  re-indexer forgot to record that a segment had audio, so it played silent.
+- **ONVIF cameras that ask for a password can now be added.** The sign-in used
+  the wrong hash, so it could never succeed with any camera. Network scanning
+  also missed cameras whose replies use a different XML style, and a password
+  containing `@ : / #` corrupted the stream address.
+- **Network scanning now also asks each address directly**, so it finds
+  cameras that don't answer a broadcast.
+- **The update check links the installer for the system you are on.**
+
+### Changed: less work per frame, and fewer stalls
+
+- **Motion detection decodes only the brightness of each frame** (5.1 ms down
+  to 1.1 ms), and reads camera video in chunks rather than byte by byte.
+- **Whether a recording has sound is read from the file itself** instead of
+  starting ffmpeg for every ten seconds of video.
+- **Every ffmpeg probe now has a time limit** and is stopped if the app moves
+  on, so one stuck file cannot hold up indexing, playback or clip export.
+- **Several screens stopped leaking work in the background:** live view
+  releases its video connection when it falls back, the USB capture loop stops
+  when its screen closes, a seek is cancelled when you seek again, and a
+  five-hundred-row fetch that ran every two seconds into an unused field is
+  gone.
+
 ## [0.1.3] - 2026-09-16
 
 ### Changed: the People section, rebuilt around visits
