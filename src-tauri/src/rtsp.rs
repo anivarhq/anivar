@@ -74,7 +74,7 @@ pub async fn start_rtsp_relay(
         let mut procs = state.rtsp_processes.lock().await;
         if let Some(child) = procs.get_mut(&cam) {
             if matches!(child.try_wait(), Ok(None)) {
-                tracing::debug!("rtsp cam{}: already relaying {} — reusing", cam, url);
+                tracing::debug!("rtsp cam{}: already relaying {} — reusing", cam, crate::native_cam_cmds::mask_stream_url(&url));
                 return Ok(());
             }
         }
@@ -106,7 +106,7 @@ pub async fn start_rtsp_relay(
     // stay on the main URL.
     let detect_src = cam_detect_url(&state, cam).await.unwrap_or_else(|| url.clone());
     if detect_src != url {
-        tracing::info!("rtsp cam{cam}: detection uses sub-stream {detect_src}");
+        tracing::info!("rtsp cam{cam}: detection uses sub-stream {}", crate::native_cam_cmds::mask_stream_url(&detect_src));
     }
     let mut det_args = input_args(&detect_src);
     det_args.extend([
@@ -172,7 +172,7 @@ pub async fn start_rtsp_relay(
 
     state.rtsp_processes.lock().await.insert(cam, child);
     state.capture_keys.lock().await.insert(cam, key);
-    tracing::info!("RTSP relay started for cam{}: {}", cam, url);
+    tracing::info!("RTSP relay started for cam{}: {}", cam, crate::native_cam_cmds::mask_stream_url(&url));
 
     // go2rtc: restream this camera over WebRTC for sub-second live view.
     // Best-effort and fully decoupled — on any failure the frontend's

@@ -8,14 +8,13 @@
 //! Adding a share:
 //!   1. Bring the public URL up (`tailscale::ensure_public_url`) — idempotent.
 //!   2. Mint an HMAC-signed token bound to the current `share_generation`.
-//!   3. Register the entry in `state.active_shares` so the auto-stop loop
+//!   3. Register the entry in `state.active_shares` so `spawn_tunnel_auto_stop`
 //!      can see active shares + the UI can list them.
 //!
 //! Revoking everything:
 //!   1. Bump `share_generation` — every outstanding token's HMAC stops
 //!      verifying immediately (the cookie derivation depends on it too).
-//!   2. Clear `active_shares`. The auto-stop loop will tear the tunnel down
-//!      on its next tick.
+//!   2. Clear `active_shares` and take the public tunnel down immediately.
 
 use std::sync::Arc;
 
@@ -199,13 +198,41 @@ pub async fn revoke_all_shares(state: State<'_, Arc<AppState>>) -> Result<(), St
         *gen = gen.wrapping_add(1);
         *gen
     };
-    // Drop the active list. The auto-stop loop will close the tunnel on
-    // its next tick (within ~60 s).
     state.active_shares.write().await.clear();
     // Persist BOTH: without this, a restart reloaded the old generation and
     // the old share list — resurrecting every link the user just revoked.
     persist_shares(&state.db, &[], generation).await;
+    // Nothing is shared any more, so nothing should be public. `funnel --bg`
+    // persists in tailscaled across reboots; left up, the whole server stayed
+    // reachable from the internet after "revoke all".
+    crate::tailscale::disable_funnel().await;
     Ok(())
+}
+
+/// Close the public tunnel when the last share keeping it open expires.
+///
+/// Fires only on the transition from "some shares" to "none", so a funnel the
+/// user switched on by hand in Settings (no shares at all) is left alone.
+/// Skipped when `tunnel_auto_stop` is off.
+pub(crate) fn spawn_tunnel_auto_stop(state: Arc<AppState>) {
+    tauri::async_runtime::spawn(async move {
+        let mut had_shares = !state.active_shares.read().await.is_empty();
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            tick.tick().await;
+            let now = chrono::Utc::now().timestamp();
+            let empty = {
+                let mut shares = state.active_shares.write().await;
+                shares.retain(|s| s.expires_at == 0 || s.expires_at > now);
+                shares.is_empty()
+            };
+            if had_shares && empty && state.settings.read().await.tunnel_auto_stop {
+                crate::tailscale::disable_funnel().await;
+                tracing::info!("share links: last one expired, public tunnel closed");
+            }
+            had_shares = !empty;
+        }
+    });
 }
 
 #[tauri::command]

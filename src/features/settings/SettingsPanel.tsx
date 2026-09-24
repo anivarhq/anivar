@@ -1473,11 +1473,9 @@ export function SettingsPanel() {
             </select>
           </Field>
 
-          {/* "Auto-stop tunnel when idle" lived here. `tunnel_auto_stop` has ZERO
-              read sites in the Rust tree — state.rs declares it and nothing else
-              mentions it, while the auto-stop loop in share_cmds.rs runs
-              unconditionally and never consults the flag. A security control that
-              promised a "minimal remote-exposure window" and controlled nothing. */}
+          {/* "Auto-stop tunnel when idle" lived here. The behaviour is now always
+              on (`tunnel_auto_stop` defaults true): share_cmds.rs closes the public
+              tunnel on "Revoke all" and when the last share link expires. */}
 
           <div style={{
             marginTop: 12, padding: "10px 12px", borderRadius: 8,

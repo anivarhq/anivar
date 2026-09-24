@@ -235,14 +235,14 @@ pub async fn ensure_funnel(port: u16) -> Result<String, String> {
     }
 }
 
-/// Stop funnelling `port` (best-effort; used on teardown / provider switch).
-/// Currently unused: the funnel is torn down by `ensure_funnel`'s own idle path.
-/// Kept because share-link revocation needs it the moment that becomes manual.
-#[allow(dead_code)]
-pub async fn disable_funnel(port: u16) {
-    let _ = run_tailscale(&["funnel", "--https=443", &port.to_string(), "off"], 5).await;
-    // Fallback to the blanket reset if the specific form isn't supported.
-    let _ = run_tailscale(&["funnel", "reset"], 5).await;
+/// Take down the public listener `ensure_funnel` put up (best-effort).
+///
+/// `funnel --bg <port>` serves on HTTPS 443, and `--https=443 off` removes
+/// exactly that listener — the form Tailscale itself prints after enabling
+/// (verified on 1.102: a second funnel on :10000 survived it untouched). Never
+/// `funnel reset`: that wipes every funnel on the machine, not just ours.
+pub async fn disable_funnel() {
+    let _ = run_tailscale(&["funnel", "--https=443", "off"], 5).await;
 }
 
 // ─── Tauri commands ──────────────────────────────────────────────────────────

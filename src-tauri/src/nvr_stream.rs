@@ -532,7 +532,10 @@ async fn build_concat_manifest(
     let concat_path = data_dir.join(format!("_concat_{}_{}.txt", cam_id, manifest_id));
     let mut manifest = String::new();
     for (path, _started) in relevant.iter() {
-        let escaped = path.replace('\\', "/");
+        // Concat-demuxer quoting: inside '...' a literal ' is written '\''.
+        // Unescaped, one apostrophe in the data dir (e.g. a Windows user named
+        // O'Brien) broke every concat, export and event clip.
+        let escaped = path.replace('\\', "/").replace('\'', "'\\''");
         manifest.push_str(&format!("file '{}'\n", escaped));
     }
     if let Err(e) = tokio::fs::write(&concat_path, &manifest).await {

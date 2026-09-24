@@ -37,8 +37,8 @@ pub async fn fix_firewall(state: State<'_, Arc<AppState>>) -> Result<String, Str
              netsh advfirewall firewall delete rule name=\"Nivar\" >$null 2>&1\r\n\
              netsh advfirewall firewall delete rule name=\"Nivar-P2P\" >$null 2>&1\r\n\
              netsh advfirewall firewall add rule name=\"Anivar\" protocol=TCP dir=in action=allow localport={port} enable=yes profile=any\r\n\
-             netsh advfirewall firewall add rule name=\"Anivar-P2P\" protocol=TCP dir=in action=allow localport=4002-4003 enable=yes profile=any\r\n\
-             Write-Host \"Anivar firewall rules added! Port {port} and 4002-4003 are now open.\" -ForegroundColor Green\r\n\
+             netsh advfirewall firewall delete rule name=\"Anivar-P2P\" >$null 2>&1\r\n\
+             Write-Host \"Anivar firewall rule added! Port {port} is now open.\" -ForegroundColor Green\r\n\
              Start-Sleep 2\r\n"
         );
         tokio::fs::write(&script_path, script).await.map_err(|e| e.to_string())?;

@@ -31,7 +31,7 @@ pub async fn get_active_cameras(state: State<'_, Arc<AppState>>) -> Result<Vec<u
 }
 
 /// Mask the password in a stream URL for display (rtsp://user:••••@host…).
-fn mask_stream_url(url: &str) -> String {
+pub(crate) fn mask_stream_url(url: &str) -> String {
     if let Some(scheme_end) = url.find("://") {
         let after = &url[scheme_end + 3..];
         if let Some(at) = after.find('@') {

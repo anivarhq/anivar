@@ -161,50 +161,6 @@ pub(crate) async fn cam_proxy(
     }
 }
 
-/// Login with username + password — returns the persistent auth token.
-/// Hosts that didn't configure password auth get 403 (no fallback path now;
-/// pre-v11 the alternative was QR pairing through the mobile PWA, which is
-/// gone).
-pub(crate) async fn login_with_password(
-    AxumState(s): AxumState<StreamState>,
-    axum::Json(body): axum::Json<serde_json::Value>,
-) -> Response {
-    let username = body.get("username").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-    let password = body.get("password").and_then(|v| v.as_str()).unwrap_or("").to_string();
-
-    let app_state = match s.app_handle.try_state::<Arc<AppState>>() {
-        Some(st) => st,
-        None => return (StatusCode::INTERNAL_SERVER_ERROR, "Server error").into_response(),
-    };
-    let settings = app_state.settings.read().await;
-
-    if settings.auth_username.is_empty() || settings.auth_password_hash.is_empty() {
-        return (StatusCode::FORBIDDEN,
-            axum::Json(serde_json::json!({ "error": "Password login not configured." }))
-        ).into_response();
-    }
-
-    if !constant_time_eq(username.as_bytes(), settings.auth_username.as_bytes()) {
-        return (StatusCode::UNAUTHORIZED,
-            axum::Json(serde_json::json!({ "error": "Invalid username or password." }))
-        ).into_response();
-    }
-
-    let provided_hash = sha256_hex(password.as_bytes());
-    if !constant_time_eq(provided_hash.as_bytes(), settings.auth_password_hash.as_bytes()) {
-        return (StatusCode::UNAUTHORIZED,
-            axum::Json(serde_json::json!({ "error": "Invalid username or password." }))
-        ).into_response();
-    }
-
-    let token = app_state.auth_token.read().await.clone();
-    drop(settings);
-
-    (StatusCode::OK,
-        axum::Json(serde_json::json!({ "token": token, "device_name": "Anivar" }))
-    ).into_response()
-}
-
 pub(crate) fn sha256_hex(data: &[u8]) -> String {
     use sha2::{Sha256, Digest};
     let mut hasher = Sha256::new();

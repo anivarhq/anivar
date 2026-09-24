@@ -383,7 +383,6 @@ export const api = {
     invoke<ShareLinkResult>("generate_share_link", { kind, resourceId, expiryMins }),
   revokeAllShares:  () => invoke<void>("revoke_all_shares"),
   listActiveShares: () => invoke<ShareEntry[]>("list_active_shares"),
-  setAuthPassword: (password: string) => invoke<void>("set_auth_password", { password }),
   // ── Desktop login gate (Argon2id + Telegram recovery/2FA) ──────────────────
   authStatus: () => invoke<AuthStatus>("auth_status"),
   setLoginPassword: (newPassword: string, currentPassword?: string) =>

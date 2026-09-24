@@ -286,6 +286,14 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
   })();
   const toggleAnonymize = async () => {
     if (anonBusy || !svSettings) return;
+    // Only the USB capture path (dshow.rs) actually records and streams depth.
+    // Network cameras keep recording raw, so turning it on there would be a
+    // promise the backend can't keep. Turning it OFF is always allowed.
+    if (!anonOn && source?.kind !== "native") {
+      useStore.getState().showToast(
+        "Depth Anonymization isn't available for network cameras yet. This camera records raw video.", "error");
+      return;
+    }
     setAnonBusy(true);
     try {
       if (!anonOn) {

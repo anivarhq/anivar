@@ -56,8 +56,11 @@ export function HlsFeed({ port, token, camId, className }: {
 
     // If the HLS pipe hasn't produced a playable frame within a few seconds (e.g. the
     // camera capture is still starting up), show MJPEG meanwhile rather than a black box.
+    // Destroy before falling back, as the error path does: the fallback removes
+    // the <video> but not this effect, so hls.js kept downloading the live
+    // playlist beside the MJPEG stream until the tile unmounted.
     const warmup = window.setTimeout(() => {
-      if (!dead && video.readyState < 2) setFallback(true);
+      if (!dead && video.readyState < 2) { dead = true; hls.destroy(); setFallback(true); }
     }, 6000);
 
     return () => { window.clearTimeout(warmup); hls.destroy(); };

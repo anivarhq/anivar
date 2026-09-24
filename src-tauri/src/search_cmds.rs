@@ -24,13 +24,17 @@ pub async fn check_for_update(repo: String) -> Result<serde_json::Value, String>
     let notes      = body["body"].as_str().unwrap_or("").chars().take(500).collect::<String>();
     let published  = body["published_at"].as_str().unwrap_or("");
 
-    // Find Windows .exe or .msi download URL
+    // The installer for THIS platform. This used to take the first .exe/.msi
+    // for everyone, so macOS and Linux users were handed the Windows installer
+    // (and .msi is never built). Falls back to the release page.
+    let wanted: &[&str] = if cfg!(target_os = "windows") { &["-setup.exe"] }
+        else if cfg!(target_os = "macos") { &[".dmg"] }
+        else { &[".AppImage", ".deb"] };
     let download_url = body["assets"].as_array()
-        .and_then(|a| a.iter().find(|asset| {
-            let name = asset["name"].as_str().unwrap_or("");
-            name.ends_with(".exe") || name.ends_with(".msi") || name.ends_with("-setup.exe")
-        }))
+        .and_then(|assets| wanted.iter().find_map(|suffix| assets.iter().find(|asset|
+            asset["name"].as_str().unwrap_or("").ends_with(suffix))))
         .and_then(|a| a["browser_download_url"].as_str())
+        .or_else(|| body["html_url"].as_str())
         .unwrap_or("")
         .to_string();
 
