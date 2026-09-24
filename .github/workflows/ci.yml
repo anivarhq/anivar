@@ -73,7 +73,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@4716b85f2fac3e324e64fa2810f6b5c3905760a5 # 1.97
       # Prebuilt binary rather than `cargo install` — the latter compiles
       # cargo-audit from source on every run, which costs minutes for nothing.
-      - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
+      - uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2
         with:
           tool: cargo-audit
       # Fails on VULNERABILITIES. Unmaintained-crate notices are warnings by
