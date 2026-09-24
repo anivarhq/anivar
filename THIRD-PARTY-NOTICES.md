@@ -14,6 +14,11 @@ These ship inside the installer, so their licences travel with the product.
 | ONNX Runtime execution providers | MIT | CUDA / TensorRT / DirectML provider libraries |
 | llama.cpp (`llama-cpp-2`) | MIT | On-device language model runtime, compiled in |
 | React, Vite, Zustand | MIT | Frontend |
+| hls.js | Apache-2.0 | Recorded and live video playback |
+| mermaid | MIT | Diagrams in the assistant's replies |
+| DOMPurify (via mermaid) | MPL-2.0 or Apache-2.0 | HTML sanitising for diagrams |
+| lucide-react | ISC | Icons |
+| DejaVu Sans (`dejavu` crate) | Bitstream Vera licence | Font for the detection labels drawn on alert snapshots |
 | Rust crates (see `Cargo.toml`) | MIT / Apache-2.0 | Full list via `cargo tree` |
 
 ## NOT bundled — downloaded by the user, under the upstream's terms

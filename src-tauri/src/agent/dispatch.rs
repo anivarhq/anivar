@@ -211,7 +211,7 @@ pub(super) async fn send_telegram_html(bot_token: &str, chat_id: &str, html: &st
         .send()
         .await;
     if let Err(e) = result {
-        eprintln!("[Telegram] sendMessage(HTML) error: {e}");
+        tracing::warn!("Telegram: sendMessage(HTML) error: {e}");
     }
 }
 
@@ -236,7 +236,7 @@ pub(super) async fn send_telegram_html_kb(
         .send()
         .await;
     if let Err(e) = result {
-        eprintln!("[Telegram] sendMessage(HTML+kb) error: {e}");
+        tracing::warn!("Telegram: sendMessage(HTML+kb) error: {e}");
     }
 }
 
@@ -259,7 +259,7 @@ pub async fn send_telegram(bot_token: &str, chat_id: &str, text: &str) {
         .send()
         .await;
     if let Err(e) = result {
-        eprintln!("[Telegram] sendMessage error: {e}");
+        tracing::warn!("Telegram: sendMessage error: {e}");
     }
 }
 
@@ -325,7 +325,7 @@ pub(super) async fn send_telegram_photo_caption(bot_token: &str, chat_id: &str, 
     if let Err(e) = reqwest::Client::new()
         .post(&url).timeout(Duration::from_secs(30))
         .multipart(form).send().await
-    { eprintln!("[Telegram] sendPhoto(caption) error: {e}"); }
+    { tracing::warn!("Telegram: sendPhoto(caption) error: {e}"); }
 }
 
 pub(super) async fn send_telegram_photo(bot_token: &str, chat_id: &str, jpeg: Vec<u8>, caption: &str) {
@@ -336,7 +336,7 @@ pub(super) async fn send_telegram_photo(bot_token: &str, chat_id: &str, jpeg: Ve
         .mime_str("image/jpeg")
     {
         Ok(p) => p,
-        Err(e) => { eprintln!("[Telegram] mime error: {e}"); return; }
+        Err(e) => { tracing::warn!("Telegram: mime error: {e}"); return; }
     };
     let form = reqwest::multipart::Form::new()
         .text("chat_id", chat_id.to_string())
@@ -347,7 +347,7 @@ pub(super) async fn send_telegram_photo(bot_token: &str, chat_id: &str, jpeg: Ve
         .multipart(form)
         .send().await
     {
-        eprintln!("[Telegram] sendPhoto error: {e}");
+        tracing::warn!("Telegram: sendPhoto error: {e}");
     }
 }
 
@@ -425,7 +425,7 @@ pub(super) async fn send_telegram_video(
         .send().await
     {
         Ok(r) => r.status().is_success(),
-        Err(e) => { eprintln!("[Telegram] sendVideo error: {e}"); false }
+        Err(e) => { tracing::warn!("Telegram: sendVideo error: {e}"); false }
     }
 }
 
@@ -466,7 +466,7 @@ pub(super) async fn send_telegram_media_group(
         .multipart(form).send().await
     {
         Ok(r) => r.status().is_success(),
-        Err(e) => { eprintln!("[Telegram] sendMediaGroup error: {e}"); false }
+        Err(e) => { tracing::warn!("Telegram: sendMediaGroup error: {e}"); false }
     }
 }
 
@@ -711,7 +711,7 @@ pub(super) async fn send_event_clip(
                 send_telegram(token, chat_id, &msg).await;
                 return;
             }
-            Err(e) => eprintln!("[Telegram] clip read error: {e}"),
+            Err(e) => tracing::warn!("Telegram: clip read error: {e}"),
         }
     }
 
@@ -1930,7 +1930,7 @@ pub async fn run_telegram_loop(state: Arc<AppState>) {
         let resp = match resp {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("[Telegram] poll error: {e}");
+                tracing::warn!("Telegram: poll error: {e}");
                 tokio::time::sleep(Duration::from_secs(10)).await;
                 continue;
             }
@@ -1939,7 +1939,7 @@ pub async fn run_telegram_loop(state: Arc<AppState>) {
         let tg: TgResp = match resp.json().await {
             Ok(v) => v,
             Err(e) => {
-                eprintln!("[Telegram] parse error: {e}");
+                tracing::warn!("Telegram: parse error: {e}");
                 tokio::time::sleep(Duration::from_secs(10)).await;
                 continue;
             }
@@ -2214,7 +2214,7 @@ pub async fn run_telegram_loop(state: Arc<AppState>) {
             let Some(ref user_text) = msg.text else { return; };
             let from_chat = msg.chat.id.to_string();
 
-            eprintln!("[Telegram] message from chat_id={from_chat}: {user_text}");
+            tracing::warn!("Telegram: message from chat_id={from_chat}: {user_text}");
 
             // If configured chat_id doesn't match: send the user their numeric ID so they can configure it
             // Also handle the case where user entered a @username instead of numeric ID
@@ -2276,7 +2276,7 @@ pub async fn run_telegram_loop(state: Arc<AppState>) {
             let reply = match chat_with_agent(&state, history.clone(), user_text.clone(), Default::default()).await {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("[Telegram] agent error: {e}");
+                    tracing::warn!("Telegram: agent error: {e}");
                     format!("Guardian is unavailable right now.\nError: {e}")
                 }
             };
@@ -2304,7 +2304,7 @@ pub async fn run_telegram_loop(state: Arc<AppState>) {
             // runs detached) so bounded inner paths resolve FIRST and their honest
             // error replies reach the user; this outer cap only catches the unknown.
             if tokio::time::timeout(Duration::from_secs(200), fut).await.is_err() {
-                eprintln!("[Telegram] update {update_id} handling timed out; skipping to keep the loop alive");
+                tracing::warn!("Telegram: update {update_id} handling timed out; skipping to keep the loop alive");
             }
             // Persist the offset PER UPDATE (not once per batch): a slow/failed handler
             // must never leave the offset stuck or cause the batch to replay — a stuck

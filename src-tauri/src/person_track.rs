@@ -197,7 +197,7 @@ pub(crate) fn observe(o: Observation, frame_jpeg: &[u8]) {
             }
         }
         let beats = a.crops.len() < TOP_CROPS || a.crops.last().is_some_and(|c| outranks(v, q, c));
-        let spaced = a.last_crop.map_or(true, |t| now.duration_since(t) >= CROP_EVERY);
+        let spaced = a.last_crop.is_none_or(|t| now.duration_since(t) >= CROP_EVERY);
         let want = q > 0.0 && beats && spaced;
         if want { a.last_crop = Some(now); }
         want

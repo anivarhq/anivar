@@ -37,7 +37,7 @@ cloud and self-hosted providers are optional and sit behind the same dispatcher.
 
 | Path | Lines (approx.) | Responsibility |
 |---|---|---|
-| `main.rs` | 6 | Tauri bootstrap — calls `nivar_lib::run()`. |
+| `main.rs` | 6 | Tauri bootstrap — calls `anivar_lib::run()`. |
 | `lib.rs` | ~295 | Module manifest, `constant_time_eq`, and the `run()` entry — Tauri builder, plugins, tray window-event, `.setup(boot::setup_app)`, and the `tauri::generate_handler!` registration. Down from 8 887 (97 % reduction). |
 | `boot.rs` | ~255 | One-time `.setup(|app| …)` work extracted: system-tray menu, DB pool, settings load + decrypt, AppState construction, agent / inference / NVR / mDNS / HTTP-server task spawns. |
 | `server.rs` | ~250 | HTTP server boot: token auth middleware, security headers, CORS, axum `Router` wiring, port-firewall opening, listener spawn. |
@@ -241,11 +241,11 @@ Convenience wrappers live in [`scripts/`](../scripts/).
 
 Per-user data is written to Tauri's `app_data_dir()`:
 
-- Windows: `%APPDATA%\com.nivar.app\`
-- macOS: `~/Library/Application Support/com.nivar.app/`
-- Linux: `~/.local/share/com.nivar.app/`
+- Windows: `%APPDATA%\com.anivar.app\`
+- macOS: `~/Library/Application Support/com.anivar.app/`
+- Linux: `~/.local/share/com.anivar.app/`
 
-This directory contains the SQLite database (`nivar.db`), NVR segment
+This directory contains the SQLite database (`anivar.db`), NVR segment
 files (`.mp4`), recorded clips, installed skills (e.g. `skills/yolo26n/model.onnx`
 for the detector, `skills/local_llm/model.gguf` for the on-device language model),
 and a `.master_key` used to AES-GCM-encrypt secret fields in settings

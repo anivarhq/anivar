@@ -45,13 +45,15 @@ file for your system, and the [releases page](https://github.com/anivarhq/anivar
 One download per platform. The Windows installer carries the CUDA execution
 provider and detects an NVIDIA card at runtime — there is no separate GPU edition
 to choose between. Without one it uses DirectML on any DX12 GPU. macOS uses
-CoreML; Linux runs detection on the CPU today.
+CoreML; Linux runs detection on the CPU, with an experimental CUDA path for
+NVIDIA cards that has not been tested on hardware.
 
 There is no Intel-Mac or 32-bit build. Linux binaries are built against
 `webkit2gtk-4.1`, so Ubuntu 22.04 / Debian 12 or newer.
 
-Installed builds update themselves, and what changed each time is in
-[`CHANGELOG.md`](CHANGELOG.md).
+Installs don't update themselves yet: **Settings → Check for Updates** shows
+when a new version is out and links to its installer. What changed each time
+is in [`CHANGELOG.md`](CHANGELOG.md).
 
 ### Verify your download
 
@@ -102,7 +104,8 @@ Windows and macOS both stop an app that no certificate authority has signed
 
 - **Object detection** — ONNX Runtime in-process. Windows uses DirectML on any
   DX12 GPU, with CUDA and TensorRT available to NVIDIA cards through a downloaded
-  pack; macOS uses CoreML; Linux runs on the CPU today. Selectable YOLO tiers from
+  pack; macOS uses CoreML; Linux runs on the CPU (CUDA for NVIDIA is
+  experimental). Selectable YOLO tiers from
   nano to xlarge. You choose a detector on first run and its licence is shown
   before you commit to it.
 - **Motion detection with masks** — grayscale frame-diff with box blur, polygon
@@ -204,7 +207,7 @@ for installers, stages the bundled resources:
 
 ```bat
 scripts\app-build.bat            REM exe only, fastest
-scripts\app-build.bat --bundle   REM plus the MSI/NSIS installers
+scripts\app-build.bat --bundle   REM plus the NSIS installer
 ```
 
 > **Use the wrapper, not a bare `cargo build --release`, for a shippable
