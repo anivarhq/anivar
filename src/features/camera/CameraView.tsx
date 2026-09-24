@@ -52,20 +52,6 @@ function withAlpha(hex: string, a: number): string {
   return `rgba(${r},${g},${b},${a})`;
 }
 
-// Refresh the store's event feed at most once per 2 s across ALL camera tiles.
-// Both the detection and motion paths used to refetch the full 500-row event
-// list on EVERY frame while anything moved — a continuous multi-KB IPC storm
-// that made the whole UI feel laggy during activity. Trailing-coalesced: the
-// feed still updates promptly after motion, once, for all tiles together.
-let eventsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-function scheduleEventsRefresh() {
-  if (eventsRefreshTimer) return;
-  eventsRefreshTimer = setTimeout(() => {
-    eventsRefreshTimer = null;
-    api.getMotionEvents(500).then(useStore.getState().setEvents).catch(() => {});
-  }, 2000);
-}
-
 // ── Fix WebM duration so the browser knows total length and can seek ──────────
 // MediaRecorder leaves Duration=0xFFFFFFFFFFFFFFFF (unknown) in the header.
 // Writing the real duration allows the browser to seek by percentage.
@@ -231,7 +217,6 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
       if (payload.cam_id !== camId) return;
       const dets = payload.detections;
       liveDetectionsRef.current = dets;
-      setLiveDetections(dets);
 
       if (dets.length > 0) {
         const eventId = activeEventIdRef.current;
@@ -255,8 +240,6 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
 
         if (camId === 0) useStore.getState().setLatestDetections(dets.map(d => ({ label: d.label, score: d.score })));
 
-        // Refresh event list so UI shows updated detection data (coalesced).
-        scheduleEventsRefresh();
       } else {
         clearOverlay();
       }
@@ -350,7 +333,6 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
   const [scanning, setScanning]           = useState(false);
   const [manualUrl, setManualUrl]         = useState("");
   const [streamInfo, setStreamInfo]       = useState<StreamInfo | null>(null);
-  const [liveDetections, setLiveDetections] = useState<Detection[]>([]);
   const [, setRecognizedPersons] = useState<string[]>([]);
   const lastFaceRecogRef = useRef(0);
   // face recognition results: name + face bounding box in image pixel space
@@ -964,6 +946,11 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
     window.addEventListener("beforeunload", h);
     return () => window.removeEventListener("beforeunload", h);
   }, [stopCamera]);
+
+  // The MJPEG capture loop re-arms itself every frame. It was only stopped by
+  // stopCamera (window unload), so every grid <-> focus switch left another
+  // requestAnimationFrame loop running on an unmounted tile.
+  useEffect(() => stopCaptureLoop, [stopCaptureLoop]);
 
   // ── Motion overlay — sync pixel dims to CSS display size, then CLEAR ─────────
   // The old behaviour painted a red full-frame border + red tint + corner

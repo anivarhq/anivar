@@ -126,14 +126,22 @@ fn extract_ring(cam: u8, start: f64, end: f64) -> Option<(Vec<u8>, f64)> {
 /// Does this file already contain an audio stream? Used to keep the ring mux a pure
 /// fallback (don't double-track clips whose segments already carry audio).
 pub(crate) async fn clip_has_audio(ffmpeg: &std::path::Path, clip: &std::path::Path) -> bool {
-    match crate::proc::tokio_cmd(ffmpeg)
+    // Read the MP4 header first; only an unparseable file asks ffmpeg, bounded
+    // (this runs under the per-event clip lock, so a hang used to wedge it).
+    let p = clip.to_path_buf();
+    let scanned = tokio::task::spawn_blocking(move ||
+        std::fs::File::open(&p).ok().and_then(|mut f| crate::nvr_pipes::mp4_has_audio(&mut f)))
+        .await.ok().flatten();
+    if let Some(v) = scanned { return v; }
+    let probe = crate::proc::tokio_cmd(ffmpeg)
         .args(["-hide_banner", "-i", &clip.to_string_lossy()])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
-        .output().await
-    {
-        Ok(o) => String::from_utf8_lossy(&o.stderr).contains("Audio:"),
-        Err(_) => false,
+        .kill_on_drop(true)
+        .output();
+    match tokio::time::timeout(std::time::Duration::from_secs(20), probe).await {
+        Ok(Ok(o)) => String::from_utf8_lossy(&o.stderr).contains("Audio:"),
+        _ => false,
     }
 }
 
@@ -165,7 +173,8 @@ pub(crate) async fn mux_ring_audio(
     // into the requested window. Clamp ≥0 (a tiny lead-in is harmless; negative would
     // drop samples). Re-encode to AAC (mature NVRs `preset-record-*-audio-aac` parity).
     let offset = (first_ts - start_secs).max(0.0);
-    let ok = crate::proc::tokio_cmd(&ffmpeg)
+    // Bounded: this runs under the per-event clip lock.
+    let mux = crate::proc::tokio_cmd(&ffmpeg)
         .args([
             "-hide_banner", "-loglevel", "error", "-y",
             "-i", &clip_path.to_string_lossy(),
@@ -179,8 +188,9 @@ pub(crate) async fn mux_ring_audio(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true)
-        .status().await
-        .map(|s| s.success()).unwrap_or(false);
+        .status();
+    let ok = matches!(tokio::time::timeout(std::time::Duration::from_secs(120), mux).await,
+                      Ok(Ok(s)) if s.success());
     let _ = tokio::fs::remove_file(&tmp_pcm).await;
 
     let big = tokio::fs::metadata(&tmp_out).await.map(|m| m.len() > 4096).unwrap_or(false);

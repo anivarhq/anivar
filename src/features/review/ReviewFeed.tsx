@@ -461,7 +461,12 @@ export function ReviewFeed() {
     return () => clearTimeout(t);
   }, [query]);
 
+  // Only the newest load may write: switching day or query quickly let an
+  // older, slower response land last and show the wrong day's items.
+  const loadSeq = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
+    const current = () => seq === loadSeq.current;
     setLoading(true);
     try {
       // On the Vehicles/Sounds tabs the search box filters THOSE views
@@ -469,19 +474,22 @@ export function ReviewFeed() {
       // into search mode underneath, or the day counts blank while typing.
       const searchQ = tab === "vehicles" || tab === "sounds" ? "" : debouncedQuery;
       if (similarTo) {
-        setSegments([]);
-        setEvents(await api.findSimilarEvents(similarTo.id));
+        const ev = await api.findSimilarEvents(similarTo.id);
+        if (current()) { setSegments([]); setEvents(ev); }
       } else if (searchQ) {
-        setSegments([]);
-        setEvents(await api.searchEvents(searchQ));
+        const ev = await api.searchEvents(searchQ);
+        if (current()) { setSegments([]); setEvents(ev); }
       } else {
         // Day view: the canonical server-side review items.
-        setEvents([]);
-        { const { fromUtc, toUtc } = dayBoundsUtc(selectedDate);
-          setSegments(await api.getReviewSegments(fromUtc, toUtc)); }
+        const { fromUtc, toUtc } = dayBoundsUtc(selectedDate);
+        const segs = await api.getReviewSegments(fromUtc, toUtc);
+        if (current()) { setEvents([]); setSegments(segs); }
       }
-    } finally { setLoading(false); }
-  }, [selectedDate, debouncedQuery, similarTo, tab]);
+    } catch (e) {
+      // This used to reject unhandled, leaving the old feed up with no word why.
+      if (current()) showToast(`Couldn't load events: ${String(e)}`, "error");
+    } finally { if (current()) setLoading(false); }
+  }, [selectedDate, debouncedQuery, similarTo, tab, showToast]);
 
   // Typing a search exits "Find similar" AND person mode (mutually exclusive views).
   useEffect(() => { if (debouncedQuery) { setSimilarTo(null); setPersonFilter(new Set()); } }, [debouncedQuery]);

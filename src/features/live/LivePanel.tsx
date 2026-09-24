@@ -322,11 +322,15 @@ export function LivePanel() {
   useEffect(() => {
     // TZ-CORRECT local-day → UTC bounds via the time SSOT (started_at is stored UTC).
     const { fromUtc: rangeStart, toUtc: rangeEnd } = dayBoundsUtc(selectedDate);
-    const load = () => api.getEventsInRange(rangeStart, rangeEnd).then(setEvents).catch(() => {});
+    // `alive` drops a response for a day the user has already left: stepping
+    // days quickly let a slow reply overwrite the newer day's timeline.
+    let alive = true;
+    const load = () => api.getEventsInRange(rangeStart, rangeEnd)
+      .then(ev => { if (alive) setEvents(ev); }).catch(() => {});
     load();
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const isToday = today.getTime() === selectedDate.getTime();
-    if (!isToday) return;
+    if (!isToday) return () => { alive = false; };
     // Instant refresh the moment a motion event opens (backend emits this), plus
     // when the AI finishes analysing one — so the timeline updates immediately
     // instead of waiting for the 30s safety poll.
@@ -337,6 +341,7 @@ export function LivePanel() {
     const onVis = () => { if (!document.hidden) load(); };
     document.addEventListener("visibilitychange", onVis);
     return () => {
+      alive = false;
       clearInterval(id);
       document.removeEventListener("visibilitychange", onVis);
       u1.then(f => f()); u2.then(f => f());

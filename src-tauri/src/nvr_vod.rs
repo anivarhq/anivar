@@ -150,9 +150,14 @@ async fn segment_needs_420_transcode(ffmpeg: &std::path::Path, seg_id: &str, pat
     if let Some(v) = SEG_NEEDS_420.get_or_init(Default::default).lock().unwrap().get(seg_id).copied() {
         return v; // filled while we waited on the gate
     }
-    let out = crate::proc::tokio_cmd(ffmpeg)
+    // Bounded: this runs on the request path while holding PROBE_GATE, so a
+    // hung ffmpeg used to block every cold segment request queued behind it.
+    let probe = crate::proc::tokio_cmd(ffmpeg)
         .args(["-hide_banner", "-i", path])
-        .output().await;
+        .kill_on_drop(true)
+        .output();
+    let out = tokio::time::timeout(std::time::Duration::from_secs(20), probe).await
+        .unwrap_or_else(|_| Err(std::io::Error::other("4:4:4 probe timed out")));
     let needs = match out {
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr);
@@ -275,15 +280,22 @@ fn stream_ffmpeg_stdout(
                 None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
             };
             let stderr = proc.stderr.take();
+            // Drain stderr WHILE ffmpeg runs. Reading it only after wait() let a
+            // chatty failure (e.g. a 4:4:4 transcode) fill the pipe and block
+            // ffmpeg, which hung the response it was streaming.
+            let stderr_task = tokio::spawn(async move {
+                let mut msg = String::new();
+                if let Some(mut e) = stderr {
+                    use tokio::io::AsyncReadExt;
+                    let _ = e.read_to_string(&mut msg).await;
+                }
+                msg
+            });
             tokio::spawn(async move {
                 let status = proc.wait().await;
+                let msg = stderr_task.await.unwrap_or_default();
                 let failed = !matches!(&status, Ok(s) if s.success());
                 if failed {
-                    let mut msg = String::new();
-                    if let Some(mut e) = stderr {
-                        use tokio::io::AsyncReadExt;
-                        let _ = e.read_to_string(&mut msg).await;
-                    }
                     // A client disconnect (seek away, player torn down) also lands
                     // here via kill_on_drop, so this is debug, not warn.
                     tracing::debug!("nvr_vod remux ended {status:?} after {:?}: {}",

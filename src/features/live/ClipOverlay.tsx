@@ -88,6 +88,8 @@ export const ClipOverlay = forwardRef<ClipOverlayHandle, Props>(function ClipOve
   // Auto-retry state for transient clip-load failures (see clipRetry.ts).
   const retryTimerRef    = useRef<number | null>(null);
   const attemptRef       = useRef<number>(0);
+  /** Cancels a +/-N s seek still waiting for the buffer (see seekRelative). */
+  const pendingSeekRef   = useRef<(() => void) | null>(null);
   const playedRef        = useRef<boolean>(false);
   // v24: remembered volume from just before mute. Restored when the user
   // unmutes via the speaker, so a "mute → unmute" round-trip lands at the
@@ -284,6 +286,9 @@ export const ClipOverlay = forwardRef<ClipOverlayHandle, Props>(function ClipOve
   const seekRelative = useCallback((deltaSec: number) => {
     const v = videoRef.current;
     if (!v) return;
+    // A newer seek replaces any still waiting for data.
+    pendingSeekRef.current?.();
+    pendingSeekRef.current = null;
     const max = isFinite(v.duration) ? v.duration : Infinity;
     const target = Math.max(0, Math.min(max, v.currentTime + deltaSec));
 
@@ -308,28 +313,36 @@ export const ClipOverlay = forwardRef<ClipOverlayHandle, Props>(function ClipOve
 
     // Past the buffered edge. Wait for more data; retry on each `progress`.
     let done = false;
+    let timeoutId = 0;
+    const finish = () => {
+      done = true;
+      v.removeEventListener("progress", tryApply);
+      window.clearTimeout(timeoutId);
+      if (pendingSeekRef.current === finish) pendingSeekRef.current = null;
+    };
     const tryApply = () => {
       if (done) return;
       if (target <= bufferedEnd() + 0.25) {
-        done = true;
-        v.removeEventListener("progress", tryApply);
-        window.clearTimeout(timeoutId);
+        finish();
         v.currentTime = target;
       }
     };
     v.addEventListener("progress", tryApply);
     // Safety: after 4 s, take whatever's buffered and seek there so the
     // user gets SOME visible motion instead of a dead button.
-    const timeoutId = window.setTimeout(() => {
+    timeoutId = window.setTimeout(() => {
       if (done) return;
-      done = true;
-      v.removeEventListener("progress", tryApply);
+      finish();
       const end = bufferedEnd();
       if (end > v.currentTime) {
         v.currentTime = end;
       }
     }, 4000);
+    // Cancelled on a newer seek, a clip change or unmount: the listener and
+    // timer used to outlive the clip and seek the NEXT one to its buffered end.
+    pendingSeekRef.current = finish;
   }, []);
+  useEffect(() => () => { pendingSeekRef.current?.(); pendingSeekRef.current = null; }, [src]);
   const skip = useCallback((deltaSec: number) => {
     if (onSkip) { onSkip(deltaSec); return; }
     seekRelative(deltaSec);
