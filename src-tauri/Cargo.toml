@@ -71,7 +71,7 @@ serde_json = "1"
 # Rust equivalents). sysinfo = CPU/RAM via OS APIs; nvml-wrapper = NVIDIA GPU
 # util/VRAM via nvml.dll — NO subprocesses (no nvidia-smi, no PowerShell), so
 # telemetry can't flash console windows and can't break on locale/parsing.
-sysinfo = "0.32"
+sysinfo = "0.39"
 
 # On-device language model — llama.cpp compiled INTO the binary (no daemon, no
 # Ollama, nothing for the user to install). This is the architecture on-device assistants's
