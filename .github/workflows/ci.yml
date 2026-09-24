@@ -40,6 +40,14 @@ jobs:
       - run: npm run test
       - run: npm run build
 
+      # `tauri build` refuses to run when an @tauri-apps npm package and its
+      # Rust crate are on different major/minor versions, and nothing else in
+      # CI builds an installer — so that failure used to wait until a release
+      # was tagged. v0.1.4's installers failed on all three platforms this way,
+      # from an npm-only Dependabot bump.
+      - name: Tauri npm packages match their Rust crates
+        run: node scripts/check-tauri-versions.mjs
+
   # ── Supply chain ──────────────────────────────────────────────────────────
   # Dependabot raises version PRs, but nothing was checking whether the versions
   # we currently pin have known vulnerabilities — so a CVE in a transitive
