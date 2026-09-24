@@ -498,7 +498,7 @@ pub(crate) async fn spawn_audio_detection(
             if let Some((top_name, top_score)) = results.first() {
                 let now = std::time::Instant::now();
                 let mut last = LAST_AUDIO_TRACE.lock().unwrap_or_else(|e| e.into_inner());
-                if last.map_or(true, |t| now.duration_since(t).as_secs() >= 10) {
+                if last.is_none_or(|t| now.duration_since(t).as_secs() >= 10) {
                     *last = Some(now);
                     tracing::info!("audio cam{}: hearing '{}' ({:.2}) — listen list: {:?}",
                         cam, top_name, top_score, listen);

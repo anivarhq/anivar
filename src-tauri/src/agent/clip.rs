@@ -419,7 +419,7 @@ pub(super) fn annotate_frame_with_detections(b64_jpeg: &str, dets: &[RawDet]) ->
     let (iw, ih) = (img.width(), img.height());
     let mut rgba = img.to_rgba8();
 
-    // Load DejaVu Sans Regular (bundled via `dejavu` crate — public domain, no external file)
+    // Load DejaVu Sans Regular (bundled via `dejavu` crate — Bitstream Vera licence, no external file)
     let font = FontRef::try_from_slice(dejavu::sans::regular()).ok()?;
 
     for det in dets {

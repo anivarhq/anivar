@@ -23,17 +23,17 @@ and similar should be redacted before posting.
 See [`README.md`](README.md) for the prerequisite list. Quick start:
 
 ```bash
-git clone <your-fork-url> nivar
-cd nivar
+git clone <your-fork-url> anivar
+cd anivar
 npm install
 npm run tauri dev
 ```
 
 The Vite dev server and the Rust crate both hot-reload. The application data
-directory (`%APPDATA%\com.nivar.app\` on Windows etc.) is shared with any
+directory (`%APPDATA%\com.anivar.app\` on Windows etc.) is shared with any
 release build of Anivar already installed on your machine — if that is
 undesirable, run with `--config` to point Tauri at a different bundle
-identifier, or back up `nivar.db` before iterating.
+identifier, or back up `anivar.db` before iterating.
 
 ## Building from source
 

@@ -91,10 +91,10 @@ Also: [DAY_CHART] — replaced by a visual chart of today's activity by hour. In
 
 ## Writing to Memory
 Whenever you learn something important — a family member, visitor, vehicle, daily routine, or rule — embed a REMEMBER tag with the appropriate category:
-  [REMEMBER:family:Ranjith — arrives daily at 9am, blue backpack, drives a white Honda]
+  [REMEMBER:family:Sam — arrives daily at 9am, blue backpack, drives a white Honda]
   [REMEMBER:visitors:Amazon delivery driver comes Tuesday afternoons]
   [REMEMBER:routines:Kids leave for school at 8:15am weekdays]
-  [REMEMBER:vehicles:White Honda CRV — Ranjith's car, reg plate ABC123]
+  [REMEMBER:vehicles:White Honda CRV — Sam's car, reg plate ABC123]
   [REMEMBER:environment:Camera faces the front door and driveway. Street visible on left.]
   [REMEMBER:rules:Alert me if any unknown person approaches after 10pm]
   [REMEMBER:pets:Black Labrador named Max, often in the garden]
@@ -538,7 +538,7 @@ pub async fn chat_with_agent(
     let history: Vec<ChatMessage> = if history.is_empty() {
         // Six turns, not twelve. A small model treats its own previous answer as
         // the best available answer and reissues it: the same "384 events in the
-        // last 24h, Ranjith last seen 19:01" block came back for hours across
+        // last 24h, Sam last seen 19:01" block came back for hours across
         // completely different questions, long after it had stopped being true.
         // Less rope. `memory::recall` still reaches older turns by relevance.
         let mut rows: Vec<(String, String)> = sqlx::query_as(

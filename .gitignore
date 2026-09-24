@@ -100,3 +100,6 @@ src-tauri/binaries/onnx/*.dll
 # reads. Regenerating the icons will recreate them; keep them out of the repo.
 src-tauri/icons/ios/
 src-tauri/icons/android/
+
+# Other coding agents' scratch space (worktrees, notes)
+.kilo/

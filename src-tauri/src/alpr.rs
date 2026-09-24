@@ -126,7 +126,7 @@ pub fn recognize_plate(data_dir: &Path, region: &str, jpeg: &[u8], bbox: [f32; 4
         if x2 <= x1 + 8 || y2 <= y1 + 4 { continue; }
         let crop = img.crop_imm(x1, y1, x2 - x1, y2 - y1);
         if let Some((plate, conf)) = ocr_region(session, &input_name, &crop) {
-            if best.as_ref().map_or(true, |(_, bc)| conf > *bc) { best = Some((plate, conf)); }
+            if best.as_ref().is_none_or(|(_, bc)| conf > *bc) { best = Some((plate, conf)); }
         }
     }
     best

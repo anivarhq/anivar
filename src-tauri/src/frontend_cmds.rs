@@ -60,7 +60,7 @@ pub async fn read_clip_frames(
         ]) as usize;
         cursor += 4;
         if cursor + len > data.len() { break; }
-        if i % 2 == 0 { // every 2nd frame → ~5 fps from a 10-fps recording
+        if i.is_multiple_of(2) { // every 2nd frame → ~5 fps from a 10-fps recording
             frames.push(B64.encode(&data[cursor..cursor + len]));
         }
         cursor += len;

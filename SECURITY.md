@@ -78,8 +78,9 @@ This is a small project without a paid security team. There is **no bug bounty**
 
 Fixes land on `main` and go out in the next release. While the project is at
 `0.x`, only the newest release is patched: there is no back-porting and there
-are no long-term support branches. Installed builds update themselves, so
-"update first" is usually a restart.
+are no long-term support branches. Installs don't update themselves yet:
+**Settings → Check for Updates** shows when a new version is out and links to
+its installer.
 
 ## What the design already assumes
 

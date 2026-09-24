@@ -7,6 +7,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Read-only token: CI builds, lints and tests; it never writes to the repo.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

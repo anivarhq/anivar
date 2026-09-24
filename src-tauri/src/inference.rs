@@ -400,7 +400,7 @@ pub async fn run_inference_loop(state: Arc<AppState>) {
     let mut session = loop {
     match build_ort_session(&model_path) {
         Ok(sess) => {
-            tracing::info!("YOLO26 ready — {} loaded via ORT (CPU)", variant);
+            tracing::info!("YOLO26 ready — {} loaded via ORT ({})", variant, active_accelerator());
             {
                 let mut s = state.inference_status.write().await;
                 s.state = "ready".to_string();
@@ -629,7 +629,7 @@ pub async fn run_inference_loop(state: Arc<AppState>) {
             match cell.lock() {
                 Ok(mut m) => {
                     let now = std::time::Instant::now();
-                    let d = m.get(&cam_id).map_or(true, |t| now.duration_since(*t).as_secs() >= 3);
+                    let d = m.get(&cam_id).is_none_or(|t| now.duration_since(*t).as_secs() >= 3);
                     if d { m.insert(cam_id, now); }
                     d
                 }
@@ -1230,7 +1230,7 @@ fn body_prune_due() -> bool {
     match cell.lock() {
         Ok(mut g) => {
             let now = std::time::Instant::now();
-            let due = g.map_or(true, |t| now.duration_since(t).as_secs() >= 3600);
+            let due = g.is_none_or(|t| now.duration_since(t).as_secs() >= 3600);
             if due { *g = Some(now); }
             due
         }
@@ -1293,7 +1293,7 @@ fn track_store_due(cam_id: u8, track_id: u64) -> bool {
         Ok(mut m) => {
             evict_oldest_half(&mut m, 2048);
             let now = std::time::Instant::now();
-            let due = m.get(&(cam_id, track_id)).map_or(true, |t| now.duration_since(*t).as_secs_f32() >= 1.0);
+            let due = m.get(&(cam_id, track_id)).is_none_or(|t| now.duration_since(*t).as_secs_f32() >= 1.0);
             if due { m.insert((cam_id, track_id), now); }
             due
         }
@@ -1598,7 +1598,7 @@ fn discrete_dml_adapter() -> Option<(i32, String)> {
                             let end = desc.Description.iter().position(|&c| c == 0)
                                 .unwrap_or(desc.Description.len());
                             let name = String::from_utf16_lossy(&desc.Description[..end]);
-                            if best.as_ref().map_or(true, |(_, _, v)| vram > *v) {
+                            if best.as_ref().is_none_or(|(_, _, v)| vram > *v) {
                                 best = Some((i as i32, name, vram));
                             }
                         }

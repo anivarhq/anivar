@@ -330,8 +330,8 @@ function AppearanceSection() {
    state, a `{n} active` counter over a one-element list, and a
    Record<string, ...> of per-channel test callbacks all used to wrap it — a
    generic multi-channel framework around one form. The others (ntfy, pairing,
-   webhooks) were deleted long ago and are not coming back; Home Assistant and
-   MQTT live in their own sections. Flattened.
+   webhooks, Home Assistant, MQTT) were deleted and are not coming back;
+   Telegram is the only channel. Flattened.
    ─────────────────────────────────────────────────────────────────────── */
 
 function TestBtn({ disabled, loading, onClick, color = "var(--accent)" }: { disabled: boolean; loading: boolean; onClick: () => void; color?: string }) {

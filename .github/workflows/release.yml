@@ -1,11 +1,11 @@
 name: Release
 
-# Builds signed, auto-updatable installers for every platform and publishes them
+# Builds installers for every platform and publishes them
 # to a GitHub Release. Triggered by pushing a version tag (e.g. `v1.0.1`) or run
 # manually. Produces:
-#   • Windows  — NSIS + MSI            (DirectML: any DX12 GPU, no toolkit)
-#   • macOS    — .dmg (arm64 + x64)    (CoreML: Apple Neural Engine)
-#   • Linux    — .deb + .AppImage      (CPU)
+#   • Windows  — NSIS                  (DirectML on any DX12 GPU; CUDA/TensorRT for NVIDIA)
+#   • macOS    — .dmg (Apple Silicon)  (CoreML: Apple Neural Engine)
+#   • Linux    — .deb + .rpm + .AppImage (CPU; CUDA for NVIDIA is experimental)
 # plus the signed updater artifacts (.sig) and the `latest.json` manifest that
 # tauri-plugin-updater reads (plugins.updater.endpoints). Nothing in the app calls
 # the plugin yet: users update through Settings → Check for Updates.
@@ -34,12 +34,14 @@ env:
 jobs:
   # Resolve the tag once, and turn CHANGELOG.md into the release body.
   #
-  # Its own job because the build below is a five-way matrix: generating notes in
-  # each would do the same work five times, and whichever runner happened to
+  # Its own job because the build below is a three-way matrix: generating notes in
+  # each would do the same work three times, and whichever runner happened to
   # create the release first would decide what the body said.
   notes:
     name: Release notes
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       tag:  ${{ steps.resolve.outputs.tag }}
       body: ${{ steps.body.outputs.body }}
@@ -121,9 +123,6 @@ jobs:
           # provider DLLs were already bundled in every Windows build, so this costs
           # no installer size -- it makes them usable.
           - { os: windows-latest, label: "Windows",               target: "",                   args: "--features cuda" }
-          # NVIDIA edition: same app identity (shares footage/DB/settings) but a
-          # distinct installer name, built with the CUDA EP. Users on an NVIDIA GPU
-          # download this one; the CUDA + cuDNN runtime is fetched on first launch.
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -228,9 +227,9 @@ jobs:
 
 
   # ── Checksums ──────────────────────────────────────────────────────────────
-  # AUTO-UPDATES are already protected: `includeUpdaterJson` above signs the
-  # manifest with TAURI_SIGNING_PRIVATE_KEY, and the app refuses an update that
-  # fails that signature.
+  # The updater manifest is already protected: `includeUpdaterJson` above signs
+  # it with TAURI_SIGNING_PRIVATE_KEY, so an in-app updater (not wired up yet)
+  # can refuse anything that fails that signature.
   #
   # A MANUAL download from the Releases page has no such check. The installers
   # are not Authenticode-signed or notarised yet (that needs a purchased
@@ -328,6 +327,6 @@ jobs:
 # with its own config override for a distinct installer name, e.g.
 #   - { os: windows-latest, label: "Windows (Intel OpenVINO)", target: "", args: "--features openvino --config tauri.openvino.conf.json" }
 #   - { os: ubuntu-latest,  label: "Linux (AMD ROCm)",         target: "", args: "--features rocm --config tauri.rocm.conf.json" }
-# Like the NVIDIA edition, each shares the app identity (footage/DB) and fetches its
+# Like the CUDA-enabled Windows build, each shares the app identity (footage/DB) and fetches its
 # vendor runtime on first launch. (OpenVINO/ROCm also need a `[features]` entry +
 # a managed-runtime downloader, mirroring `cuda` / `cuda_runtime.rs`.)

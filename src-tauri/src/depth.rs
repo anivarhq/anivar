@@ -276,7 +276,7 @@ pub(crate) fn spawn_depth_worker(
             let _ = state.frame_txs[cam as usize].send(Arc::clone(&frame));
             if let Some(tx) = state.nvr_pipe_txs.lock().await.get(&cam) { tx.try_send(Arc::clone(&frame)).ok(); } // drop-on-full
             if let Some(tx) = state.hls_pipe_txs.lock().await.get(&cam) { tx.try_send(Arc::clone(&frame)).ok(); } // drop-on-full
-            if ticks % 5 == 0 { // ~160ms cadence, mirrors fan_out_frame's throttle
+            if ticks.is_multiple_of(5) { // ~160ms cadence, mirrors fan_out_frame's throttle
                 state.latest_frames.write().await.insert(cam, frame.as_ref().clone());
             }
             if last_rate_log.elapsed().as_secs() >= 300 {

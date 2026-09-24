@@ -95,7 +95,6 @@ Nothing, until you enable one of these. Each is off by default.
 | **Cloud AI provider** (OpenAI, Anthropic, Gemini, OpenRouter, …) | Event snapshots and a text prompt, for scene description | That provider, under their terms |
 | **On-device AI** (default) | Nothing — the model runs inside the app | — |
 | **Telegram** | Alert text, snapshots, and clips you or the agent send | Telegram |
-| **Home Assistant / MQTT** | Event metadata | Your broker |
 | **Remote access** (Tailscale Funnel) | Your live streams and UI, over an authenticated tunnel | Whoever holds the credential |
 | **Share links** | The single clip you shared, until the link expires | Whoever has the link |
 
@@ -141,9 +140,9 @@ it.
 
 | OS | Path |
 |---|---|
-| Windows | `%APPDATA%\com.nivar.app` |
-| macOS | `~/Library/Application Support/com.nivar.app` |
-| Linux | `~/.local/share/com.nivar.app` |
+| Windows | `%APPDATA%\com.anivar.app` |
+| macOS | `~/Library/Application Support/com.anivar.app` |
+| Linux | `~/.local/share/com.anivar.app` |
 
 Recordings, the SQLite database, blobs and model weights are all under it.
 

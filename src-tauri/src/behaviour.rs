@@ -138,7 +138,7 @@ pub(crate) fn pose_due(cam: &mut CamState, rules: &Rules, track_id: u64, box_h: 
     if !rules.wants_pose() || track_id == 0 { return false; }
     let t = cam.tracks.entry(track_id).or_default();
     if t.last_pose.is_some_and(|p| now.duration_since(p) < POSE_EVERY) { return false; }
-    let young = t.first.map_or(true, |f| now.duration_since(f) < Duration::from_secs(3));
+    let young = t.first.is_none_or(|f| now.duration_since(f) < Duration::from_secs(3));
     let shrank = t.max_h > 0.0 && box_h < t.max_h * 0.65;
     let due = young || shrank || t.down_since.is_some() || (rules.climbing && !rules.fences.is_empty());
     if due { t.last_pose = Some(now); }
@@ -148,7 +148,7 @@ pub(crate) fn pose_due(cam: &mut CamState, rules: &Rules, track_id: u64, box_h: 
 /// Advance every rule by one frame. Returns what confirmed THIS frame.
 pub(crate) fn step(cam: &mut CamState, rules: &Rules, people: &[PersonFrame], now: Instant) -> Vec<Fired> {
     let mut fired = Vec::new();
-    cam.tracks.retain(|_, t| t.last.map_or(true, |l| now.duration_since(l) < GONE));
+    cam.tracks.retain(|_, t| t.last.is_none_or(|l| now.duration_since(l) < GONE));
 
     for p in people.iter().filter(|p| p.track_id != 0) {
         let t = cam.tracks.entry(p.track_id).or_default();
@@ -254,7 +254,7 @@ pub(crate) fn step(cam: &mut CamState, rules: &Rules, people: &[PersonFrame], no
                 cam.crowd_fired = true;
                 fired.push(Fired { track_id: 0, kind: Kind::Crowd, detail: format!("{count} people") });
             }
-        } else if cam.crowd_last.map_or(true, |l| now.duration_since(l) >= CROWD_REARM) {
+        } else if cam.crowd_last.is_none_or(|l| now.duration_since(l) >= CROWD_REARM) {
             cam.crowd_fired = false;
             cam.crowd_since = None;
         }
