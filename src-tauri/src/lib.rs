@@ -170,7 +170,7 @@ pub use timeline::get_event_timeline;
 
 
 mod nvr_recording;
-pub use nvr_recording::{start_nvr, stop_nvr, save_nvr_segment, get_nvr_segments, list_nvr_recordings, get_events_in_range, get_event_markers, list_recorded_days, search_events, find_similar_events, reindex_semantic_search, list_bookmarked_events};
+pub use nvr_recording::{start_nvr, stop_nvr, get_nvr_segments, list_nvr_recordings, get_events_in_range, get_event_markers, list_recorded_days, search_events, find_similar_events, reindex_semantic_search, list_bookmarked_events};
 
 mod rtsp;
 pub use rtsp::{start_rtsp_relay, stop_rtsp_relay, probe_stream};
@@ -199,7 +199,7 @@ mod correlation;
 pub use correlation::record_face_sighting;
 
 mod agent_tools;
-pub use agent_tools::{get_person_history, search_similar_events, trigger_alarm, send_telegram_test, telegram_connect, set_auth_password};
+pub use agent_tools::{get_person_history, search_similar_events, trigger_alarm, send_telegram_test, telegram_connect};
 
 mod system_cmds;
 pub use system_cmds::{GpuInfo, list_gpus, set_preferred_gpu, revoke_token, disconnect_client, get_local_ip, DiscoveredCamera, discover_cameras, recommend_face_model, list_installed_skills, SystemMetrics, get_system_metrics};
@@ -522,7 +522,6 @@ pub fn run() {
             save_clip_blob,
             start_nvr,
             stop_nvr,
-            save_nvr_segment,
             get_nvr_segments,
             list_nvr_recordings,
             list_recorded_days,
@@ -624,7 +623,6 @@ pub fn run() {
             telegram_connect,
             tailscale_status,
             tailscale_enable,
-            set_auth_password,
             auth_status,
             set_login_password,
             set_login_required,

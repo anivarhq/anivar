@@ -21,10 +21,43 @@
 //! another OS.
 
 use std::sync::Arc;
-use base64::Engine as _;
 use tauri::{State, Emitter};
 use crate::AppState;
 use crate::hw::hw_encoder_args;
+
+/// Pull the next complete JPEG (SOI `FF D8` … EOI `FF D9`) out of a chunked MJPEG
+/// pipe buffer. Shared by every image2pipe reader: reading the pipe ONE BYTE per
+/// await starves under executor load (see `spawn_capture`). `scan` resumes the EOI
+/// search across reads so each byte is scanned once. Leading garbage and <100-byte
+/// fragments are dropped; returns None when more data is needed.
+pub(crate) fn next_jpeg(pending: &mut Vec<u8>, scan: &mut usize) -> Option<Vec<u8>> {
+    loop {
+        // Align to SOI (FF D8): drop any leading garbage.
+        match pending.windows(2).position(|w| w == [0xFF, 0xD8]) {
+            Some(0) => {}
+            Some(i) => { pending.drain(..i); *scan = 0; }
+            None => {
+                let keep = pending.len().saturating_sub(1);
+                pending.drain(..keep);
+                *scan = 0;
+                return None;
+            }
+        }
+        // Find EOI (FF D9) after the SOI, resuming where the last scan ended.
+        let from = (*scan).max(2);
+        let eoi = pending[from - 1..].windows(2)
+            .position(|w| w == [0xFF, 0xD9])
+            .map(|off| from - 1 + off);
+        let Some(j) = eoi else {
+            if pending.len() > 8 * 1024 * 1024 { pending.clear(); }
+            *scan = pending.len();
+            return None; // need more data
+        };
+        let frame: Vec<u8> = pending.drain(..j + 2).collect();
+        *scan = 0;
+        if frame.len() >= 100 { return Some(frame); }
+    }
+}
 
 /// List connected cameras as device identifiers — these are BOTH shown to the user and
 /// passed back verbatim to `start_dshow_camera`.
@@ -319,77 +352,49 @@ async fn spawn_capture(
                 Ok(n) => n,
             };
             pending.extend_from_slice(&chunk[..n]);
-            loop {
-                // Align to SOI (FF D8): drop any leading garbage.
-                match pending.windows(2).position(|w| w == [0xFF, 0xD8]) {
-                    Some(0) => {}
-                    Some(i) => { pending.drain(..i); scan = 0; }
-                    None => {
-                        let keep = pending.len().saturating_sub(1);
-                        pending.drain(..keep);
-                        scan = 0;
-                        break;
+            while let Some(frame) = next_jpeg(&mut pending, &mut scan) {
+                win_frames += 1;
+                let el = win_start.elapsed().as_secs_f32();
+                if (!first_report_done && el >= 15.0) || el >= 60.0 {
+                    let fps = win_frames as f32 / el;
+                    if fps < 15.0 {
+                        tracing::warn!("cam{cam} ingest only {fps:.1} fps -- camera/pipeline underdelivering");
+                    } else {
+                        tracing::info!("cam{cam} ingest {fps:.1} fps");
                     }
+                    win_start = std::time::Instant::now();
+                    win_frames = 0;
+                    first_report_done = true;
                 }
-                // Find EOI (FF D9) after the SOI, resuming where the last scan ended.
-                let from = scan.max(2);
-                let eoi = pending[from.saturating_sub(1)..].windows(2)
-                    .position(|w| w == [0xFF, 0xD9])
-                    .map(|off| from.saturating_sub(1) + off);
-                match eoi {
-                    None => {
-                        if pending.len() > 8 * 1024 * 1024 { pending.clear(); }
-                        scan = pending.len();
-                        break; // need more data
-                    }
-                    Some(j) => {
-                        let frame: Vec<u8> = pending.drain(..j + 2).collect();
-                        scan = 0;
-                        if frame.len() < 100 { continue; }
-                        win_frames += 1;
-                        let el = win_start.elapsed().as_secs_f32();
-                        if (!first_report_done && el >= 15.0) || el >= 60.0 {
-                            let fps = win_frames as f32 / el;
-                            if fps < 15.0 {
-                                tracing::warn!("cam{cam} ingest only {fps:.1} fps -- camera/pipeline underdelivering");
-                            } else {
-                                tracing::info!("cam{cam} ingest {fps:.1} fps");
-                            }
-                            win_start = std::time::Instant::now();
-                            win_frames = 0;
-                            first_report_done = true;
-                        }
 
-                        let jpeg_arc = Arc::new(frame);
-                        if let Some(tx) = &depth_raw_tx {
-                            // ANONYMIZED: raw goes ONLY to in-RAM analysis — the
-                            // YOLO queue (infer_tx) + motion below. The depth
-                            // worker feeds every external consumer (frame_txs,
-                            // recording, HLS, snapshots) with depth frames.
-                            let _ = tx.send_replace(Some(Arc::clone(&jpeg_arc)));
-                            state_arc.infer_queue.push(cam, Arc::clone(&jpeg_arc));
-                        } else {
-                        // FULL RATE (all cheap): live view + HLS + inference queue.
-                        let _ = state_arc.frame_txs[cam as usize].send(Arc::clone(&jpeg_arc));
-                        crate::inference_cmds::fan_out_frame(&state_arc, cam, &jpeg_arc).await;
-                        }
-                        // DETECTION (expensive) runs only if the previous frame is done
-                        // AND at most ~7 fps (rate gate above).
-                        if last_det.elapsed().as_millis() >= 140
-                            && busy.compare_exchange(false, true,
-                                std::sync::atomic::Ordering::AcqRel,
-                                std::sync::atomic::Ordering::Acquire).is_ok()
-                        {
-                            last_det = std::time::Instant::now();
-                            let b64 = base64::engine::general_purpose::STANDARD.encode(jpeg_arc.as_slice());
-                            let s2 = Arc::clone(&state_arc);
-                            let busy2 = Arc::clone(&busy);
-                            tokio::spawn(async move {
-                                let _ = crate::process_frame_inner(&s2, b64, cam, 0, false).await;
-                                busy2.store(false, std::sync::atomic::Ordering::Release);
-                            });
-                        }
-                    }
+                let jpeg_arc = Arc::new(frame);
+                if let Some(tx) = &depth_raw_tx {
+                    // ANONYMIZED: raw goes ONLY to in-RAM analysis — the
+                    // YOLO queue (infer_tx) + motion below. The depth
+                    // worker feeds every external consumer (frame_txs,
+                    // recording, HLS, snapshots) with depth frames.
+                    let _ = tx.send_replace(Some(Arc::clone(&jpeg_arc)));
+                    state_arc.infer_queue.push(cam, Arc::clone(&jpeg_arc));
+                } else {
+                // FULL RATE (all cheap): live view + HLS + inference queue.
+                let _ = state_arc.frame_txs[cam as usize].send(Arc::clone(&jpeg_arc));
+                crate::inference_cmds::fan_out_frame(&state_arc, cam, &jpeg_arc).await;
+                }
+                // DETECTION (expensive) runs only if the previous frame is done
+                // AND at most ~7 fps (rate gate above).
+                if last_det.elapsed().as_millis() >= 140
+                    && busy.compare_exchange(false, true,
+                        std::sync::atomic::Ordering::AcqRel,
+                        std::sync::atomic::Ordering::Acquire).is_ok()
+                {
+                    last_det = std::time::Instant::now();
+                    let jpeg = Arc::clone(&jpeg_arc);
+                    let s2 = Arc::clone(&state_arc);
+                    let busy2 = Arc::clone(&busy);
+                    tokio::spawn(async move {
+                        let _ = crate::process_frame_inner(&s2, jpeg, cam, 0, false).await;
+                        busy2.store(false, std::sync::atomic::Ordering::Release);
+                    });
                 }
             }
         }
@@ -620,4 +625,34 @@ async fn list_cameras_impl(_ffmpeg: &std::path::Path) -> Result<Vec<String>, Str
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 async fn list_cameras_impl(_ffmpeg: &std::path::Path) -> Result<Vec<String>, String> {
     Ok(vec![])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_jpeg;
+
+    fn jpeg(fill: u8, len: usize) -> Vec<u8> {
+        let mut v = vec![0xFF, 0xD8];
+        v.extend(std::iter::repeat(fill).take(len - 4));
+        v.extend([0xFF, 0xD9]);
+        v
+    }
+
+    #[test]
+    fn splits_frames_across_arbitrary_chunk_boundaries() {
+        let (a, b) = (jpeg(0x11, 300), jpeg(0x22, 500));
+        let mut stream = vec![0x00, 0xFF, 0x42]; // leading garbage, incl. a lone FF
+        stream.extend(&a);
+        stream.extend([0xFF, 0xD8, 0xFF, 0xD9]); // 4-byte fragment: dropped (<100)
+        stream.extend(&b);
+        stream.extend([0xFF]); // trailing half-marker
+        for chunk_len in [1, 2, 3, 7, 64, 1000] {
+            let (mut pending, mut scan, mut out) = (Vec::new(), 0usize, Vec::new());
+            for c in stream.chunks(chunk_len) {
+                pending.extend_from_slice(c);
+                while let Some(f) = next_jpeg(&mut pending, &mut scan) { out.push(f); }
+            }
+            assert_eq!(out, vec![a.clone(), b.clone()], "chunk_len={chunk_len}");
+        }
+    }
 }

@@ -106,6 +106,8 @@ futures = "0.3"
 async-stream = "0.3"
 
 image = { version = "0.25", features = ["jpeg"] }
+zune-jpeg = "0.5"            # already image's JPEG backend; direct for luma-only motion decode
+zune-core = "0.5"
 imageproc = "0.25"           # Agies-style frame annotation: bounding boxes + text labels
 ab_glyph = "0.2"             # Font renderer used by imageproc for label text
 dejavu = "2.37"              # Embeds DejaVu Sans (public domain) — no external font file needed

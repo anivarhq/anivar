@@ -16,6 +16,7 @@
     "core:window:allow-start-dragging",
     "dialog:default",
     "fs:default",
+    "fs:allow-write-file",
     "notification:default",
     "updater:default"
   ]

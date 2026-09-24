@@ -23,7 +23,7 @@ use crate::{
 };
 use crate::footage::{footage_clip, footage_list, footage_stream, footage_thumbnail, ping};
 use crate::hls::hls_serve;
-use crate::http_handlers::{cam_proxy, login_with_password, mjpeg_stream, redeem, share_clip, share_live, snapshot, webrtc_whep};
+use crate::http_handlers::{cam_proxy, mjpeg_stream, redeem, share_clip, share_live, snapshot, webrtc_whep};
 use crate::nvr_stream::{nvr_concat_stream, nvr_export_stream, nvr_seek_stream, nvr_stream};
 /// Token auth middleware with per-IP rate limiting on failures.
 pub(crate) async fn require_token(
@@ -41,36 +41,13 @@ pub(crate) async fn require_token(
         return next.run(req).await;
     }
 
-    if path == "/login"
-        // v11 share routes carry their own HMAC token + HttpOnly cookie auth,
-        // they don't use the desktop auth_token at all.
-        || path == "/redeem"
+    // v11 share routes carry their own HMAC token + HttpOnly cookie auth,
+    // they don't use the desktop auth_token at all.
+    if path == "/redeem"
         || path.starts_with("/clips/")
         || path.starts_with("/live/")
         {
         return next.run(req).await;
-    }
-
-    // Extract caller IP for rate limiting (ConnectInfo not available behind tunnel,
-    // so fall back to X-Forwarded-For then a fixed sentinel)
-    let ip = req.headers()
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .unwrap_or("unknown")
-        .trim()
-        .to_string();
-
-    // Rate-limit check: max 15 failed attempts per IP per 60 seconds
-    {
-        let mut map = ss.failed_auth.lock().await;
-        let now = Instant::now();
-        let window = std::time::Duration::from_secs(60);
-        let attempts = map.entry(ip.clone()).or_default();
-        attempts.retain(|t| now.duration_since(*t) < window);
-        if attempts.len() >= 15 {
-            return (StatusCode::TOO_MANY_REQUESTS, "Too many failed attempts — try again later").into_response();
-        }
     }
 
     let query = req.uri().query().unwrap_or("");
@@ -93,17 +70,56 @@ pub(crate) async fn require_token(
         })
         .unwrap_or(false);
 
+    // A valid token always gets through. Rate limiting applies to FAILURES
+    // only: it used to run before the token check, keyed on a header any
+    // client can set, so 15 bad requests locked the app's own UI out of its
+    // own server for a minute.
     if token_in_query || token_in_header {
-        // Success — clear any recorded failures for this IP
-        ss.failed_auth.lock().await.remove(&ip);
-        next.run(req).await
-    } else {
-        // Record the failure
-        ss.failed_auth.lock().await
-            .entry(ip)
-            .or_default()
-            .push(Instant::now());
-        (StatusCode::UNAUTHORIZED, "Access denied — use the full link from Anivar").into_response()
+        return next.run(req).await;
+    }
+
+    // Caller key for failure counting. The server has no ConnectInfo; behind the
+    // Tailscale tunnel X-Forwarded-For is the real client. A local caller can
+    // forge it, which at worst dodges this limiter -- the token is the barrier.
+    let ip = req.headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .unwrap_or("unknown")
+        .trim()
+        .to_string();
+
+    // Max 15 failed attempts per caller per 60 seconds.
+    let now = Instant::now();
+    let window = std::time::Duration::from_secs(60);
+    let mut map = ss.failed_auth.lock().await;
+    // Keep the map bounded: drop callers whose failures have all aged out, and
+    // cap it so a rotating forged header can't grow it without limit.
+    map.retain(|_, attempts| {
+        attempts.retain(|t| now.duration_since(*t) < window);
+        !attempts.is_empty()
+    });
+    if map.len() >= 4096 && !map.contains_key(&ip) {
+        map.clear();
+    }
+    let attempts = map.entry(ip).or_default();
+    if attempts.len() >= 15 {
+        return (StatusCode::TOO_MANY_REQUESTS, "Too many failed attempts — try again later").into_response();
+    }
+    attempts.push(now);
+    (StatusCode::UNAUTHORIZED, "Access denied — use the full link from Anivar").into_response()
+}
+
+/// `<scheme>://localhost` or `<scheme>://localhost:<port>`, and nothing else.
+/// This was a prefix test, which also let `http://localhost.evil.com` in.
+fn is_local_origin(origin: &str) -> bool {
+    let Some(rest) = ["http://", "https://", "tauri://", "capacitor://"]
+        .iter().find_map(|scheme| origin.strip_prefix(scheme)) else { return false };
+    match rest.strip_prefix("localhost") {
+        Some("") => true,
+        Some(port) => port.strip_prefix(':')
+            .is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())),
+        None => false,
     }
 }
 
@@ -159,12 +175,8 @@ pub fn start_http_server(
     use axum::http::HeaderValue;
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(|origin: &HeaderValue, _req| {
-            let s = origin.to_str().unwrap_or("");
-            // Allow any localhost origin (covers Vite dev :5174, Tauri, Capacitor)
-            s.starts_with("http://localhost")
-                || s.starts_with("https://localhost")
-                || s.starts_with("tauri://localhost")
-                || s.starts_with("capacitor://localhost")
+            // Localhost origins only (Vite dev :5174, Tauri, Capacitor).
+            is_local_origin(origin.to_str().unwrap_or(""))
         }))
         .allow_methods([
             axum::http::Method::GET,
@@ -187,7 +199,6 @@ pub fn start_http_server(
     // long-lived BY DESIGN and must not sit under a timeout.
     let short_routes = Router::new()
         .route("/ping", get(ping))
-        .route("/login", axum::routing::post(login_with_password))
         .route("/snapshot", get(snapshot))
         .route("/footage", get(footage_list))
         .route("/clip-start", get(crate::footage::clip_start_meta))
@@ -316,4 +327,22 @@ async fn loop_bind_reuseaddr(addr: SocketAddr) -> Option<tokio::net::TcpListener
         }
     }
     None
+}
+
+#[cfg(test)]
+mod cors_tests {
+    use super::is_local_origin;
+
+    #[test]
+    fn only_exact_localhost_origins_pass() {
+        for ok in ["http://localhost", "http://localhost:5174", "https://localhost",
+                   "tauri://localhost", "capacitor://localhost"] {
+            assert!(is_local_origin(ok), "{ok} should be allowed");
+        }
+        for bad in ["http://localhost.evil.com", "http://localhost@evil.com",
+                    "http://localhost:", "http://localhost:80x", "https://evil.com",
+                    "http://127.0.0.1", "file://localhost", ""] {
+            assert!(!is_local_origin(bad), "{bad} must be rejected");
+        }
+    }
 }

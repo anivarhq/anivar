@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use base64::Engine as _;
 use tauri::{Emitter, State};
 
 use crate::{AppState, ensure_ffmpeg, process_frame_inner};
@@ -75,7 +74,7 @@ pub async fn start_rtsp_relay(
         let mut procs = state.rtsp_processes.lock().await;
         if let Some(child) = procs.get_mut(&cam) {
             if matches!(child.try_wait(), Ok(None)) {
-                tracing::debug!("rtsp cam{}: already relaying {} — reusing", cam, url);
+                tracing::debug!("rtsp cam{}: already relaying {} — reusing", cam, crate::native_cam_cmds::mask_stream_url(&url));
                 return Ok(());
             }
         }
@@ -107,7 +106,7 @@ pub async fn start_rtsp_relay(
     // stay on the main URL.
     let detect_src = cam_detect_url(&state, cam).await.unwrap_or_else(|| url.clone());
     if detect_src != url {
-        tracing::info!("rtsp cam{cam}: detection uses sub-stream {detect_src}");
+        tracing::info!("rtsp cam{cam}: detection uses sub-stream {}", crate::native_cam_cmds::mask_stream_url(&detect_src));
     }
     let mut det_args = input_args(&detect_src);
     det_args.extend([
@@ -138,53 +137,42 @@ pub async fn start_rtsp_relay(
     // Spawn a reader task that parses the JPEG stream and feeds process_frame
     tokio::spawn(async move {
         use tokio::io::AsyncReadExt;
-        let mut reader = tokio::io::BufReader::new(stdout);
-        let mut buf = Vec::<u8>::with_capacity(256 * 1024);
+        // Chunked reads + shared SOI/EOI splitter (never one byte per await).
+        let mut reader = stdout;
+        let mut chunk = vec![0u8; 64 * 1024];
+        let mut pending: Vec<u8> = Vec::with_capacity(256 * 1024);
+        let mut scan = 0usize;
         loop {
-            // Read JPEG: starts with FF D8, ends with FF D9
-            buf.clear();
-            // Find SOI marker
-            let mut b = [0u8; 1];
-            loop {
-                if reader.read_exact(&mut b).await.is_err() { return; }
-                if b[0] == 0xFF {
-                    let mut b2 = [0u8; 1];
-                    if reader.read_exact(&mut b2).await.is_err() { return; }
-                    if b2[0] == 0xD8 { buf.extend_from_slice(&[0xFF, 0xD8]); break; }
+            let n = match reader.read(&mut chunk).await {
+                Ok(0) | Err(_) => return,
+                Ok(n) => n,
+            };
+            pending.extend_from_slice(&chunk[..n]);
+            while let Some(frame) = crate::dshow::next_jpeg(&mut pending, &mut scan) {
+                let jpeg_arc = Arc::new(frame);
+                // FULL RATE (all cheap): live view + recording + HLS + inference queue.
+                let _ = state_arc.frame_txs[cam as usize].send(Arc::clone(&jpeg_arc));
+                crate::inference_cmds::fan_out_frame(&state_arc, cam, &jpeg_arc).await;
+                // DETECTION (expensive) runs drop-don't-queue so tasks can't pile up (OOM)
+                // or lag behind (slow-motion). Recording above is unaffected by its speed.
+                if busy.compare_exchange(false, true,
+                    std::sync::atomic::Ordering::AcqRel,
+                    std::sync::atomic::Ordering::Acquire).is_ok()
+                {
+                    let s2 = Arc::clone(&state_arc);
+                    let busy2 = Arc::clone(&busy);
+                    tokio::spawn(async move {
+                        let _ = process_frame_inner(&s2, jpeg_arc, cam, 0, false).await;
+                        busy2.store(false, std::sync::atomic::Ordering::Release);
+                    });
                 }
-            }
-            // Read until EOI marker
-            loop {
-                if reader.read_exact(&mut b).await.is_err() { break; }
-                buf.push(b[0]);
-                if buf.len() >= 2 && buf[buf.len()-2] == 0xFF && buf[buf.len()-1] == 0xD9 { break; }
-                if buf.len() > 4 * 1024 * 1024 { break; } // safety limit 4MB
-            }
-            if buf.len() < 100 { continue; }
-            let jpeg_arc = Arc::new(buf.clone());
-            // FULL RATE (all cheap): live view + recording + HLS + inference queue.
-            let _ = state_arc.frame_txs[cam as usize].send(Arc::clone(&jpeg_arc));
-            crate::inference_cmds::fan_out_frame(&state_arc, cam, &jpeg_arc).await;
-            // DETECTION (expensive) runs drop-don't-queue so tasks can't pile up (OOM)
-            // or lag behind (slow-motion). Recording above is unaffected by its speed.
-            if busy.compare_exchange(false, true,
-                std::sync::atomic::Ordering::AcqRel,
-                std::sync::atomic::Ordering::Acquire).is_ok()
-            {
-                let b64 = base64::engine::general_purpose::STANDARD.encode(&buf);
-                let s2 = Arc::clone(&state_arc);
-                let busy2 = Arc::clone(&busy);
-                tokio::spawn(async move {
-                    let _ = process_frame_inner(&s2, b64, cam, 0, false).await;
-                    busy2.store(false, std::sync::atomic::Ordering::Release);
-                });
             }
         }
     });
 
     state.rtsp_processes.lock().await.insert(cam, child);
     state.capture_keys.lock().await.insert(cam, key);
-    tracing::info!("RTSP relay started for cam{}: {}", cam, url);
+    tracing::info!("RTSP relay started for cam{}: {}", cam, crate::native_cam_cmds::mask_stream_url(&url));
 
     // go2rtc: restream this camera over WebRTC for sub-second live view.
     // Best-effort and fully decoupled — on any failure the frontend's

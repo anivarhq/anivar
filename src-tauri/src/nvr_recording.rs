@@ -1,17 +1,12 @@
-//! Tauri commands for browser-driven continuous NVR recording (start_nvr, stop_nvr, save_nvr_segment, query helpers).
+//! Tauri commands for continuous NVR recording (start_nvr, stop_nvr, query helpers).
 
 use std::sync::Arc;
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use chrono::Utc;
 use tauri::{Emitter, State};
-use uuid::Uuid;
 
 use crate::{AppState, MotionEvent, spawn_nvr_pipe, spawn_hls_pipe};
 
 
-/// Signal the frontend to start browser-based NVR recording.
-/// The browser's MediaRecorder segments the stream and sends each segment via
 /// Start NVR recording entirely in Rust — frames piped from process_frame directly
 /// to an ffmpeg subprocess that writes H.264 MP4 segments.  Zero browser involvement.
 /// Also starts HLS output so the frontend can play back live with low bandwidth.
@@ -49,13 +44,7 @@ pub async fn start_nvr(
             state.nvr_processes.lock().await.insert(cam_id, child);
             tracing::info!("NVR (Rust/ffmpeg pipe) started for cam{}", cam_id);
         }
-        Err(e) => {
-            tracing::warn!("NVR ffmpeg pipe failed ({}); install ffmpeg for Rust-side NVR", e);
-            // Fallback: browser MediaRecorder (legacy path)
-            state.app_handle.emit("nvr:start", serde_json::json!({
-                "cam_id": cam_id, "segment_mins": settings.nvr_segment_mins,
-            })).ok();
-        }
+        Err(e) => tracing::warn!("NVR ffmpeg pipe failed ({}); install ffmpeg for Rust-side NVR", e),
     }
 
     // ── HLS: pipe frames → ffmpeg → H.264 HLS for low-bandwidth playback ──────
@@ -86,89 +75,6 @@ pub async fn stop_nvr(state: State<'_, Arc<AppState>>, cam_id: u8) -> Result<(),
     // Also signal legacy browser MediaRecorder (harmless if not running)
     state.app_handle.emit("nvr:stop", serde_json::json!({ "cam_id": cam_id })).ok();
     tracing::info!("NVR stopped for cam{}", cam_id);
-    Ok(())
-}
-
-/// Receive a completed NVR segment blob from the browser MediaRecorder.
-/// Saves it to data_dir/nvr/ and records metadata in nvr_segments.
-#[tauri::command]
-pub async fn save_nvr_segment(
-    state: State<'_, Arc<AppState>>,
-    cam_id: u8,
-    filename: String,
-    blob_b64: String,
-    _mime_type: String,
-) -> Result<(), String> {
-    // Validate filename — only alphanumeric, dash, underscore, dot
-    if !filename.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) {
-        return Err("Invalid filename".into());
-    }
-    let bytes = B64.decode(blob_b64.trim()).map_err(|e| e.to_string())?;
-    let seg_dir = state.data_dir.join("nvr");
-    tokio::fs::create_dir_all(&seg_dir).await.map_err(|e| e.to_string())?;
-    let path = seg_dir.join(&filename);
-    tokio::fs::write(&path, &bytes).await.map_err(|e| e.to_string())?;
-    let size = bytes.len() as i64;
-
-    // Parse started_at from filename: cam{N}_{YYYYMMDD}_{HHMMSS}.webm
-    // Browser JS creates filenames with LOCAL time — convert to UTC to match motion_events.
-    let started_at = filename
-        .trim_end_matches(".webm").trim_end_matches(".mp4")
-        .splitn(3, '_')
-        .collect::<Vec<_>>()
-        .get(1..3)
-        .and_then(|parts| crate::nvr_pipes::segment_local_name_to_utc(parts[0], parts[1]))
-        .unwrap_or_else(|| Utc::now().to_rfc3339());
-
-    let rec_id = Uuid::new_v4().to_string();
-    let now    = Utc::now().to_rfc3339();
-    sqlx::query(
-        "INSERT INTO nvr_segments(id,cam_id,path,started_at,ended_at,size_bytes) VALUES(?,?,?,?,?,?)"
-    ).bind(&rec_id).bind(cam_id as i64)
-     .bind(path.to_string_lossy().as_ref())
-     .bind(&started_at).bind(&now).bind(size)
-     .execute(&state.db).await.ok();
-
-    tracing::info!("NVR segment saved: {} ({} KB)", filename, size / 1024);
-
-    // Convert to seekable MP4 using ffmpeg.
-    // -c copy won't fix seeking — we must re-encode with +faststart moov atom at front.
-    // Runs in background. If ffmpeg unavailable, keeps original WebM (non-seekable fallback).
-    let path_clone   = path.clone();
-    let app_handle   = state.app_handle.clone();
-    let final_name   = filename.trim_end_matches(".webm").to_string() + ".mp4";
-    let final_name_c = final_name.clone();
-    tokio::spawn(async move {
-        let mp4_path = path_clone.with_extension("mp4");
-
-        let status = crate::proc::tokio_cmd("ffmpeg")
-            .args([
-                "-hide_banner", "-loglevel", "error", "-y",
-                "-i", &path_clone.to_string_lossy(),
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-                "-threads", "2", // cap x264's ~1.5×cores default frame-thread pool
-                "-movflags", "+faststart",   // moov atom first = instant seek
-                "-c:a", "aac",
-                &mp4_path.to_string_lossy(),
-            ])
-            .status().await;
-
-        if let Ok(s) = status {
-            if s.success() && mp4_path.exists() {
-                let _ = tokio::fs::remove_file(&path_clone).await; // delete original .webm
-                tracing::info!("NVR segment converted to seekable MP4: {:?}", mp4_path.file_name());
-                app_handle.emit("nvr:segment-saved",
-                    serde_json::json!({ "filename": final_name_c, "size": size })).ok();
-                return;
-            }
-        }
-
-        // ffmpeg unavailable or failed — keep original .webm (scrubbing will be limited)
-        tracing::warn!("ffmpeg not available — NVR segment saved as non-seekable WebM: {}. Install ffmpeg to enable scrubbing.", filename);
-        app_handle.emit("nvr:segment-saved",
-            serde_json::json!({ "filename": filename, "size": size })).ok();
-    });
-
     Ok(())
 }
 
@@ -1050,13 +956,14 @@ pub(crate) async fn consolidate_unknown_faces(state: &Arc<AppState>) {
 
     let mut del: Vec<usize> = Vec::new();
     let (mut regulars, mut oneoff, mut capped) = (0u32, 0u32, 0u32);
-    if vecs.len() >= 2 {
-        let v = vecs.clone();
+    let n = vecs.len();
+    if n >= 2 {
+        // Move, don't clone: up to 20k × 512-d vectors, and only the count is needed after.
         let labels = tokio::task::spawn_blocking(move || {
-            let edges = crate::vector_index::knn_graph(&v, 16, floor);
-            crate::vector_index::chinese_whispers(v.len(), &edges, 30)
+            let edges = crate::vector_index::knn_graph(&vecs, 16, floor);
+            crate::vector_index::chinese_whispers(n, &edges, 30)
         }).await.unwrap_or_default();
-        if labels.len() == vecs.len() {
+        if labels.len() == n {
             let mut groups: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
             for (i, &l) in labels.iter().enumerate() { groups.entry(l).or_default().push(i); }
             for idxs in groups.values() {

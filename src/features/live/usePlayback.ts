@@ -177,7 +177,13 @@ export function usePlayback({ camId, segments, streamInfo, dayFromUtc, dayToUtc 
   const coverageBands = useMemo(() => mergeSegmentBands(segments), [segments]);
 
   // ── Position ────────────────────────────────────────────────────────────
-  const chunks = useMemo(() => chunkDay(dayFromUtc, dayToUtc), [dayFromUtc, dayToUtc]);
+  // `chunkDay` cuts today off at "now", so the list goes stale while the panel
+  // stays open: footage recorded after mount was unplayable and a click on it
+  // did nothing. `nowMs` moves only when the list is actually too short (a seek
+  // past its end, or playback running out with newer footage recorded). Moving
+  // it on a timer would change the live-edge chunk's URL and reload the player.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const chunks = useMemo(() => chunkDay(dayFromUtc, dayToUtc, nowMs), [dayFromUtc, dayToUtc, nowMs]);
   const [chunkIdx, setChunkIdx] = useState(0);
   const chunk: Chunk | null = chunks[chunkIdx] ?? null;
   /** Where to land once the new source is ready — Frigate's `startTimestamp`.
@@ -189,7 +195,9 @@ export function usePlayback({ camId, segments, streamInfo, dayFromUtc, dayToUtc 
   const [playbackStart, setPlaybackStart] = useState<number | null>(null);
 
   // A new day is a new chunk list; an index into the old one means nothing.
-  useEffect(() => { setChunkIdx(0); setPlaybackStart(null); }, [chunks]);
+  // Keyed on the DAY, not on `chunks`: extending today's list must not throw
+  // the player back to the first chunk.
+  useEffect(() => { setChunkIdx(0); setPlaybackStart(null); }, [dayFromUtc, dayToUtc]);
 
   // No scrub previews. They existed to make DRAGGING cheap, and the timeline's
   // drag pans the viewport here rather than seeking (a deliberate rule), so
@@ -209,7 +217,14 @@ export function usePlayback({ camId, segments, streamInfo, dayFromUtc, dayToUtc 
   const seekTo = useCallback((ms: number) => {
     const snapped = snapToCoverage(coverageBands, ms, "any") ?? ms;
     setPlayheadMs(snapped);
-    const idx = findChunk(chunks, snapped);
+    let idx = findChunk(chunks, snapped);
+    // Past the end of a list built for an earlier "now": rebuild it before
+    // deciding the instant is outside the day.
+    if (idx === -1 && snapped <= Date.now()) {
+      const now = Date.now();
+      const freshIdx = findChunk(chunkDay(dayFromUtc, dayToUtc, now), snapped);
+      if (freshIdx !== -1) { setNowMs(now); idx = freshIdx; }
+    }
     // Outside the recorded day entirely. Frigate's `updateSelectedSegment` does
     // nothing on -1 and neither do we: answering a click past the live edge by
     // seeking somewhere else is worse than not moving.
@@ -246,7 +261,7 @@ export function usePlayback({ camId, segments, streamInfo, dayFromUtc, dayToUtc 
     // Only mint a new source object when the KIND actually changes — a fresh
     // object on every seek re-runs every effect keyed on `clipSource`.
     if (clipSourceRef.current.kind !== "history") setClipSource({ kind: "history" });
-  }, [coverageBands, chunks, chunkIdx]);
+  }, [coverageBands, chunks, chunkIdx, dayFromUtc, dayToUtc]);
 
   /** The player can play. Apply the instant the user actually asked for —
    *  Frigate's `onPlayerLoaded` -> `seekToTimestamp(startTimestamp, true)`. */
@@ -289,12 +304,23 @@ export function usePlayback({ camId, segments, streamInfo, dayFromUtc, dayToUtc 
   const handleEnded = useCallback(() => {
     if (clipSourceRef.current.kind !== "history" || !chunk) return;
     if (!shouldAdvance(coverageBands, chunk, playheadMs)) return;
-    // The last chunk ends at the live edge (or at the end of a past day). Stopping
-    // there is right: there is no next hour to roll into yet.
-    if (chunkIdx >= chunks.length - 1) return;
+    // The last chunk ends at the "now" the list was built with, or at the end of
+    // a past day. If today's recorder has since written footage past the
+    // playhead, extend the list and carry on from the playhead. With nothing
+    // newer recorded, stay stopped: re-extending on every `ended` at the live
+    // edge is the reload storm this module exists to prevent.
+    if (chunkIdx >= chunks.length - 1) {
+      const from = playheadMs ?? chunk.end;
+      const newest = coverageBands.reduce((m, b) => Math.max(m, b.end), 0);
+      if (chunk.end < new Date(dayToUtc).getTime() && newest > from + 2000) {
+        setNowMs(Date.now());
+        setPlaybackStart(from);
+      }
+      return;
+    }
     setPlaybackStart(null); // play the next chunk from its start
     setChunkIdx(chunkIdx + 1);
-  }, [chunk, chunkIdx, chunks.length, coverageBands, playheadMs]);
+  }, [chunk, chunkIdx, chunks.length, coverageBands, playheadMs, dayToUtc]);
 
   /**
    * Cross an empty chunk instead of stopping on it.

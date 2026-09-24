@@ -172,22 +172,4 @@ pub async fn send_telegram_test(bot_token: String, chat_id: String) -> Result<St
     }
 }
 
-/// Set a new password — hashes it with SHA-256 before storing.
-/// Never stores the plaintext password.
-#[tauri::command]
-pub async fn set_auth_password(password: String, state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    let hash = if password.is_empty() {
-        String::new()
-    } else {
-        use sha2::{Sha256, Digest};
-        let mut h = Sha256::new();
-        h.update(password.as_bytes());
-        format!("{:x}", h.finalize())
-    };
-    let mut settings = state.settings.write().await;
-    settings.auth_password_hash = hash;
-    let s = settings.clone();
-    drop(settings);
-    crate::db::save_settings_to_db(&state.db, &s).await.map_err(|e| e.to_string())
-}
 

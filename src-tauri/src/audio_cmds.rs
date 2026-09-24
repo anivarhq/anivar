@@ -185,9 +185,10 @@ pub(crate) async fn mux_ring_audio(
 
     let big = tokio::fs::metadata(&tmp_out).await.map(|m| m.len() > 4096).unwrap_or(false);
     if ok && big {
-        // Replace the video-only clip with the muxed one (remove-then-rename: Windows
-        // rename won't overwrite an existing file).
-        let _ = tokio::fs::remove_file(clip_path).await;
+        // Replace the video-only clip with the muxed one in a single rename:
+        // std::fs::rename replaces the destination on Windows too
+        // (MOVEFILE_REPLACE_EXISTING). Deleting first lost BOTH files whenever
+        // the rename then failed (e.g. a player holding the clip open).
         if tokio::fs::rename(&tmp_out, clip_path).await.is_ok() {
             tracing::info!("AUDIO: muxed buffered audio into clip cam{} ({} KB pcm)", cam, pcm.len() / 1024);
             return true;

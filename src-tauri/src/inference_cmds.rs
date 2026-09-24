@@ -127,9 +127,8 @@ pub(crate) async fn fan_out_frame(state: &Arc<AppState>, cam: u8, jpeg_arc: &Arc
 /// `feed_pipes`: when true (browser path) this also fans out to NVR/HLS/inference at
 /// the end. The server-side capture readers pass FALSE and call `fan_out_frame`
 /// themselves at full rate, so recording isn't throttled by detection speed.
-pub(crate) async fn process_frame_inner(state: &Arc<AppState>, frame_b64: String, cam: u8, _ts: i64, feed_pipes: bool) -> Result<FrameResult, String> {
+pub(crate) async fn process_frame_inner(state: &Arc<AppState>, jpeg_bytes: Arc<Vec<u8>>, cam: u8, _ts: i64, feed_pipes: bool) -> Result<FrameResult, String> {
 
-    let jpeg_bytes = B64.decode(frame_b64.trim()).unwrap_or_default();
     if jpeg_bytes.is_empty() {
         return Ok(FrameResult { motion_detected: false, motion_score: 0.0, recording: false, event_id: None, motion_regions: vec![] });
     }
@@ -222,9 +221,7 @@ pub(crate) async fn process_frame_inner(state: &Arc<AppState>, frame_b64: String
     // full rate already (feed_pipes=false) so recording isn't throttled by this
     // (possibly slow) detection pass.
     if feed_pipes {
-        // Only the browser path fans out from here; build the shared Arc lazily so the
-        // server-side capture path (feed_pipes=false) never pays for this clone.
-        fan_out_frame(state, cam, &Arc::new(jpeg_bytes)).await;
+        fan_out_frame(state, cam, &jpeg_bytes).await;
     }
 
     let recording = state.clip_txs.lock().await.contains_key(&cam);
@@ -239,7 +236,8 @@ pub async fn process_frame(
     cam_id: Option<u8>,
     timestamp_ms: i64,
 ) -> Result<FrameResult, String> {
-    process_frame_inner(&state, frame_b64, cam_id.unwrap_or(0).min(15), timestamp_ms, true).await
+    let jpeg = Arc::new(B64.decode(frame_b64.trim()).unwrap_or_default());
+    process_frame_inner(&state, jpeg, cam_id.unwrap_or(0).min(15), timestamp_ms, true).await
 }
 
 /// v9: pull-based query for the YOLO badge. `CameraView` calls this on mount
