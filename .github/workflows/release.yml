@@ -303,8 +303,12 @@ jobs:
             a=$(alias_for "$n")
             if [ -n "$a" ] && [ "$a" != "$n" ]; then
               cp "$n" "$a"
-              gh release upload "$TAG" "$a" --clobber --repo "$GITHUB_REPOSITORY"
-              rm -f "$a"
+              # The alias gets its own checksum, naming the alias. The download
+              # links point at aliases, so a checksum that names only the
+              # versioned file is one nobody who clicked a link can check.
+              sha256sum "$a" > "$a.sha256"
+              gh release upload "$TAG" "$a" "$a.sha256" --clobber --repo "$GITHUB_REPOSITORY"
+              rm -f "$a" "$a.sha256"
               aliases=$((aliases + 1))
             fi
             rm -f "$n"
