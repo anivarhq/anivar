@@ -132,6 +132,7 @@ dependencies = [
  "chrono",
  "dejavu",
  "encoding_rs",
+ "flate2",
  "futures",
  "hmac",
  "hostname",
