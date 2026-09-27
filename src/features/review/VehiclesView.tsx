@@ -21,9 +21,11 @@ function Empty({ text }: { text: string }) {
 
 const VEHICLE_COLOR_HEX = OBJECT_COLOR_SWATCH;
 
-export function VehiclesView({ cams, types, colors, plates, date, query, refreshTick, bookmarkIds, onToggleBookmark, onDelete, onOpenPlayer }: {
+export function VehiclesView({ cams, camName, types, colors, plates, date, query, refreshTick, bookmarkIds, onToggleBookmark, onDelete, onOpenPlayer }: {
   /** CSV multi-select filters from the Review toolbar dropdowns ("" = all). */
   cams: string; types: string; colors: string; plates: string;
+  /** Camera id → the name the user gave it (shared with the Events feed). */
+  camName: (id: number) => string;
   /** Selected day (Review toolbar date) — scopes the sightings server-side. */
   date: string;
   /** Toolbar search box — filters the loaded sightings client-side. */
@@ -216,7 +218,7 @@ export function VehiclesView({ cams, types, colors, plates, date, query, refresh
                              color: pillFg, border: "1px solid rgb(var(--ink) / 0.18)" }}>
                     {e.color ? `${e.color} ${e.vtype}` : e.vtype}
                   </div>
-                  <span className={cardStyles.cardCam}>CAM {(e.cam_id ?? 0) + 1}</span>
+                  <span className={cardStyles.cardCam}>{camName(e.cam_id ?? 0)}</span>
                   <span className={cardStyles.cardPlay}><Play size={12} fill="#fff" /></span>
                   {/* Same row, same corner, same order as Events and Sounds. The
                       plate pill that sat bottom-right collided with .cardRisk and
@@ -255,7 +257,7 @@ export function VehiclesView({ cams, types, colors, plates, date, query, refresh
               thumb={v.thumbnail ? eventThumbSrc(v.thumbnail, v.id, streamInfo) : null}
               thumbFallback={<Car size={16} />}
               title={v.color ? `${v.color} ${v.vtype}` : v.vtype}
-              camLabel={`Camera ${(v.cam_id ?? 0) + 1}`}
+              camLabel={camName(v.cam_id ?? 0)}
               timeLabel={fmtWhen(v.started_at)}
               chips={chips}
             />
