@@ -17,7 +17,8 @@ What helps, roughly in order of usefulness:
 
 - What an attacker gets — read footage, run code, escape the LAN, recover a
   biometric descriptor
-- The steps to reproduce, and the version (Help → About, or `tauri.conf.json`)
+- The steps to reproduce, and the version (**Settings → App Updates → Check for
+  Updates** shows it)
 - Whether it needs local access, an authenticated session, or nothing at all
 - A patch, if you have one — very welcome, never expected
 
@@ -100,12 +101,15 @@ Useful context if you are looking for something:
   proxy is restricted to private ranges with DNS-rebinding blocked
 - **Footage wipes deliberately exclude face data**, so a retention purge cannot
   silently destroy enrolments
-- **Bundled binaries are SHA-pinned** (ffmpeg, go2rtc, runtime libraries).
-  Downloads verify before install and install atomically
+- **Downloaded binaries are pinned, not bundled.** ffmpeg, ffprobe and go2rtc
+  come from versioned releases and are refused unless their SHA-256 matches the
+  value compiled into the app; GPU runtime packages are checked against the
+  digest PyPI publishes. Everything is staged and proven to run before it
+  replaces what is installed, so a half-finished download never executes
 - Secrets are AES-GCM encrypted at rest; the login gate is Argon2id with
   constant-time comparison
-- CI runs `cargo audit` and `npm audit` against production dependencies on every
-  push, and fails on high severity
+- CI runs `cargo audit` on every push and fails on any known vulnerability, and
+  `npm audit` against production dependencies, failing on high severity
 
 ## Third-party dependencies
 

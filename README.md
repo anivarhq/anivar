@@ -57,16 +57,18 @@ is in [`CHANGELOG.md`](CHANGELOG.md).
 
 ### Verify your download
 
-Every file has a `.sha256` beside it. Take that too, then:
+Every download above has a checksum beside it: add `.sha256` to the link. Save
+both files in the same folder, then:
 
 ```powershell
-# Windows — compare the result against the .sha256 file's contents
-(Get-FileHash .\Anivar_*_x64-setup.exe -Algorithm SHA256).Hash
+# Windows — prints True if the file is exactly the one we published
+$want = (Get-Content .\Anivar-windows-x64-setup.exe.sha256).Split()[0]
+(Get-FileHash .\Anivar-windows-x64-setup.exe -Algorithm SHA256).Hash -eq $want
 ```
 
 ```bash
-shasum -a 256 -c Anivar_*_aarch64.dmg.sha256   # macOS
-sha256sum -c Anivar_*_amd64.deb.sha256         # Linux
+shasum -a 256 -c Anivar-macos-arm64.dmg.sha256       # macOS
+sha256sum -c Anivar-linux-x86_64.AppImage.sha256     # Linux (or the .deb / .rpm)
 ```
 
 ### Before you install
