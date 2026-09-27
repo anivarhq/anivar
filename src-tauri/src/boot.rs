@@ -179,7 +179,13 @@ pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::
     let _tray = tray_builder
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => open_control_panel(app),
-            "quit" => std::process::exit(0),
+            "quit" => {
+                // Said out loud, because otherwise a deliberate quit and a crash
+                // leave the same trace: a log that simply stops. The file writer
+                // is unbuffered, so this line is on disk before exit returns.
+                tracing::info!("Quit Anivar chosen from the tray — exiting");
+                std::process::exit(0)
+            }
             _ => {}
         })
         // Left-click the tray icon to open the control panel — the expected
