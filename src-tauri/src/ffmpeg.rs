@@ -1,6 +1,7 @@
 //! ffmpeg binary resolution.
 //!
-//! [`ensure_ffmpeg`] uses an ffmpeg the machine already has if there is one.
+//! [`ensure_ffmpeg`] uses an ffmpeg and ffprobe the machine already has, if it
+//! has both.
 //! Otherwise it installs a pinned build — ffmpeg and ffprobe together — into
 //! the application data directory, verified by SHA-256 exactly as go2rtc is,
 //! and returns the resolved path either way.
@@ -48,8 +49,11 @@ pub async fn ensure_ffmpeg(data_dir: &Path) -> anyhow::Result<PathBuf> {
 }
 
 async fn resolve(data_dir: &Path) -> anyhow::Result<PathBuf> {
-    // 1. An ffmpeg the machine already has.
-    if runs(Path::new("ffmpeg")).await {
+    // 1. An ffmpeg the machine already has — with an ffprobe, which Add
+    //    Camera's connection test runs from the same place. A lone ffmpeg.exe
+    //    dropped on PATH is common, and taking it left "Test connection"
+    //    failing with "program not found"; it falls through to the pinned pair.
+    if runs(Path::new("ffmpeg")).await && runs(Path::new(FFPROBE)).await {
         return Ok(PathBuf::from("ffmpeg"));
     }
 
@@ -60,7 +64,7 @@ async fn resolve(data_dir: &Path) -> anyhow::Result<PathBuf> {
     #[cfg(target_os = "macos")]
     for dir in ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"] {
         let candidate = Path::new(dir).join("ffmpeg");
-        if runs(&candidate).await {
+        if runs(&candidate).await && runs(&Path::new(dir).join(FFPROBE)).await {
             return Ok(candidate);
         }
     }
