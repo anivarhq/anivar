@@ -494,7 +494,7 @@ function DepthCard({
         </>
       )}
       <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 8 }}>
-        Enable per-camera with the Anonymize button on the live view.
+        Enable per-camera with the Anonymize button on a USB camera's live view — network cameras record raw video for now.
       </div>
     </Card>
   );
