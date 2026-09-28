@@ -7,7 +7,45 @@ and this project (will) adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-- **The privacy tooltip's Depth model size now matches the catalog** (~50 MB, not ~95 MB).
+## [0.1.5] - 2026-09-28
+
+![Anivar's live view: four cameras in a grid](https://github.com/anivarhq/anivar/raw/main/assets/readme/live.jpg)
+
+### Fixed
+
+- **"Test connection" in Add Camera works again.** It runs `ffprobe`, which was
+  never installed beside the `ffmpeg` Anivar downloads, and a computer with only
+  `ffmpeg` on its PATH had the same gap, so every test failed with "program not
+  found". The two are now installed together, and a system ffmpeg is used only
+  when its ffprobe is there too.
+- **The ffmpeg Anivar downloads is checked before it runs.** It is pinned by
+  SHA-256 instead of fetching whatever "latest" was that day. On a Mac, an
+  ffmpeg installed with Homebrew or MacPorts is now found; before, recording
+  never started there.
+- **The assistant no longer invents a time of day.** Asked "what happened
+  today?" with every event in the late afternoon, it could say activity
+  "spanned from early morning". A reply that puts events in a part of the day
+  none of them happened in is now replaced by the plain findings.
+- **Review shows your camera's name.** Cards, the Vehicles and Sounds views and
+  the player said "CAM 1" for a camera you had named "Front door".
+- **The Anonymize button appears only where it works.** Depth-only recording
+  is available on USB cameras; on a network camera the button could only show
+  an error.
+- **The privacy tooltip gives the Depth model's real size** (about 50 MB, not
+  95). Thanks, @kragent66-glitch (#47).
+
+### Added
+
+- **Arsenal shows a model's licence on every card**, not just the Enhancements
+  ones, wherever the licence is recorded. Thanks, @Tenkeren11 (#49). Some
+  models still lack one: #40 lists them, and help is welcome.
+- **Quitting from the tray is written to the log**, so a stop you chose no
+  longer looks the same as a crash to anyone reading it.
+
+### Under the hood
+
+- llama.cpp, the on-device assistant's engine, and about twenty other
+  dependencies are updated.
 
 ## [0.1.4] - 2026-09-24
 
