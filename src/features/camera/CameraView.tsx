@@ -6,6 +6,7 @@ import { useShallow } from "zustand/react/shallow";
 import { api, DiscoveredCamera, StreamInfo, Detection, BrowserCameraInfo } from "../../api";
 import { HlsFeed } from "./HlsFeed";
 import { WebRtcFeed } from "./WebRtcFeed";
+import { anonymizeTooltip } from "./anonTooltip";
 import { BOX_COLOR } from "../../lib/palette";
 
 import styles from "./CameraView.module.css";
@@ -1122,9 +1123,7 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
             <button
               type="button"
               disabled={anonBusy}
-              title={anonOn
-                ? "Depth Anonymization ON (server): recordings, streams, snapshots and alerts contain ONLY the depth map. Local AI still detects on raw frames in memory. Click to restore raw video."
-                : "Anonymize this camera at the source: everything stored or sent becomes a colorized depth map — identities never persist. Requires the Depth model (~95 MB, downloads on first use)."}
+              title={anonymizeTooltip(anonOn)}
               onClick={toggleAnonymize}
               style={{
                 display: "inline-flex", alignItems: "center", gap: 6,

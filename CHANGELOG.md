@@ -7,6 +7,8 @@ and this project (will) adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- **The privacy tooltip's Depth model size now matches the catalog** (~50 MB, not ~95 MB).
+
 ## [0.1.4] - 2026-09-24
 
 ### Security: a shared link could leave your server on the internet
