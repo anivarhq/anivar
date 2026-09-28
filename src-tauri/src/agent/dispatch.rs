@@ -813,6 +813,32 @@ async fn run_agent_turn(
 /// Case is folded on the COMMAND WORD only. Everything after it is the user's
 /// own text — a name, a plate, a question — and lowercasing that before it
 /// reaches the archive is a quiet loss of information.
+/// Whether a message or button press from `from_chat` may use the bot.
+/// Only an exact match with a configured numeric chat ID counts. Blank (not set
+/// up yet) and `@username` (Telegram updates carry numeric IDs, so it can never
+/// match) both mean nobody — they used to mean everybody.
+fn chat_allowed(allowed_chat: &str, from_chat: &str) -> bool {
+    let allowed = allowed_chat.trim();
+    !allowed.is_empty() && !allowed.starts_with('@') && from_chat == allowed
+}
+
+/// Longest pause `/pause` accepts. Also keeps the arithmetic in range: a huge
+/// number used to overflow `Duration::minutes`, which panics, and release
+/// builds abort on panic — one message stopped every camera.
+const MAX_PAUSE_MINS: u64 = 7 * 24 * 60;
+
+/// `/pause 2h`, `/pause 90m`, `/pause 45` (minutes) → minutes, clamped to
+/// [`MAX_PAUSE_MINS`]. Unparseable input keeps the old default of one hour.
+fn pause_minutes(arg: &str) -> u64 {
+    let arg = arg.trim().to_lowercase();
+    let mins = if let Some(h) = arg.strip_suffix('h') {
+        h.parse::<u64>().unwrap_or(1).saturating_mul(60)
+    } else {
+        arg.trim_end_matches('m').parse::<u64>().unwrap_or(60)
+    };
+    mins.min(MAX_PAUSE_MINS)
+}
+
 pub(super) async fn handle_slash_command(state: &Arc<AppState>, cmd: &str, token: &str, chat_id: &str) -> String {
     let parts: Vec<&str> = cmd.trim().splitn(2, ' ').collect();
     // "/search@GuardianBot foo" — Telegram appends the bot name in groups.
@@ -887,18 +913,14 @@ pub(super) async fn handle_slash_command(state: &Arc<AppState>, cmd: &str, token
             build_daily_digest(state).await
         }
         "/pause" => {
-            // Folded here rather than over the whole command, so "2H" still
-            // parses without lowercasing every other command's arguments.
-            let dur_str = &parts.get(1).unwrap_or(&"1h").trim().to_lowercase();
-            let mins: u64 = if dur_str.ends_with('h') {
-                dur_str.trim_end_matches('h').parse::<u64>().unwrap_or(1) * 60
-            } else {
-                dur_str.trim_end_matches('m').parse::<u64>().unwrap_or(60)
-            };
+            let mins = pause_minutes(parts.get(1).unwrap_or(&"1h"));
             write_memory(&state.db, "alerts_paused_until",
                 &(chrono::Utc::now() + chrono::Duration::minutes(mins as i64))
                     .to_rfc3339()).await;
-            format!("🔕 Alerts paused for {}. Use /resume to re-enable.", dur_str)
+            let said = if mins == MAX_PAUSE_MINS { "7 days (the longest pause)".to_string() }
+                       else if mins.is_multiple_of(60) { format!("{}h", mins / 60) }
+                       else { format!("{mins} min") };
+            format!("🔕 Alerts paused for {said}. Use /resume to re-enable.")
         }
         "/resume" => {
             write_memory(&state.db, "alerts_paused_until", "").await;
@@ -1973,6 +1995,14 @@ pub async fn run_telegram_loop(state: Arc<AppState>) {
                 let menu_chat = cb.message.as_ref().map(|m| m.chat.id);
                 let menu_mid  = cb.message.as_ref().and_then(|m| m.message_id);
 
+                // Buttons act on alerts and settings, so they obey the same rule
+                // as messages: only the configured chat.
+                let pressed_in = menu_chat.map(|c| c.to_string()).unwrap_or_default();
+                if !chat_allowed(&allowed_chat, &pressed_in) {
+                    tracing::warn!("Telegram: ignored a button press from chat {pressed_in}, which is not the configured chat");
+                    return;
+                }
+
                 if let Some(data) = cb.data {
                     let parts: Vec<&str> = data.splitn(2, ':').collect();
                     if parts.len() == 2 {
@@ -2216,26 +2246,17 @@ pub async fn run_telegram_loop(state: Arc<AppState>) {
 
             tracing::warn!("Telegram: message from chat_id={from_chat}: {user_text}");
 
-            // If configured chat_id doesn't match: send the user their numeric ID so they can configure it
-            // Also handle the case where user entered a @username instead of numeric ID
-            let is_allowed = allowed_chat.is_empty()
-                || from_chat == allowed_chat
-                || allowed_chat.starts_with('@'); // username format — can't compare numerically
-
-            if !is_allowed {
-                let info = format!(
-                    "This bot is configured for a different chat. Your numeric chat ID is: {from_chat}\nEnter this in Anivar Settings > Telegram > Chat ID."
-                );
+            // Anyone who finds the bot can message it. Until a numeric Chat ID is
+            // configured, every chat gets only its own ID back — never a snapshot,
+            // a clip, a command or the assistant.
+            if !chat_allowed(&allowed_chat, &from_chat) {
+                let info = if allowed_chat.is_empty() || allowed_chat.starts_with('@') {
+                    format!("Your numeric Telegram chat ID is: {from_chat}\nEnter it in Anivar → Settings → Telegram → Chat ID (or press Connect there). Until then this bot answers no one.")
+                } else {
+                    format!("This bot is configured for a different chat. Your numeric chat ID is: {from_chat}")
+                };
                 send_telegram(&token, &from_chat, &info).await;
                 return;
-            }
-
-            // If user entered @username, auto-notify them of the real numeric ID
-            if allowed_chat.starts_with('@') {
-                let hint = format!(
-                    "Your numeric Telegram chat ID is: {from_chat}\nPlease update Settings > Telegram Bot > Chat ID with this number instead of your username."
-                );
-                send_telegram(&token, &from_chat, &hint).await;
             }
 
             // (There is no search-prompt intercept here any more. Searching was
@@ -2328,6 +2349,29 @@ impl AgentAlert {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_configured_numeric_chat_may_use_the_bot() {
+        assert!(chat_allowed("123456", "123456"));
+        assert!(chat_allowed(" 123456 ", "123456"), "stray spaces in Settings");
+        assert!(!chat_allowed("123456", "999"), "someone else");
+        assert!(!chat_allowed("", "999"), "not set up yet: nobody, not everybody");
+        assert!(!chat_allowed("@owner", "999"), "a username can never match");
+        assert!(!chat_allowed("123456", ""), "a button press with no chat");
+    }
+
+    #[test]
+    fn pause_parses_and_never_overflows() {
+        assert_eq!(pause_minutes("2h"), 120);
+        assert_eq!(pause_minutes("90m"), 90);
+        assert_eq!(pause_minutes("45"), 45);
+        assert_eq!(pause_minutes("2H"), 120);
+        assert_eq!(pause_minutes("nonsense"), 60);
+        assert_eq!(pause_minutes("9999999999999h"), MAX_PAUSE_MINS);
+        assert_eq!(pause_minutes("18446744073709551615m"), MAX_PAUSE_MINS);
+        // …and the clamped value is safe to add to now.
+        let _ = chrono::Utc::now() + chrono::Duration::minutes(pause_minutes("9999999999999h") as i64);
+    }
 
     /// The command word is matched case-insensitively (and with Telegram's
     /// group-mode `@BotName` suffix stripped); everything AFTER it is the
