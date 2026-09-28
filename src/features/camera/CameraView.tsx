@@ -1112,7 +1112,11 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
       {/* Feed area */}
       <div className={styles.feedWrap} ref={fullRef}>
 
-        {cornered && isActive && (
+        {/* Only where it can work: USB capture is the one path that records
+            depth (see toggleAnonymize). On a network camera the button could
+            only answer with an error toast. Still shown while ON, so it can be
+            turned off. */}
+        {cornered && isActive && (anonOn || source?.kind === "native") && (
           <div style={{ position: "absolute", right: 12, bottom: 12, zIndex: 6, display: "flex", gap: 6 }}>
             {/* SERVER anonymization — the real privacy switch. */}
             <button
