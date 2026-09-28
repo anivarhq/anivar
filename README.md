@@ -40,8 +40,10 @@ Free. These links always fetch the newest version.
 
 **Anivar is alpha, and not yet code-signed.** The first time you open it, Windows says
 *"Windows protected your PC"*: click **More info → Run anyway**. On a Mac, try to open it once,
-then go to **System Settings → Privacy & Security → Open Anyway**. It doesn't update itself yet —
-**Settings → Check for Updates** tells you when a new version is out ([what changed](CHANGELOG.md)).
+then go to **System Settings → Privacy & Security → Open Anyway**. After that it updates itself:
+**Settings → App Updates** checks for a new version, verifies its signature and installs it, and
+can do so automatically ([what changed](CHANGELOG.md)). Versions up to 0.1.5 predate this, so
+install the next release over the top of them once, by hand.
 
 ## Private by design, and you can check
 

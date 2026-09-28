@@ -54,6 +54,7 @@ tauri-plugin-fs = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-opener = "2"
 # Single-instance guard: a 2nd launch focuses the running app instead of starting a
 # rival process that fights over port 8882 / the DB / the cameras (the "crashing" +
 # duplicate-instance bug). Must be the FIRST plugin registered.

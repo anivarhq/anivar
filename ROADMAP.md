@@ -15,10 +15,6 @@ people don't build the same thing. Smaller starting points are labelled
   already exist, and so does "revoke every link". Today, though, links are
   created only from Telegram and the assistant, and revoking has no button. The
   backend is done (`share_cmds.rs`); the app needs the UI.
-- **Updates that install themselves.** The Tauri updater plugin is registered
-  but never called, so today an update is **Settings → Check for Updates**,
-  then running the new installer. The work is to wire the plugin to the
-  existing check, with signed update manifests.
 
 ## Next
 

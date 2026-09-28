@@ -199,6 +199,14 @@ pub struct Settings {
     /// hook can't catch (e.g. GPU-driver 0xc0000409). Opt-in.
     #[serde(default)]
     pub relaunch_after_crash: bool,
+    /// Look for a new release in the background (update_cmds.rs), 2 min after
+    /// launch and every 6 h, and say so in the app. Default on.
+    #[serde(default = "default_true")]
+    pub auto_update_check: bool,
+    /// Also install it without asking — once no event is in progress, so a
+    /// restart never cuts one off. Default off: the user opts in.
+    #[serde(default)]
+    pub auto_update_install: bool,
     /// Remote-access provider for live/clip share links. Tailscale Funnel is now
     /// the only implementation (Cloudflare was removed 2026-07-28 — trycloudflare
     /// quick tunnels are testing-only under its ToS). The field is retained so
@@ -497,6 +505,8 @@ impl Default for Settings {
             nvr_retain_event_days: default_nvr_retain_event_days(),
             keep_event_clips: false,
             relaunch_after_crash: false,
+            auto_update_check:   true,
+            auto_update_install: false,
             depth_model: default_depth_model(),
             remote_provider: default_remote_provider(),
             camera_masks: String::new(),

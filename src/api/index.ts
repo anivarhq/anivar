@@ -401,7 +401,10 @@ export const api = {
     invoke<LoginResult>("recovery_reset", { challenge, code, newPassword, remember }),
   probeMjpegUrl: (baseUrl: string, user?: string, pass?: string) =>
     invoke<string>("probe_mjpeg_url", { baseUrl, user: user ?? null, pass: pass ?? null }),
-  checkForUpdate: (repo: string) => invoke<any>("check_for_update", { repo }),
+  updateCheck:   () => invoke<UpdateInfo>("update_check"),
+  /** Downloads, verifies and installs; the app then exits into the installer
+   *  (Windows) or restarts (macOS/Linux), so a resolved promise is rare. */
+  updateInstall: () => invoke<void>("update_install"),
 
   stopDirectP2P:  () => invoke<void>("stop_direct_p2p"),
   getDirectP2PStatus: () => invoke<any>("get_direct_p2p_status"),
@@ -652,6 +655,15 @@ export interface AuthStatus {
   telegram_ready:   boolean;
   remember_enabled: boolean;
   remember_days:    number;
+}
+
+// Result of update_check (update_cmds.rs).
+export interface UpdateInfo {
+  available: boolean;
+  current:   string;
+  latest?:   string;
+  notes?:    string;
+  date?:     string | null;
 }
 
 // Result of login / OTP / recovery — discriminated by `status`.

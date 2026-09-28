@@ -118,8 +118,8 @@ pub use tunnel_cmds::get_stream_info;
 mod share_cmds;
 pub use share_cmds::{generate_share_link, revoke_all_shares, list_active_shares};
 
-mod search_cmds;
-pub use search_cmds::check_for_update;
+mod update_cmds;
+pub use update_cmds::{update_check, update_install};
 
 mod inference_cmds;
 pub use inference_cmds::{stream_frame, process_frame, get_inference_status, get_camera_snapshot};
@@ -458,6 +458,10 @@ pub fn run() {
         // uses it, and it's a command-execution surface. The backend spawns its own
         // processes via `proc.rs` (std/tokio Command), so shell exposure = pure risk.
         .plugin(tauri_plugin_notification::init())
+        // Opens https links in the default browser. The webview has no
+        // new-window handler, so `<a target="_blank">` and window.open were
+        // silently dropped: every external link in the app did nothing.
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--headless"])
@@ -502,7 +506,8 @@ pub fn run() {
             revoke_all_shares,
             list_active_shares,
             probe_mjpeg_url,
-            check_for_update,
+            update_check,
+            update_install,
             get_settings,
             save_settings,
             get_motion_events,
