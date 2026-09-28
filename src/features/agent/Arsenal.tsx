@@ -590,6 +590,30 @@ function RecommendationGrid({
   );
 }
 
+function LicenseLabel({ def }: { def: SkillDef }) {
+  if (!def.license) return null;
+
+  return (
+    <span
+      title={def.licenseNote ?? def.license}
+      style={{
+        marginTop: 2,
+        fontSize: 9,
+        fontWeight: 700,
+        letterSpacing: 0.02,
+        color: def.license.startsWith("AGPL")
+          ? "var(--status-warn)"
+          : "var(--text-muted)",
+      }}
+    >
+      {def.license}
+      {def.license.startsWith("AGPL")
+        ? " · commercial use needs a licence"
+        : ""}
+    </span>
+  );
+}
+
 // ── Enhancements card — install-only skills (audio, deep Re-ID) ──────────────
 
 const ENHANCEMENT_SKILLS = [
@@ -643,15 +667,7 @@ function EnhancementsCard({
                     bundled or preselected, so installing a model is the user's
                     decision — and a copyleft licence can place real obligations
                     on whatever they build around it. */}
-                {def.license && (
-                  <span title={def.licenseNote ?? def.license}
-                    style={{
-                      marginTop: 2, fontSize: 9, fontWeight: 700, letterSpacing: 0.02,
-                      color: def.license.startsWith("AGPL") ? "var(--status-warn)" : "var(--text-muted)",
-                    }}>
-                    {def.license}{def.license.startsWith("AGPL") ? " · commercial use needs a licence" : ""}
-                  </span>
-                )}
+                <LicenseLabel def={def} />
               </div>
               <div style={{ flex: 1 }} />
               <RemoveButton skillId={row.id} />
@@ -739,6 +755,7 @@ function AlprCard({
                   color: isActive ? "var(--accent)" : "var(--text-primary)",
                 }}>{row.label}</span>
                 <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{row.hint}</span>
+                <LicenseLabel def={def} />
               </div>
               <div style={{ flex: 1 }} />
               <RemoveButton skillId={row.id} />
@@ -829,6 +846,7 @@ function SearchCard({
               <div style={{ minWidth: 120, display: "flex", flexDirection: "column" }}>
                 <span style={{ fontWeight: 700, fontSize: 12, color: isActive ? "var(--accent)" : "var(--text-primary)" }}>{row.label}</span>
                 <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{row.hint}</span>
+                <LicenseLabel def={def} />
               </div>
               <div style={{ flex: 1 }} />
               <RemoveButton skillId={row.id} />
@@ -987,9 +1005,15 @@ function FaceCard({
               background: isActive ? "color-mix(in srgb, var(--accent) 10%, transparent)" : "rgb(var(--ink) / 0.02)",
               border: `1px solid ${isActive ? "var(--accent)" : "var(--border)"}`,
             }}>
-              <span style={{ fontWeight: 700, fontSize: 12, minWidth: 60,
-                color: isActive ? "var(--accent)" : "var(--text-primary)" }}>{row.label}</span>
-              <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{row.size}</span>
+              <div style={{ minWidth: 100, display: "flex", flexDirection: "column" }}>
+                <span style={{
+                  fontWeight: 700,
+                  fontSize: 12,
+                  color: isActive ? "var(--accent)" : "var(--text-primary)",
+                }}>{row.label}</span>
+                <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{row.size}</span>
+                <LicenseLabel def={def} />
+              </div>
               <div style={{ flex: 1 }} />
               <RemoveButton skillId={row.id} />
               {isDownloading ? (
@@ -1110,13 +1134,19 @@ function LocalAiCard({
               background: isActive ? "color-mix(in srgb, var(--accent) 10%, transparent)" : "rgb(var(--ink) / 0.02)",
               border: `1px solid ${isActive ? "var(--accent)" : "var(--border)"}`,
             }}>
-              <span style={{
-                fontWeight: 700, fontSize: 12,
-                color: isActive ? "var(--accent)" : "var(--text-primary)",
-                minWidth: 66,
-              }}>{row.label}</span>
-              <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{row.size}</span>
-              <span style={{ fontSize: 10, color: "var(--text-muted)", opacity: 0.75 }}>· {row.note}</span>
+             <div style={{ minWidth: 110, display: "flex", flexDirection: "column" }}>
+               <span style={{
+                 fontWeight: 700,
+                 fontSize: 12,
+                 color: isActive ? "var(--accent)" : "var(--text-primary)",
+               }}>{row.label}</span>
+
+               <span style={{ fontSize: 10, color: "var(--text-muted)" }}>
+                 {row.size} · {row.note}
+               </span>
+
+               <LicenseLabel def={def} />
+             </div>
               <div style={{ flex: 1 }} />
               <RemoveButton skillId={row.id} />
               {isDownloading ? (
@@ -1211,12 +1241,15 @@ function YoloCard({
               background: isActive ? "color-mix(in srgb, var(--accent) 10%, transparent)" : "rgb(var(--ink) / 0.02)",
               border: `1px solid ${isActive ? "var(--accent)" : "var(--border)"}`,
             }}>
-              <span style={{
-                fontWeight: 700, fontSize: 12,
-                color: isActive ? "var(--accent)" : "var(--text-primary)",
-                minWidth: 60,
-              }}>{row.label}</span>
-              <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{row.size}</span>
+              <div style={{ minWidth: 100, display: "flex", flexDirection: "column" }}>
+                <span style={{
+                  fontWeight: 700,
+                  fontSize: 12,
+                  color: isActive ? "var(--accent)" : "var(--text-primary)",
+                }}>{row.label}</span>
+                <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{row.size}</span>
+                <LicenseLabel def={def} />
+              </div>
               <div style={{ flex: 1 }} />
               <RemoveButton skillId={row.id} />
               {isDownloading ? (
