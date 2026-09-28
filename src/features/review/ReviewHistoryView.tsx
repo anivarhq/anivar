@@ -46,6 +46,8 @@ import { usePlayback } from "../live/usePlayback";
 
 interface Props {
   camId: number;
+  /** The name the user gave this camera. */
+  camName: string;
   /** Selected day as a "YYYY-MM-DD" string (stable — avoids re-loading every render). */
   dayStr: string;
   initialEventId: string | null;
@@ -117,7 +119,7 @@ const HEADER_BTN_ACTIVE: CSSProperties = {
   background: "color-mix(in srgb, var(--status-idle) 18%, transparent)", borderColor: "color-mix(in srgb, var(--status-idle) 50%, transparent)", color: "var(--status-idle)",
 };
 
-export function ReviewHistoryView({ camId, dayStr, initialEventId, use12h, onBack }: Props) {
+export function ReviewHistoryView({ camId, camName, dayStr, initialEventId, use12h, onBack }: Props) {
   const { streamInfo, settings, showToast } = useStore(useShallow(s => ({ streamInfo: s.streamInfo, settings: s.settings, showToast: s.showToast })));
 
   const day = useMemo(() => new Date(`${dayStr}T12:00:00`), [dayStr]);
@@ -344,7 +346,7 @@ export function ReviewHistoryView({ camId, dayStr, initialEventId, use12h, onBac
     catch { /* ignore */ }
   };
 
-  const camLabel = useMemo(() => safeName(`cam${camId + 1}`), [camId]);
+  const camLabel = useMemo(() => safeName(camName), [camName]);
 
   // Export an "incident" — the MP4 window + a text report — for an event or a
   // [start,end] window. Reuses the existing /nvr-export plumbing.
@@ -393,7 +395,7 @@ export function ReviewHistoryView({ camId, dayStr, initialEventId, use12h, onBac
         <button className={styles.backBtn} onClick={onBack} title="Back to Review">
           <ArrowLeft size={15} /> Back
         </button>
-        <span className={styles.title}>CAM {camId + 1} · {dateLabel}</span>
+        <span className={styles.title}>{camName} · {dateLabel}</span>
         <span className={styles.spacer} />
         <button onClick={() => setPanels(p => ({ ...p, events: !p.events }))}
           title="Show / hide the day's events" style={{ ...HEADER_BTN, ...(panels.events ? HEADER_BTN_ACTIVE : {}) }}>

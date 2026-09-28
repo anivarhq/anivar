@@ -697,6 +697,7 @@ export function ReviewFeed() {
     return (
       <ReviewHistoryView
         camId={historyItem.camId}
+        camName={camName(historyItem.camId)}
         dayStr={selectedDate}
         initialEventId={historyItem.clipEventId}
         use12h={use12h}
@@ -923,6 +924,7 @@ export function ReviewFeed() {
         <div style={{ flex: 1, overflow: "auto", padding: "0 16px 16px" }}>
           <VehiclesView
             cams={[...camFilter].join(",")}
+            camName={camName}
             types={[...vtypeFilter].join(",")}
             colors={[...vcolorFilter].join(",")}
             plates={[...plateFilter].join(",")}
@@ -940,6 +942,7 @@ export function ReviewFeed() {
         <div style={{ flex: 1, overflow: "auto", padding: "0 16px 16px" }}>
           <AudioView
             cams={[...camFilter].join(",")}
+            camName={camName}
             cats={[...soundFilter].join(",")}
             date={selectedDate}
             query={debouncedQuery}
@@ -1040,7 +1043,7 @@ export function ReviewFeed() {
                 <div className={styles.cardRisk} style={{ background: tint(color, 87) }}>
                   {riskLabel(item.peak)}
                 </div>
-                {cams.length > 1 && <span className={styles.cardCam}>CAM {item.camId + 1}</span>}
+                {cams.length > 1 && <span className={styles.cardCam}>{camName(item.camId)}</span>}
                 {item.clipEventId && <span className={styles.cardPlay}><Play size={12} fill="#fff" /></span>}
                 {/* Every functional icon in ONE row, top-right, hover-revealed.
                     These were four separate absolutely-positioned buttons whose

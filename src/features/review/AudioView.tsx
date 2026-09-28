@@ -18,9 +18,11 @@ function Empty({ text }: { text: string }) {
 }
 
 // ─── Audio tab — YAMNet sound-detection events (barking, speech, alarms…) ──────
-export function AudioView({ cams, cats, date, query, refreshTick, bookmarkIds, onToggleBookmark, onDelete, onOpenPlayer }: {
+export function AudioView({ cams, cats, camName, date, query, refreshTick, bookmarkIds, onToggleBookmark, onDelete, onOpenPlayer }: {
   /** CSV multi-select filters from the Review toolbar dropdowns ("" = all). */
   cams: string; cats: string;
+  /** Camera id → the name the user gave it (shared with the Events feed). */
+  camName: (id: number) => string;
   /** Selected day (Review toolbar date) — scopes the sounds server-side. */
   date: string;
   /** Toolbar search box — filters the loaded sounds client-side. */
@@ -178,7 +180,7 @@ export function AudioView({ cams, cats, date, query, refreshTick, bookmarkIds, o
                       style={{ background: e.high_pitch ? "color-mix(in srgb, var(--status-warn) 87%, transparent)" : "color-mix(in srgb, var(--status-idle) 85%, transparent)" }}>
                       {e.high_pitch ? "HIGH-PITCH" : e.sound}
                     </div>
-                    <span className={cardStyles.cardCam}>CAM {(e.cam_id ?? 0) + 1}</span>
+                    <span className={cardStyles.cardCam}>{camName(e.cam_id ?? 0)}</span>
                     <span className={cardStyles.cardPlay}><Play size={12} fill="#fff" /></span>
                     {/* Same row, same corner, same order as the Events cards.
                         The loudness pill that used to sit bottom-right collided
@@ -218,7 +220,7 @@ export function AudioView({ cams, cats, date, query, refreshTick, bookmarkIds, o
                 thumb={s.thumbnail ? eventThumbSrc(s.thumbnail, s.id, streamInfo) : null}
                 thumbFallback={<Volume2 size={16} />}
                 title={s.sound.charAt(0).toUpperCase() + s.sound.slice(1)}
-                camLabel={`Camera ${(s.cam_id ?? 0) + 1}`}
+                camLabel={camName(s.cam_id ?? 0)}
                 timeLabel={fmtWhen(s.started_at)}
                 chips={chips}
                 detail={s.classes && s.classes.length > 0 ? (
