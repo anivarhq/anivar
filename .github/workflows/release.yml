@@ -268,10 +268,12 @@ jobs:
         run: |
           set -euo pipefail
           cd "$(mktemp -d)"
-          # Skip the updater manifest and any checksum from an earlier run.
+          # Skip the updater manifest, any checksum from an earlier run, and the
+          # updater signatures: a .sig is already a signature, and hashing it
+          # published five .sig.sha256 files nobody has a use for.
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
             --json assets --jq '.assets[].name
-                                | select(endswith(".sha256") or . == "latest.json" | not)' > names
+                                | select(endswith(".sha256") or endswith(".sig") or . == "latest.json" | not)' > names
 
           [ -s names ] || { echo "::error::$TAG has no assets to checksum"; exit 1; }
 
