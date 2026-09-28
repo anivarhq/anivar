@@ -1686,7 +1686,7 @@ fn grounded(draft: &str, q: &Query, relaxed: &[String], ev: &Evidence) -> bool {
     // in no row by definition, so "must be in the evidence" is the wrong test —
     // "must be now" is the right one.
     if q.kind != Kind::Clock {
-        return cites_only_known(draft, ev);
+        return cites_only_known(draft, ev) && places_only_known(draft, ev);
     }
     let now = chrono::Local::now();
     let hhmm = now.format("%H:%M").to_string();
@@ -1952,6 +1952,74 @@ fn cites_only_known(draft: &str, ev: &Evidence) -> bool {
             if !hay.contains(&padded) && !hay.contains(&bare) && !hay.contains(&iso) {
                 return false;
             }
+        }
+    }
+    true
+}
+
+/// Local hours each part of the day covers. Generous at the edges on purpose:
+/// 17:30 may fairly be called afternoon or evening, and a false reject only
+/// costs a natural answer. A slice of ranges because night wraps midnight.
+#[allow(clippy::single_range_in_vec_init)] // one range per part is the intent, not a typo for `[a; n]`
+const PARTS_OF_DAY: &[(&str, &[std::ops::Range<u32>])] = &[
+    ("morning",   &[4..12]),
+    ("noon",      &[11..14]),
+    ("midday",    &[11..14]),
+    ("afternoon", &[12..19]),
+    ("evening",   &[16..24]),
+    ("night",     &[19..24, 0..7]),
+    ("overnight", &[19..24, 0..7]),
+    ("midnight",  &[22..24, 0..3]),
+];
+
+/// Does every part of the day the draft places events in hold a row?
+///
+/// [`cites_only_known`] lets "late last night" through as vagueness, and that is
+/// right when it is TRUE. Observed live, it was not: every row was between 16:54
+/// and 17:05 and the reply said activity "spanned from early morning to late
+/// afternoon" — a morning the archive never recorded, which no `HH:MM` check
+/// could see. So a part of the day is held to the rows' own clock times.
+///
+/// Denials ("nothing overnight") and greetings ("Good morning!") assert nothing
+/// about the footage and are skipped; a part of the day the evidence itself
+/// names (a "last night" span) is allowed; evidence with no times is not checked.
+fn places_only_known(draft: &str, ev: &Evidence) -> bool {
+    let mut hay = format!("{} {}", ev.headline, ev.span).to_lowercase();
+    for l in &ev.lines { hay.push(' '); hay.push_str(&l.to_lowercase()); }
+
+    let b = hay.as_bytes();
+    let hours: Vec<u32> = (0..b.len().saturating_sub(4))
+        .filter(|&i| (i == 0 || !b[i - 1].is_ascii_digit()) && b[i + 2] == b':'
+            && [0, 1, 3, 4].iter().all(|&k| b[i + k].is_ascii_digit()))
+        .filter_map(|i| hay[i..i + 2].parse().ok())
+        .filter(|h| *h < 24)
+        .collect();
+    if hours.is_empty() { return true; }
+
+    let d = draft.to_lowercase();
+    for sentence in d.split(['.', '!', '?', ';']) {
+        if negated(sentence) { continue; }
+        let mut s = sentence.to_string();
+        for greeting in ["good morning", "good afternoon", "good evening", "good night"] {
+            s = s.replace(greeting, "");
+        }
+        let mut prev = "";
+        for word in s.split(|c: char| !c.is_ascii_alphabetic()).filter(|w| !w.is_empty()) {
+            if let Some((_, ranges)) = PARTS_OF_DAY.iter().find(|(p, _)| *p == word) {
+                // "early afternoon" is the first half of it, "late afternoon" the
+                // second: rows from 16:54 on were once summarised as "early
+                // afternoon", which the whole-afternoon range let through.
+                let within = |h: &u32| ranges.iter().any(|r| {
+                    let mid = (r.start + r.end) / 2;
+                    match (prev, ranges.len()) {
+                        ("early", 1) => (r.start..mid + 1).contains(h),
+                        ("late", 1)  => (mid - 1..r.end).contains(h),
+                        _ => r.contains(h),
+                    }
+                });
+                if !hours.iter().any(within) && !hay.contains(word) { return false; }
+            }
+            prev = word;
         }
     }
     true
@@ -2600,6 +2668,36 @@ mod tests {
         ] {
             assert!(!cites_only_known(lie, &ev), "should have been rejected: {lie}");
         }
+    }
+
+    /// A part of the day is a claim about WHEN, and must hold a row. Observed
+    /// live: rows all 16:54–17:05, reply "spanned from early morning to late
+    /// afternoon".
+    #[test]
+    fn a_part_of_the_day_must_hold_a_row() {
+        let ev = rows_ev(); // rows at 19:01, 22:12, 22:47
+
+        for ok in [
+            "Most of it came late in the evening.",
+            "It was a busy night at the front door.",
+            "Nothing happened in the morning; the activity came after dark.",
+            "Good morning! 12 people came by in the evening.",
+            "It got busier in the late evening.",
+        ] {
+            assert!(places_only_known(ok, &ev), "should have been allowed: {ok}");
+        }
+        for lie in [
+            "Activity spanned from early morning to late afternoon.",
+            "Someone was at the door around noon.",
+            "It started in the early afternoon.",  // 12–15; the rows are 19:01 and 22:xx
+        ] {
+            assert!(!places_only_known(lie, &ev), "should have been rejected: {lie}");
+        }
+
+        // A span that names the part of the day vouches for it; no times, no check.
+        let named = Evidence::whole("3 events".into(), vec!["person".into()], "last night".into());
+        assert!(places_only_known("Three people came by last night.", &named));
+        assert!(places_only_known("A quiet morning.", &named));
     }
 
     /// A relaxed colour may not be ASSERTED — but saying we could not find it is
