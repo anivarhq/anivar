@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 320" width="1280" height="320" role="img" aria-labelledby="t d">
+  <title id="t">Anivar</title>
+  <desc id="d">It watches. It listens. It remembers. Private AI security cameras on your own computer — no cloud, no account. A camera view shows a person arriving at a front door and being outlined and tagged "person".</desc>
+  <style>
+    .w  { font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'SF Pro Display', Inter, 'Helvetica Neue', Arial, sans-serif; fill: #F5F2EF; }
+    .m  { font-family: ui-monospace, 'Cascadia Mono', 'SF Mono', Consolas, Menlo, monospace; fill: #F5F2EF; }
+
+    /* One 6 s story: someone arrives, the frame is scanned, they are outlined
+       and named, it holds, then everything clears and it begins again. The
+       resting styles below ARE the finished frame, so with motion turned off
+       the banner still shows the whole idea at a glance. */
+    .person { animation: arrive 6s cubic-bezier(.2,.7,.2,1) infinite; }
+    .scan   { opacity: 0; animation: scan 6s linear infinite; }
+    .box    { stroke-dasharray: 380; stroke-dashoffset: 0; animation: draw 6s ease-out infinite; }
+    .tag    { animation: tag 6s ease-out infinite; }
+    .rec    { animation: rec 1.6s ease-in-out infinite; }
+
+    @keyframes arrive {
+      0%        { transform: translateX(-120px); opacity: 0; }
+      6%        { opacity: 1; }
+      22%, 86%  { transform: translateX(0); opacity: 1; }
+      96%, 100% { transform: translateX(0); opacity: 0; }
+    }
+    @keyframes scan {
+      0%, 16%   { transform: translateY(0); opacity: 0; }
+      19%       { opacity: .85; }
+      36%       { transform: translateY(236px); opacity: .85; }
+      38%, 100% { transform: translateY(236px); opacity: 0; }
+    }
+    @keyframes draw {
+      0%, 30%   { stroke-dashoffset: 380; opacity: 1; }
+      48%, 86%  { stroke-dashoffset: 0; opacity: 1; }
+      96%, 100% { stroke-dashoffset: 0; opacity: 0; }
+    }
+    @keyframes tag {
+      0%, 46%   { opacity: 0; transform: translateY(6px); }
+      54%, 86%  { opacity: 1; transform: translateY(0); }
+      96%, 100% { opacity: 0; transform: translateY(0); }
+    }
+    @keyframes rec { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+
+    @media (prefers-reduced-motion: reduce) {
+      .person, .scan, .box, .tag, .rec { animation: none; }
+    }
+  </style>
+
+  <defs>
+    <radialGradient id="glow" cx="75%" cy="50%" r="55%">
+      <stop offset="0" stop-color="#C9605C" stop-opacity=".16"/>
+      <stop offset="1" stop-color="#C9605C" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="wall" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1E1B19"/>
+      <stop offset="1" stop-color="#151312"/>
+    </linearGradient>
+    <linearGradient id="beam" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#C9605C" stop-opacity="0"/>
+      <stop offset=".5" stop-color="#C9605C" stop-opacity=".9"/>
+      <stop offset="1" stop-color="#C9605C" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="tile"><rect width="440" height="240" rx="14"/></clipPath>
+  </defs>
+
+  <!-- A card of its own, so it sits well on GitHub's light and dark pages. -->
+  <rect width="1280" height="320" rx="20" fill="#0D0C0B"/>
+  <rect width="1280" height="320" rx="20" fill="url(#glow)"/>
+
+  <!-- Mark, name, voice -->
+  <image x="80" y="58" width="96" height="96" href="data:image/png;base64,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"/>
+  <text class="w" x="196" y="126" font-size="62" font-weight="700" letter-spacing="-1.5">Anivar</text>
+  <text class="w" x="82" y="214" font-size="31" font-weight="600" letter-spacing="-.4">It watches. It listens. It <tspan fill="#C9605C" font-style="italic">remembers.</tspan></text>
+  <text class="w" x="82" y="256" font-size="18" opacity=".62">Private AI security cameras on your own computer. No cloud, no account.</text>
+
+  <!-- A camera tile -->
+  <g transform="translate(760 40)">
+    <g clip-path="url(#tile)">
+      <rect width="440" height="240" fill="url(#wall)"/>
+      <rect y="176" width="440" height="64" fill="#191615"/>
+      <path d="M0 176 H440" stroke="#2A2522" stroke-width="1"/>
+      <!-- the front door -->
+      <rect x="262" y="62" width="84" height="114" rx="3" fill="#231F1D" stroke="#302A27"/>
+      <rect x="274" y="74" width="60" height="38" rx="2" fill="#1B1817"/>
+      <circle cx="333" cy="124" r="3" fill="#4A403A"/>
+
+      <!-- someone arriving with a parcel -->
+      <g class="person">
+        <circle cx="178" cy="92" r="14" fill="#5A4F48"/>
+        <rect x="158" y="108" width="40" height="52" rx="14" fill="#5A4F48"/>
+        <rect x="162" y="150" width="13" height="26" rx="5" fill="#4E443E"/>
+        <rect x="181" y="150" width="13" height="26" rx="5" fill="#4E443E"/>
+        <rect x="186" y="124" width="28" height="22" rx="3" fill="#8A7260"/>
+        <path d="M186 131 H214" stroke="#A58A74" stroke-width="2"/>
+      </g>
+
+      <!-- the frame being scanned -->
+      <rect class="scan" x="0" y="0" width="440" height="3" fill="url(#beam)"/>
+    </g>
+
+    <!-- outlined and named -->
+    <rect class="box" x="146" y="70" width="80" height="112" rx="4" fill="none" stroke="#C9605C" stroke-width="2.5"/>
+    <g class="tag">
+      <rect x="146" y="46" width="60" height="19" rx="4" fill="#C9605C"/>
+      <text class="w" x="155" y="60" font-size="12" font-weight="700" fill="#0D0C0B" style="fill:#0D0C0B">person</text>
+    </g>
+
+    <!-- camera chrome -->
+    <circle class="rec" cx="20" cy="20" r="5" fill="#C9605C"/>
+    <text class="w" x="32" y="24" font-size="11" font-weight="700" letter-spacing="1.2" opacity=".85">LIVE</text>
+    <text class="m" x="424" y="24" font-size="11" text-anchor="end" opacity=".55">14:32:07</text>
+    <text class="w" x="16" y="226" font-size="12.5" opacity=".72">Front door</text>
+    <rect width="440" height="240" rx="14" fill="none" stroke="#2A2522"/>
+  </g>
+</svg>

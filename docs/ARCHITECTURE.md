@@ -16,7 +16,7 @@ delivered as a single binary via [Tauri 2](https://v2.tauri.app/):
 │ │ ─ src/                   │◀▶│ ─ src-tauri/src/                │ │
 │ │   features/*             │  │   lib.rs    (commands, wiring)  │ │
 │ │   components/, store/    │  │   agent/    (AI: analysis+chat) │ │
-│ │   workers/               │  │   nvr_*.rs  (record, HLS, keep) │ │
+│ │   lib/                   │  │   nvr_*.rs  (record, HLS, keep) │ │
 │ │                          │  │   local_llm (llama.cpp, in-proc)│ │
 │ └──────────────────────────┘  └─────────────────────────────────┘ │
 └───────────────────────────────────────────────────────────────────┘
@@ -109,19 +109,23 @@ its public surface is re-exported from `agent/mod.rs` so external callers
 
 | File | Lines | Owns |
 |---|---|---|
-| `agent/mod.rs` | ~60 | Module manifest — declarations + re-exports only. Top-level docs. |
-| `agent/types.rs` | ~340 | Public output types (`AgentAlert`, `AgentStatus`, `EscalationState`), provider wire types, `ClipAnalysis` / `Analysis` schema, `make_summary_json`, `agent_identity`, rule-based fallback. |
-| `agent/memory.rs` | ~700 | `agent_memory` reads/writes: flat KV, ACE-loop scored learned memory, OpenClaw narrative markdown files, event_subscribe alert rules, analysis-output helpers (`extract_summary_text`, `sanitize_analysis_output`), and `recall` — ranked, budgeted retrieval for the prompt. |
-| `agent/llm.rs` | ~455 | Multi-provider routing (on-device / OpenAI / Anthropic / Groq / xAI / Gemini / OpenAI-compatible). `call_llm`, `call_llm_tools`, and the capability predicates `provider_supports_vision` / `provider_can_classify_risk`. |
-| `agent/local_llm.rs` | ~505 | The on-device engine: llama.cpp compiled in, one worker thread owning the model, load-on-demand, idle unload, chunked prefill, and the GGUF's own chat template. |
-| `agent/prompts.rs` | ~110 | Guardian system prompts for clip analysis. |
-| `agent/dispatch.rs` | ~1 200 | Alert dispatch over Telegram, gated centrally by `channel_alert_allowed`. Risk → emoji/priority helpers. Telegram long-poll loop and `/menu` browser. |
-| `agent/analysis.rs` | ~645 | Core `analyze_event` flow — builds prompt + context, calls the VLM, parses + sanitises the response (`extract_json_block`), applies YOLO grounding, stores v2 `ai_summary`, triggers dispatch. Risk normalisation helpers. |
-| `agent/chat.rs` | ~450 | Interactive chat (`chat_with_agent`) + streaming chat (`stream_chat`, `ChatMessage`). |
-| `agent/cycle.rs` | ~420 | Background loops: agent cycle, escalation timer, reflection, main loop. |
-| `agent/conditions.rs` | ~430 | Semantic alert conditions — plain-English rules evaluated by the LLM. `is_quiet_hours`, `evaluate_alert_conditions`, event-search commands (`query_events_nl`, `explore_events`, `search_clips`). |
-| `agent/clip.rs` | ~1 160 | Post-recording clip analysis (`analyze_event_clip`), Agies-style frame annotation, shared YOLO26 detection types, live-event monitoring loop, startup backfill, `dispatch_intelligence_alert`. |
-| `agent/util.rs` | ~610 | Status helper, one-shot snapshot analysis (Test button), disk-space guard, cross-camera narrative context, heartbeat loop, proactive insights, situational awareness push. |
+| `agent/mod.rs` | ~90 | Module manifest — declarations + re-exports only. Top-level docs. |
+| `agent/types.rs` | ~370 | Public output types (`AgentAlert`, `AgentStatus`, `EscalationState`), provider wire types, the `ClipAnalysis` / `Analysis` schema, `make_summary_json`, rule-based fallback. |
+| `agent/memory.rs` | ~810 | `agent_memory` reads/writes: flat KV, scored learned memory, narrative files, alert rules, analysis-output helpers, and `recall` — ranked, budgeted retrieval for the prompt. |
+| `agent/llm.rs` | ~1 030 | Multi-provider routing (on-device / OpenAI / Anthropic / Groq / xAI / Gemini / OpenAI-compatible). `call_llm`, `call_llm_tools`, the probed tool channel, and the capability predicates `provider_supports_vision` / `provider_can_classify_risk`. |
+| `agent/local_llm.rs` | ~930 | The on-device engine: llama.cpp compiled in, one worker thread owning the model, load-on-demand, idle unload, chunked prefill, and the GGUF's own chat template. |
+| `agent/retrieve.rs` | ~3 380 | Retrieve first, then answer: `pre_resolve` turns a question into a query with string work, `retrieve` runs the SQL, the model only phrases the rows, and `grounded` rejects drafts that cite a date, time or part of the day the rows don't hold. |
+| `agent/slots.rs` | ~530 | Turning a described memory ("red jacket, around 9pm last Tuesday") into query slots. |
+| `agent/evidence.rs` | ~510 | THE evidence resolver: the agent's reply parsed once into typed `Evidence` for every surface. |
+| `agent/tools.rs` | ~630 | The single registry of the agent's tools; provider tool schemas are generated from it. |
+| `agent/chat.rs` | ~990 | Interactive chat (`chat_with_agent`), the conversational fallback, and the persisted chat log. |
+| `agent/dispatch.rs` | ~2 460 | Alert dispatch over Telegram, gated centrally by `channel_alert_allowed`. The Telegram long-poll loop and `/menu` browser. |
+| `agent/clip.rs` | ~2 190 | THE event pipeline: post-recording clip analysis (`analyze_event_clip`), frame annotation, live-event monitoring, startup backfill, `dispatch_intelligence_alert`. |
+| `agent/clip_export.rs` | ~270 | Server-side event-clip export — the single source of every clip the agent sends. |
+| `agent/analysis.rs` | ~200 | Shared analysis helpers used by the clip pipeline. |
+| `agent/cycle.rs` | ~360 | Background loops: agent cycle, escalation timer, reflection. |
+| `agent/conditions.rs` | ~780 | Semantic alert conditions — plain-English rules evaluated by the LLM, quiet hours, event-search commands. |
+| `agent/util.rs` | ~520 | Status helper, one-shot snapshot analysis (Test button), disk-space guard, heartbeat, proactive insights. |
 
 Visibility convention: items used by external callers (mostly `lib.rs`) are
 `pub`; items shared across agent submodules but kept internal to the agent
@@ -138,12 +142,12 @@ are `pub(super)`.
 - **Motion detection** (`compute_motion_masked`) — standard grayscale
   frame-diff. Both `prev` and `curr` frames are box-blurred to suppress JPEG /
   sensor noise; the diff is then computed and per-pixel mask polygons drop
-  masked regions from the score. See [Motion masking](MOTION.md).
-- **NVR pipeline** — continuous segment recording (default 1 min per segment)
+  masked regions from the score.
+- **NVR pipeline** — continuous segment recording (10-second segments, remuxed as they close)
   with retention bounded by `nvr_max_gb`. Motion events store *pointers* into
   the NVR timeline rather than separate clip files (mature NVRs pattern).
 - **YOLO26 inference** (`run_inference_loop`) — Rust-native ONNX Runtime
-  session. Loads `<data_dir>/skills/yolo26/model.onnx` when the YOLO26 skill is
+  session. Loads `<data_dir>/skills/yolo26{n,s,m,l,x}/model.onnx` for the tier you picked, falling back to any installed tier, when a YOLO26 skill is
   installed. Decoder handles both `[1, 84, 8400]` and `[1, 8400, 84]` ONNX
   layouts. Output detections feed `scene_objects` and per-event detection
   buffers.
@@ -193,7 +197,6 @@ src/
 ├── features/       # Feature-scoped panels (see below)
 ├── lib/            # Pure helpers / shared logic
 ├── store/          # Zustand stores
-├── workers/        # Web Workers (e.g. depth estimation)
 └── App.tsx         # Top-level layout + tab routing
 ```
 
@@ -245,34 +248,21 @@ Per-user data is written to Tauri's `app_data_dir()`:
 - macOS: `~/Library/Application Support/com.anivar.app/`
 - Linux: `~/.local/share/com.anivar.app/`
 
-This directory contains the SQLite database (`anivar.db`), NVR segment
-files (`.mp4`), recorded clips, installed skills (e.g. `skills/yolo26n/model.onnx`
-for the detector, `skills/local_llm/model.gguf` for the on-device language model),
-and a `.master_key` used to AES-GCM-encrypt secret fields in settings
-(Telegram tokens, API keys). **Nothing in the source tree should ever
+| Path | Contents |
+|---|---|
+| `anivar.db` | SQLite — settings, events, alerts, identities, memory |
+| `nvr/` | Continuous recording segments |
+| `clip_*.mp4` | Exported event clips |
+| `skills/<id>/` | Installed models (e.g. `skills/yolo26n/model.onnx`, `skills/local_llm/model.gguf`) |
+| `blobs/` | Face and display crops kept out of the database |
+| `logs/` | Size-capped rolling application log |
+| `ffmpeg(.exe)`, `ffprobe(.exe)`, `ffmpeg.pin` | The pinned ffmpeg pair, when the machine has none of its own |
+| `.master_key` | Local key that AES-GCM-encrypts secret settings fields (Telegram tokens, API keys) |
+
+Removing a model in Arsenal deletes only `skills/<id>/`; footage,
+events and enrolled people stay. **Nothing in the source tree should ever
 contain real secrets.**
 
 ## Roadmap
 
-- [x] ~~Split `agent.rs` (6 390 lines) into focused submodules.~~ Done — 13
-      submodules now live under `agent/`.
-- [x] ~~Split `lib.rs` utility sections out.~~ Done — 14 utility/helper
-      modules plus 12 Tauri-command grouping modules.
-- [x] ~~Extract shared state into `state.rs`.~~ Done — `Settings`, `AppState`,
-      `StreamState`, `PerCamState`, `SignalRoom`, `ClientSession`, `MotionEvent`,
-      `FrameResult`, `StreamInfo`, `CameraInventory` now live in a single
-      ~530-line `state.rs`.
-- [x] ~~Carve transport handlers out of `lib.rs`.~~ Done — `capture`,
-      `webrtc`, `websocket`, `server` (boot + auth + CORS), `http_handlers`.
-- [x] ~~Carve Tauri command groupings out of `lib.rs`.~~ Done — `hw_onvif`,
-      `system_cmds`, `frontend_cmds`, `remote_cmds`, `native_cam_cmds`,
-      `events_cmds`, `tunnel_cmds`, `search_cmds`, `inference_cmds`.
-- [x] ~~Extract the `.setup(|app| …)` closure body.~~ Done — `boot::setup_app`
-      now owns tray creation, DB/state construction, and background-task
-      spawns. `lib.rs` is down to ~295 lines: module manifest, one
-      `constant_time_eq` helper, and the `run()` Tauri builder + the
-      `tauri::generate_handler!` registration. **97 % reduction from
-      8 887.** This is the practical floor without a different Tauri
-      handler-registration mechanism.
-- [ ] Add automated integration tests for the motion + NVR pipelines.
-- [ ] Document the v2 `ai_summary` JSON schema in `docs/SCHEMAS.md`.
+Planned work lives in [ROADMAP.md](../ROADMAP.md).

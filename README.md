@@ -1,64 +1,125 @@
-<div align="center">
+<p align="center">
+  <img src="assets/readme/banner.svg" width="100%" alt="Anivar — It watches. It listens. It remembers. Private AI security cameras on your own computer. No cloud, no account." />
+</p>
 
-<img src="assets/logo.png" alt="Anivar" width="120" />
+<p align="center">
+  <a href="https://github.com/anivarhq/anivar/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/anivarhq/anivar?style=flat-square&labelColor=0d1117&color=C9605C"></a>
+  <a href="https://github.com/anivarhq/anivar/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/anivarhq/anivar/total?style=flat-square&labelColor=0d1117"></a>
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square&labelColor=0d1117"></a>
+  <a href="https://github.com/anivarhq/anivar/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/anivarhq/anivar/ci.yml?branch=main&style=flat-square&labelColor=0d1117&label=CI"></a>
+</p>
 
-# Anivar
+<p align="center">
+  <a href="#download"><b>Download</b></a> ·
+  <a href="https://anivarhq.github.io/anivar-site/"><b>Website</b></a> ·
+  <a href="#what-it-does"><b>What it does</b></a> ·
+  <a href="#how-it-compares"><b>How it compares</b></a> ·
+  <a href="CONTRIBUTING.md"><b>Build from source</b></a>
+</p>
 
-### Local-first NVR with on-device AI
+Anivar turns your own Windows, Mac or Linux computer into a security-camera recorder with AI
+built in. Add your cameras and it records around the clock, spots people, cars and sounds, and
+learns the faces you name. Ask it *"what happened last night?"* and it answers with the clips.
+The video and the AI stay on your computer, and there is no subscription.
 
-[![Latest release](https://img.shields.io/github/v/release/anivarhq/anivar?style=for-the-badge&labelColor=0d1117)](https://github.com/anivarhq/anivar/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/anivarhq/anivar/total?style=for-the-badge&labelColor=0d1117)](https://github.com/anivarhq/anivar/releases)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=for-the-badge&labelColor=0d1117)](LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/anivarhq/anivar/ci.yml?branch=main&style=for-the-badge&labelColor=0d1117&label=CI)](https://github.com/anivarhq/anivar/actions/workflows/ci.yml)
-
-[**anivarhq.github.io/anivar-site**](https://anivarhq.github.io/anivar-site/)
-
-[**Download**](#download) · [**What it does**](#what-it-does) ·
-[**Architecture**](#architecture) · [**Build from source**](#build-from-source) ·
-[**Privacy & security**](#privacy--security)
-
-</div>
-
----
-
-A local-first NVR with on-device AI. One cross-platform desktop app built on
-[Tauri 2](https://v2.tauri.app/) with a React frontend and a Rust backend —
-recording, detection, recognition, and event analysis all run on your machine,
-including the language model.
-
-**Alpha.** The installers are not code-signed, so Windows and macOS will stop you
-the first time — see [Before you install](#before-you-install).
+<p align="center">
+  <img src="assets/readme/live.jpg" width="100%" alt="Anivar's live view: four cameras in a grid — a front door, a street, a corner and a sidewalk." />
+</p>
 
 ## Download
 
-These links always serve the newest release — click one and the file downloads.
+Free. These links always fetch the newest version.
 
 | Platform | Download | Notes |
 |---|---|---|
 | **Windows** 10 / 11, x64 | [**Installer** `.exe`](https://github.com/anivarhq/anivar/releases/latest/download/Anivar-windows-x64-setup.exe) | Installs for your user — no administrator prompt |
 | **macOS** 11+, **Apple Silicon** | [**Disk image** `.dmg`](https://github.com/anivarhq/anivar/releases/latest/download/Anivar-macos-arm64.dmg) | Intel Macs are not supported |
-| **Linux** x86_64 | [**AppImage**](https://github.com/anivarhq/anivar/releases/latest/download/Anivar-linux-x86_64.AppImage) · [`.deb`](https://github.com/anivarhq/anivar/releases/latest/download/Anivar-linux-amd64.deb) · [`.rpm`](https://github.com/anivarhq/anivar/releases/latest/download/Anivar-linux-x86_64.rpm) | AppImage is portable — `chmod +x` and run |
+| **Linux** x86_64 | [**AppImage**](https://github.com/anivarhq/anivar/releases/latest/download/Anivar-linux-x86_64.AppImage) · [`.deb`](https://github.com/anivarhq/anivar/releases/latest/download/Anivar-linux-amd64.deb) · [`.rpm`](https://github.com/anivarhq/anivar/releases/latest/download/Anivar-linux-x86_64.rpm) | Ubuntu 22.04 / Debian 12 or newer |
 
-Prefer to see sizes and checksums first? The [website](https://anivarhq.github.io/anivar-site/#download) shows the
-file for your system, and the [releases page](https://github.com/anivarhq/anivar/releases/latest) lists everything.
+### Before you install
 
-One download per platform. The Windows installer carries the CUDA execution
-provider and detects an NVIDIA card at runtime — there is no separate GPU edition
-to choose between. Without one it uses DirectML on any DX12 GPU. macOS uses
-CoreML; Linux runs detection on the CPU, with an experimental CUDA path for
-NVIDIA cards that has not been tested on hardware.
+**Anivar is alpha, and not yet code-signed.** The first time you open it, Windows says
+*"Windows protected your PC"*: click **More info → Run anyway**. On a Mac, try to open it once,
+then go to **System Settings → Privacy & Security → Open Anyway**. It doesn't update itself yet —
+**Settings → Check for Updates** tells you when a new version is out ([what changed](CHANGELOG.md)).
 
-There is no Intel-Mac or 32-bit build. Linux binaries are built against
-`webkit2gtk-4.1`, so Ubuntu 22.04 / Debian 12 or newer.
+## Private by design, and you can check
 
-Installs don't update themselves yet: **Settings → Check for Updates** shows
-when a new version is out and links to its installer. What changed each time
-is in [`CHANGELOG.md`](CHANGELOG.md).
+- **No account, no cloud, no telemetry.** There is no Anivar server between you and your
+  cameras. Nothing is sent anywhere until you turn on a feature that sends it — a cloud AI
+  provider, Telegram alerts, remote access, or a share link — and [PRIVACY.md](PRIVACY.md)
+  lists exactly what each one sends.
+- **The AI runs on your computer.** Detection, face recognition, search and the assistant's
+  language model all run inside the app. After a one-time model download, none of them needs
+  the internet.
+- **All of it is open.** Every line is in this repository under Apache-2.0, and every
+  download has a published checksum ([verify yours](#verify-your-download)).
 
-### Verify your download
+## What it does
 
-Every download above has a checksum beside it: add `.sha256` to the link. Save
-both files in the same folder, then:
+- **Records every camera, all day.** USB webcams and RTSP / ONVIF IP cameras, with audio.
+  IP cameras play live in under a second over WebRTC, recordings play back on a timeline you
+  can scrub, and a disk budget with retention keeps storage in check.
+- **Knows what it saw.** People, vehicles, licence plates, and sounds like breaking glass or an
+  alarm. It recognises the faces you've named, and alerts only on a pattern, not a single noisy
+  frame.
+- **Finds anything in plain words.** Search *"person with a package"* or *"red car"* across
+  weeks of footage.
+- **Answers questions with evidence.** Ask *"who came to the door today?"* and get the clips,
+  snapshots and people behind the answer. The facts come from the database; the model only
+  words them.
+- **Tells you when it matters.** Telegram alerts with the clip attached, quiet hours, and
+  per-category mute.
+- **Lets you look from anywhere.** Remote viewing and expiring share links through your own
+  [Tailscale](https://tailscale.com/) Funnel, behind an optional login.
+- **Can keep identities out of the footage.** On USB cameras, privacy mode records a depth map
+  instead of a picture, camera by camera.
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/readme/review.jpg" alt="The Review tab: a grid of the day's events from four cameras, each with a snapshot, its camera and a time." /><br><b>Review.</b> The whole day at a glance, and searchable.</td>
+    <td width="50%"><img src="assets/readme/playback.jpg" alt="Recorded playback above a day timeline marked with events." /><br><b>Recordings.</b> Scrub any hour, jump straight to what happened.</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="assets/readme/people.jpg" alt="The People tab: today's visitors, none of them named yet, each with the camera and time they were seen." /><br><b>People.</b> Name someone once and they're recognised from then on.</td>
+    <td width="50%"><img src="assets/readme/assistant.png" alt="Asked how many times someone was at the front door today, the assistant answers with a count and a strip of the clips behind it." /><br><b>Assistant.</b> Answers from the database, with the clips behind them.</td>
+  </tr>
+</table>
+
+How each part works, in detail: [docs/FEATURES.md](docs/FEATURES.md).
+
+### Will it run on my computer?
+
+- **Any recent PC or Apple Silicon Mac.** A GPU helps but is optional: Windows uses any
+  DirectX 12 GPU, NVIDIA cards can add CUDA and TensorRT from a download inside the app, Macs
+  use CoreML, and Linux runs detection on the CPU.
+- **Memory:** plan on 2–3 GB for the app itself (2.25 GB measured on a working install).
+- **Disk:** recording 24/7 at 2 Mbps takes about 21 GB per camera per day. Choose how many days
+  to keep and it prunes the rest.
+
+## How it compares
+
+Checked September 2026; list prices in USD.
+
+| | **Anivar** | [Frigate](https://github.com/blakeblackshear/frigate) | [Blue Iris](https://blueirissoftware.com/) | [Ring](https://ring.com/plans) / [Google Home](https://store.google.com/us/product/google_home_premium) plans |
+|---|---|---|---|---|
+| **Runs on** | A desktop app for Windows, macOS, Linux | A Linux server or Docker | Windows | Their cloud |
+| **Your video lives** | On your computer | On your server | On your PC | On their servers |
+| **Price** | Free (Apache-2.0) | Free (MIT) | $39.95 or $99.95, once | About $20 a month for the AI tier |
+| **Setup** | Installer, then add cameras in the app | Docker and a YAML config | Installer | Phone app |
+| **Maturity** | Alpha | Mature, large community | Mature | Mature |
+
+If you already run a home server and want the most proven open-source option, Frigate is
+excellent. Anivar is for people who want the same privacy without running a server.
+
+**No spare camera?** [Chameleon IP](https://github.com/anivarhq/chameleon-ip), a sister project
+in early development, turns an old phone or computer into an RTSP / ONVIF camera that Anivar —
+or any other recorder — can add.
+
+## Verify your download
+
+Every download has a checksum beside it — add `.sha256` to the link. Save both in the same
+folder, then:
 
 ```powershell
 # Windows — prints True if the file is exactly the one we published
@@ -71,248 +132,31 @@ shasum -a 256 -c Anivar-macos-arm64.dmg.sha256       # macOS
 sha256sum -c Anivar-linux-x86_64.AppImage.sha256     # Linux (or the .deb / .rpm)
 ```
 
-### Before you install
+## Faces are biometric data
 
-Windows and macOS both stop an app that no certificate authority has signed
-(Linux does not check):
-
-- **Windows** shows *"Windows protected your PC"*. Click **More info** →
-  **Run anyway**.
-- **macOS** refuses to open an app that isn't notarised. Try to open it once,
-  then go to **System Settings → Privacy & Security** and click **Open Anyway**.
-  From a terminal, `xattr -dr com.apple.quarantine /Applications/Anivar.app`
-  does the same thing.
-
-## What it does
-
-### Cameras and recording
-
-- **Multi-camera live view** — USB/built-in webcams, RTSP, MJPEG, and ONVIF
-  discovery. Capture is server-side (one `ffmpeg` per camera, one clock), so the
-  browser never touches the device.
-- **Sub-second live streaming** — WebRTC through [go2rtc](https://github.com/AlexxIT/go2rtc),
-  degrading to HLS then MJPEG.
-- **24/7 recording** — segmented, faststart-remuxed `.mp4` with audio, bounded by
-  a disk budget and per-tier retention. Detection runs on a hardware-decoded
-  stream while the recording itself stays `-c copy`.
-- **Recorded playback** — HLS VOD over the indexed segments. The day is a fixed
-  list of hourly chunks and the player holds an index into it, so a click inside
-  the loaded hour is a single `currentTime` assignment against media already in
-  the buffer; only a target outside it requests a new playlist. Wall clock comes
-  from each fragment's `EXT-X-PROGRAM-DATE-TIME`, which stays exact across
-  recording gaps.
-
-### Detection and understanding
-
-- **Object detection** — ONNX Runtime in-process. Windows uses DirectML on any
-  DX12 GPU, with CUDA and TensorRT available to NVIDIA cards through a downloaded
-  pack; macOS uses CoreML; Linux runs on the CPU (CUDA for NVIDIA is
-  experimental). Selectable YOLO tiers from
-  nano to xlarge. You choose a detector on first run and its licence is shown
-  before you commit to it.
-- **Motion detection with masks** — grayscale frame-diff with box blur, polygon
-  masks for noisy regions (fans, trees, monitors), hysteresis open/close, and a
-  lightning guard for whole-frame flashes.
-- **Faces and people** — ArcFace recognition with track-consensus naming (a name
-  needs agreement across frames rather than one lucky frame), person re-ID for
-  cross-event linking, and self-learning corrections.
-- **Licence plates** — ALPR with known-plate matching and recurring-plate
-  proposals.
-- **Audio events** — YAMNet AudioSet classification (glass, alarm, shouting…)
-  with a sustained-detection model, so an alert needs a pattern rather than one
-  spike.
-- **Semantic search** — natural-language search over the archive ("red shirt",
-  "person with a package") using CLIP embeddings of the detected object crop,
-  indexed with usearch HNSW.
-- **Privacy mode** — optional per-camera depth-map anonymisation, enforced
-  server-side: recordings and streams carry depth only, while the raw frame stays
-  in memory for analysis.
-
-### The assistant
-
-- **Evidence-first investigator** — ask "what happened last night?" and get
-  playable clips, snapshots, and person cards back alongside the prose. The
-  conversation is durable and shared with the Telegram channel, and every answer
-  states which day or range it covers.
-- **Answers are retrieved, then phrased** — a question like *"what happened
-  today?"* resolves to a database query in Rust, which runs first; the model sees
-  the findings and writes them up. Every claim traces to a row, and if the model
-  returns nothing usable the findings are reported directly, so the answer
-  survives the language model failing entirely.
-- **Memory that stays a fixed size** — what the agent learns is stored
-  permanently but *retrieved* per question (relevance × recency × how often it has
-  been confirmed) against a fixed budget, so the context sent to the model is the
-  same size whether it has learned ten facts or ten thousand.
-- **On-device language model** — llama.cpp is compiled into the binary and runs
-  LFM2.5-1.2B-Instruct (Q4_K_M, ~731 MB) in-process. It loads on demand and is
-  released after 180 s idle, so it costs nothing at rest. Optional Vulkan GPU
-  offload via `scripts\app-build.bat --gpu`; the same build still runs on CPU.
-- **Or bring your own** — OpenAI, Anthropic, Gemini, Groq, xAI, LM Studio, or any
-  OpenAI-compatible endpoint, all behind one dispatcher.
-- **Alerts** — Telegram, with inline acknowledgement and a `/menu` browser for
-  people, vehicles and sounds. Risk thresholds, quiet hours, and per-category
-  muting.
-
-### Access
-
-- **Remote viewing** — share links over your own [Tailscale](https://tailscale.com/)
-  Funnel, with expiry. Traffic goes device to device.
-- **Optional login gate** — Argon2id, with recovery through Telegram and
-  optional OTP.
-
-## Architecture
-
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the system overview and
-code layout.
-
-Two design rules worth knowing up front, because they explain a lot of the code:
-
-- **Runtime artifacts are provisioned, not vendored.** Model weights, GPU
-  runtimes, `ffmpeg`, and `go2rtc` all go through `provision.rs` — fetched,
-  digest-verified, unpacked, and installed atomically. There is exactly one
-  answer to "is this installed", so a half-finished download always reads as
-  incomplete.
-- **Capability is asked, never inferred.** Whether the active AI provider can see
-  an image, or is strong enough to classify risk, is a function of the provider —
-  never of whether some model-name string happens to be non-empty.
-
-## Build from source
-
-### Prerequisites
-
-- **Node.js** 22+ (CI builds on 24; see [`.nvmrc`](.nvmrc))
-- **Rust** 1.78+ ([rustup](https://rustup.rs/))
-- **Tauri prerequisites** for your OS —
-  [tauri.app/start/prerequisites](https://v2.tauri.app/start/prerequisites/)
-- **A C++ toolchain for llama.cpp** — `llama-cpp-sys-2` compiles it from source,
-  so you also need **cmake**, **Ninja**, and **libclang**. On Windows that means
-  a Visual Studio developer environment as well.
-  [`CONTRIBUTING.md`](CONTRIBUTING.md) lists each one and the misleading error it
-  produces when missing.
-
-An AI service is optional. The on-device model installs from **Guardian →
-Arsenal** inside the app.
-
-### Run in dev mode
-
-```bash
-git clone https://github.com/anivarhq/anivar
-cd anivar
-npm install
-npm run tauri dev
-```
-
-### Build a release
-
-On Windows, use the wrapper — it applies the three llama.cpp prerequisites and,
-for installers, stages the bundled resources:
-
-```bat
-scripts\app-build.bat            REM exe only, fastest
-scripts\app-build.bat --bundle   REM plus the NSIS installer
-```
-
-> **Use the wrapper, not a bare `cargo build --release`, for a shippable
-> binary.** Bare cargo compiles and exits 0, but the frontend is embedded by the
-> Tauri CLI's `beforeBuildCommand` — without it the window falls back to the Vite
-> dev URL and opens *"localhost refused to connect"* while the backend looks
-> perfectly healthy. A good binary is ~50 MB; one missing the frontend is ~35 MB.
-
-Output lands in `src-tauri/target/release/` (and `bundle/` with `--bundle`).
-
-### Runtime binaries are fetched on demand
-
-`ffmpeg`, `go2rtc`, and model weights are downloaded at your instruction rather
-than shipped (see the licence note below). The four ONNX Runtime
-execution-provider DLLs are staged out of the cargo build output by
-`scripts/sync-ort-dlls.ps1` — `ort` already downloads them, so their version
-always matches the ORT you linked against, and a 92 MB DLL stays out of git
-history.
-
-## Project layout
-
-```
-.
-├── docs/                   # Architecture documentation
-├── scripts/                # Build wrappers (app-build, cargo-env, sync-ort-dlls)
-├── src/                    # Frontend (React + TypeScript)
-│   ├── api/                # Thin wrappers over Tauri commands
-│   ├── components/         # Re-usable UI primitives
-│   ├── features/           # agent, auth, camera, cameras, live, nvr,
-│   │                       #   onboarding, persons, review, settings
-│   ├── lib/                # Pure helpers (time, clip start, camera source)
-│   └── store/              # Zustand stores
-├── src-tauri/src/          # Backend (Rust), ~70 modules incl.
-│   ├── lib.rs              # Command registry + module wiring
-│   ├── agent/              # analysis, clip, chat, llm, local_llm, memory,
-│   │                       #   dispatch, tools, prompts
-│   ├── capture/dshow/rtsp  # Camera ingest
-│   ├── nvr_*.rs            # Recording, indexing, HLS VOD, retention
-│   ├── inference.rs        # ONNX Runtime + EP selection
-│   ├── face*.rs, reid.rs   # Identity
-│   ├── provision.rs        # The single contract for every managed download
-│   └── tailscale.rs        # Remote access
-└── vite.config.ts
-```
-
-## Configuration & data
-
-Per-user runtime data lives in Tauri's app-data directory (on Windows,
-`%APPDATA%\com.anivar.app\`):
-
-| Path | Contents |
-|---|---|
-| `anivar.db` | SQLite — settings, events, alerts, identities, memory |
-| `nvr/` | Continuous recording segments |
-| `clip_*.mp4` | Exported motion-event clips |
-| `skills/<id>/` | Installed models (detector, face, ALPR, search, `local_llm`) |
-| `blobs/` | Face/display crops kept off the database |
-| `logs/` | Size-capped rolling application log |
-| `.master_key` | Local AES-GCM key encrypting secret settings fields |
-
-Models are installed, switched, and removed from Guardian → Arsenal; removing one
-deletes that model's weights and leaves your footage, events, and enrolled people
-intact.
-
-> Keep secrets, tokens, and databases out of this repository. See
-> [`.gitignore`](.gitignore).
-
-## Privacy & security
-
-Everything stays on your machine. Data leaves the device only through a feature
-you turn on: a cloud AI provider, Telegram, remote access, or a share link.
-
-Face recognition stores **biometric data**, which is special-category personal
-data under GDPR and equivalent laws — [`PRIVACY.md`](PRIVACY.md) covers what is
-stored, what obligations you take on when your cameras see anyone beyond your own
-household, and how to erase a person's biometrics completely (People → the person
-→ Remove → confirm erase).
+Face recognition stores special-category personal data under GDPR and similar laws.
+[PRIVACY.md](PRIVACY.md) covers what is stored, what you take on when your cameras see people
+beyond your household, and how to erase a person completely (**People → the person → Remove →
+confirm erase**).
 
 Found a vulnerability? Report it privately through
-[GitHub's advisory form](https://github.com/anivarhq/anivar/security/advisories/new)
-— [`SECURITY.md`](SECURITY.md) covers scope, what helps a report land, and what to
-expect back.
+[GitHub's advisory form](https://github.com/anivarhq/anivar/security/advisories/new) — see
+[SECURITY.md](SECURITY.md).
 
 ## Contributing
 
-PRs welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for dev setup, the build
-prerequisites and their failure modes, and commit-message style, and
-[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for the ground rules.
+Pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers building from source, the
+native toolchain and the misleading errors it gives when something is missing, tests, and code
+style; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) maps the code.
 
 ## License
 
-**Apache-2.0** — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). Use it, fork it,
-ship it, build a product on it. It carries a patent grant: contributors licence
-their patent claims to you, and that grant ends for anyone who sues over them.
+**Apache-2.0**, with a patent grant — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Use it, fork
+it, build a product on it.
 
-Third-party components keep their own terms, listed in
-[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). The short version:
-
-* Everything **bundled** in the installer is MIT or Apache-2.0.
-* **Model weights, `ffmpeg`, and `go2rtc` are fetched on request**, from the
-  upstream project, at your instruction — so their licences stay between you and
-  their authors rather than riding along with this application.
-* **The first run asks which detector you want and shows each licence**, because
-  the choice has consequences: the YOLO detectors are Ultralytics **AGPL-3.0**,
-  and Ultralytics require a commercial licence for proprietary or commercial use.
-  RF-DETR, RT-DETR, D-FINE and YOLOX are Apache-2.0 alternatives.
+Everything bundled in the installer is MIT or Apache-2.0. Model weights, `ffmpeg` and `go2rtc`
+are not shipped: the app downloads them from their upstream projects onto your machine, so
+their licences stay between you and their authors ([THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)). No model is
+preinstalled; **Arsenal** shows each one's licence before you install it. The object detectors
+are Ultralytics YOLO26, **AGPL-3.0**, which needs a commercial licence from Ultralytics for
+proprietary use. The on-device language models are under Liquid AI's LFM Open License.

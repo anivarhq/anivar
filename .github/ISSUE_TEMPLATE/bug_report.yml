@@ -54,7 +54,6 @@ body:
         - Windows 11
         - Windows 10
         - macOS (Apple Silicon)
-        - macOS (Intel)
         - Linux
         - Other
     validations:
@@ -64,6 +63,9 @@ body:
     attributes:
       label: Relevant logs / screenshots
       description: |
-        Paste any stderr output from the app or attach screenshots. **Redact
-        secrets first.**
+        Paste the last lines of the app's log, or attach screenshots. The log is
+        `anivar.log` in the `logs` folder of the data directory:
+        `%APPDATA%\com.anivar.app\logs` on Windows,
+        `~/Library/Application Support/com.anivar.app/logs` on macOS,
+        `~/.local/share/com.anivar.app/logs` on Linux. **Redact secrets first.**
       render: text
