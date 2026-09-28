@@ -408,11 +408,14 @@ fn n_threads() -> i32 {
 ///
 /// Order matters: llama.cpp applies the chain in sequence, so penalties and
 /// truncation run before temperature, and `dist` makes the final pick.
-fn sampler_chain(creative: bool) -> llama_cpp_2::sampling::LlamaSampler {
+fn sampler_chain(model: &llama_cpp_2::model::LlamaModel, creative: bool) -> llama_cpp_2::sampling::LlamaSampler {
     use llama_cpp_2::sampling::LlamaSampler;
+    // llama-cpp-2 0.1.157 takes the vocabulary size first (llama.cpp's
+    // llama_sampler_init_penalties grew the parameter).
+    let n_vocab = model.n_vocab();
     if creative {
         LlamaSampler::chain_simple([
-            LlamaSampler::penalties(64, 1.05, 0.0, 0.0), // last_n, repeat, freq, presence
+            LlamaSampler::penalties(n_vocab, 64, 1.05, 0.0, 0.0), // vocab, last_n, repeat, freq, presence
             LlamaSampler::top_k(50),
             LlamaSampler::top_p(0.9, 1),
             LlamaSampler::temp(0.6),
@@ -420,7 +423,7 @@ fn sampler_chain(creative: bool) -> llama_cpp_2::sampling::LlamaSampler {
         ])
     } else {
         LlamaSampler::chain_simple([
-            LlamaSampler::penalties(64, 1.05, 0.0, 0.0),
+            LlamaSampler::penalties(n_vocab, 64, 1.05, 0.0, 0.0),
             LlamaSampler::top_k(50),
             LlamaSampler::temp(0.1),
             LlamaSampler::dist(0x5EC0_0CAF),
@@ -513,7 +516,7 @@ fn generate_blocking(
         ctx.decode(&mut batch).map_err(|e| anyhow!("local LLM: prefill: {e}"))?;
     }
 
-    let mut sampler = sampler_chain(creative);
+    let mut sampler = sampler_chain(model, creative);
     // Generation starts at the position after the WHOLE prompt — not
     // `batch.n_tokens()`, which after chunked prefill holds only the final chunk
     // and would rewind over the prompt's own cache entries. The loop below counts
@@ -648,7 +651,7 @@ fn generate_vision(
 
     // Same sampler and stop rules as the text path — a vision model invents the
     // user's next turn just as readily.
-    let mut sampler = sampler_chain(creative);
+    let mut sampler = sampler_chain(model, creative);
     let mut out = String::new();
     let mut decoder = encoding_rs::UTF_8.new_decoder();
     let mut batch = LlamaBatch::new(n_batch as usize, 1);

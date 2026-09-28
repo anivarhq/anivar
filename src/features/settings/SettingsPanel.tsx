@@ -35,10 +35,9 @@ function TailscaleSetupGuide({ status, busy, onEnable, onRefresh, onClose }: {
   onRefresh: () => void;
   onClose: () => void;
 }) {
-  const openExternal = async (url: string) => {
-    try { const { open } = await import("@tauri-apps/plugin-shell"); await open(url); }
-    catch { window.open(url, "_blank"); }
-  };
+  // window.open, like every other external link here: tauri-plugin-shell is
+  // deliberately not loaded (lib.rs), so importing it only ever threw into this.
+  const openExternal = (url: string) => { window.open(url, "_blank"); };
   const installed = !!status?.installed;
   const loggedIn  = !!status?.logged_in;
   const active    = !!status?.funnel_active;
@@ -633,8 +632,7 @@ export function SettingsPanel() {
       setTsStatus(st);
       if (st.enable_url) {
         showToast("One-time: enable Funnel for your Tailscale account in the opened page, then click again.", "info");
-        try { const { open } = await import("@tauri-apps/plugin-shell"); await open(st.enable_url); }
-        catch { window.open(st.enable_url, "_blank"); }
+        window.open(st.enable_url, "_blank");
       } else if (st.funnel_active) {
         showToast(`Remote access ON — live links now use ${st.base_url}`, "success");
       }

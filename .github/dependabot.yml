@@ -20,10 +20,23 @@ updates:
       day: monday
     open-pull-requests-limit: 5
     groups:
+      # Tauri on its own: each crate must move with its npm twin (see
+      # scripts/check-tauri-versions.mjs), which Dependabot can't pair across
+      # ecosystems. Inside the main group, that check failed every week and held
+      # back ~20 unrelated crates with it. Alone, it fails until the npm side is
+      # added to the same PR, which is the point.
+      tauri:
+        patterns: ["tauri", "tauri-*"]
+        update-types: ["patch", "minor"]
       rust-patch-minor:
         patterns: ["*"]
+        exclude-patterns: ["tauri", "tauri-*"]
         update-types: ["patch", "minor"]
     ignore:
+      # 0.10.11 calls nokhwa-core's Buffer::with_timestamp, which the nokhwa-core
+      # it accepts doesn't have: it fails to compile on all three OSes (PR #32).
+      - dependency-name: "nokhwa"
+        versions: ["0.10.11"]
       # Pinned deliberately — `ort` release candidates change EP wiring between
       # RCs, and the TensorRT lane is tied to this exact build. Bump it as a
       # considered change, not automatically.
@@ -40,8 +53,12 @@ updates:
       day: monday
     open-pull-requests-limit: 5
     groups:
+      tauri:
+        patterns: ["@tauri-apps/*"]
+        update-types: ["patch", "minor"]
       npm-patch-minor:
         patterns: ["*"]
+        exclude-patterns: ["@tauri-apps/*"]
         update-types: ["patch", "minor"]
     commit-message:
       prefix: "deps"
