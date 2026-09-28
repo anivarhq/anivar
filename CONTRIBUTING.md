@@ -20,7 +20,18 @@ and similar should be redacted before posting.
 
 ## Development setup
 
-See [`README.md`](README.md) for the prerequisite list. Quick start:
+You need:
+
+- **Node.js** 22+ (CI builds on 24; see [`.nvmrc`](.nvmrc))
+- **Rust** 1.88+ ([rustup](https://rustup.rs/)) — `ort 2.0.0-rc.12` requires it; CI
+  builds with 1.97
+- **Tauri's prerequisites** for your OS —
+  [v2.tauri.app/start/prerequisites](https://v2.tauri.app/start/prerequisites/)
+- **cmake, Ninja and libclang** for llama.cpp — see
+  [Native toolchain prerequisites](#native-toolchain-prerequisites) below
+
+An AI service is optional; the on-device model installs from **Arsenal**
+inside the app. Quick start:
 
 ```bash
 git clone <your-fork-url> anivar
@@ -104,6 +115,26 @@ npm run tauri build
 
 The release build invokes LTO and takes several minutes the first time; the
 first build in a clean checkout also compiles llama.cpp, which adds a few more.
+
+On Windows, the wrapper applies the toolchain environment and, for installers,
+stages the bundled resources:
+
+```bat
+scripts\app-build.bat            REM exe only, fastest
+scripts\app-build.bat --bundle   REM plus the NSIS installer
+```
+
+> **Use the wrapper or the Tauri CLI, not a bare `cargo build --release`, for a
+> binary you will run.** Bare cargo compiles and exits 0, but the frontend is
+> embedded by the Tauri CLI's `beforeBuildCommand` — without it the window falls
+> back to the Vite dev URL and opens *"localhost refused to connect"* while the
+> backend looks perfectly healthy.
+
+Output lands in `src-tauri/target/release/` (and `bundle/` with `--bundle`).
+
+`ffmpeg`, `go2rtc` and model weights are never in the build: the app fetches
+them at runtime through `provision.rs`, digest-verified, so a GPL `ffmpeg` never
+rides along with the Apache-2.0 app.
 
 ## Code style
 
