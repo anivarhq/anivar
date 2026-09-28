@@ -41,6 +41,17 @@ people don't build the same thing. Smaller starting points are labelled
   (AGPL-3.0). Apache-2.0 alternatives such as RF-DETR or D-FINE would give a
   choice for commercial use.
 
+## Under the hood
+
+Good places to start if you'd rather work on the engine than the interface:
+
+- **Integration tests for recording and motion.** Unit tests cover the pieces
+  (`scripts\cargo-env.bat test --lib`), but nothing yet drives a real stream
+  end to end through motion detection, recording and segment indexing.
+- **A written schema for event summaries.** The `ai_summary` JSON that
+  `agent/analysis.rs` stores on each event is documented only by the code that
+  writes and reads it.
+
 ## Deliberately not planned
 
 - **More alert channels.** Home Assistant, MQTT, webhooks, ntfy, Discord and
