@@ -7,6 +7,36 @@ and this project (will) adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-09-29
+
+### Added
+
+- **Updates install from inside the app.** **Settings → App Updates → Install
+  and restart** downloads the new version, checks its signature against the key
+  built into Anivar, installs it and restarts. Two new switches sit beside it:
+  - **Check for updates automatically** (on by default).
+  - **Install updates automatically** (off by default). An automatic install
+    waits until no event is being recorded, so a restart never cuts one off.
+
+  **This is the last version you install by hand.** 0.1.5 and earlier can't
+  update themselves: install 0.1.6 over the top once, and every later version
+  arrives through the app.
+
+### Fixed
+
+- **Links open in your browser.** Links inside the app did nothing: release
+  notes, the Tailscale download, and links in the assistant's answers. They now
+  open in your default browser.
+
+### Security
+
+- **The Telegram bot answers only your chat.** Until a Chat ID was saved, or
+  while it was written as an @username, the bot answered anyone who found it,
+  snapshots and clips included. It now serves only the chat you configured.
+  Anyone else gets their own chat ID back and nothing more.
+- **`/pause` can't stop the app.** A very large number made Anivar quit. Pauses
+  are now capped at 7 days, and the reply says so.
+
 ## [0.1.5] - 2026-09-28
 
 ![Anivar's live view: four cameras in a grid](https://github.com/anivarhq/anivar/raw/main/assets/readme/live.jpg)
