@@ -505,6 +505,7 @@ pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::
 
     // Close the public tunnel once the last share link expires.
     crate::share_cmds::spawn_tunnel_auto_stop(Arc::clone(&state));
+    crate::update_cmds::spawn_auto_update(Arc::clone(&state));
 
     // Spawn Guardian agent loop
     let state_for_agent = Arc::clone(&state);

@@ -79,9 +79,10 @@ This is a small project without a paid security team. There is **no bug bounty**
 
 Fixes land on `main` and go out in the next release. While the project is at
 `0.x`, only the newest release is patched: there is no back-porting and there
-are no long-term support branches. Installs don't update themselves yet:
-**Settings → Check for Updates** shows when a new version is out and links to
-its installer.
+are no long-term support branches. **Settings → App Updates** installs a new
+release in place, after verifying it against the signing key built into the app,
+and can do so automatically. Versions up to 0.1.5 predate in-app updates and need
+the next release installed by hand once.
 
 ## What the design already assumes
 

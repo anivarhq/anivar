@@ -7,8 +7,8 @@ name: Release
 #   • macOS    — .dmg (Apple Silicon)  (CoreML: Apple Neural Engine)
 #   • Linux    — .deb + .rpm + .AppImage (CPU; CUDA for NVIDIA is experimental)
 # plus the signed updater artifacts (.sig) and the `latest.json` manifest that
-# tauri-plugin-updater reads (plugins.updater.endpoints). Nothing in the app calls
-# the plugin yet: users update through Settings → Check for Updates.
+# tauri-plugin-updater reads (plugins.updater.endpoints). The app installs from
+# them in Settings → App Updates (update_cmds.rs), so both must keep shipping.
 #
 # Required repo secrets:
 #   TAURI_SIGNING_PRIVATE_KEY           — minisign private key (from `tauri signer generate`)
@@ -75,7 +75,7 @@ jobs:
           {
             echo "## Install"
             echo
-            echo "Download the installer for your platform below. Already running Anivar? **Settings → Check for Updates** shows when a new version is out and links to its installer. Installs don't update themselves yet."
+            echo "Download the installer for your platform below. Already running Anivar? **Settings → App Updates → Install and restart** updates it in place. Versions up to 0.1.5 predate in-app updates: install this release over them once, by hand."
             echo
             # Keep this in step with README.md's "Before you install". The macOS
             # line used to say right-click → Open, which recent macOS no longer
@@ -228,8 +228,8 @@ jobs:
 
   # ── Checksums ──────────────────────────────────────────────────────────────
   # The updater manifest is already protected: `includeUpdaterJson` above signs
-  # it with TAURI_SIGNING_PRIVATE_KEY, so an in-app updater (not wired up yet)
-  # can refuse anything that fails that signature.
+  # it with TAURI_SIGNING_PRIVATE_KEY, and the in-app updater (update_cmds.rs)
+  # refuses anything that fails that signature.
   #
   # A MANUAL download from the Releases page has no such check. The installers
   # are not Authenticode-signed or notarised yet (that needs a purchased

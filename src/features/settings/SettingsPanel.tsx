@@ -1,5 +1,6 @@
 ﻿import { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
+import { listen } from "@tauri-apps/api/event";
 import { applyTheme, loadSurface, type AppSurface } from "../../App";
 import { useStore } from "../../store";
 import { useShallow } from "zustand/react/shallow";
@@ -12,14 +13,10 @@ import {
   Bot, SlidersHorizontal, Shield, Lock, KeyRound,
   Info, Check, X,
 } from "lucide-react";
-import type { AuthStatus } from "../../api";
+import type { AuthStatus, UpdateInfo } from "../../api";
+import { openExternal } from "../../lib/openExternal";
 
-/// The repo in-app updates are checked against.
-///
-/// This used to be a text field the user had to fill in, and "Check for Updates"
-/// was disabled until they did — asking them to configure the vendor's own
-/// identity, with no way to know the answer. It is the same for every install.
-const APP_REPO = "anivarhq/anivar";
+const RELEASES_URL = "https://github.com/anivarhq/anivar/releases/latest";
 
 /* ── Remote-access first-time setup guide ────────────────────────────────────── */
 // Reactive 4-step walkthrough for Tailscale Funnel, opened from the info icon on
@@ -35,9 +32,6 @@ function TailscaleSetupGuide({ status, busy, onEnable, onRefresh, onClose }: {
   onRefresh: () => void;
   onClose: () => void;
 }) {
-  // window.open, like every other external link here: tauri-plugin-shell is
-  // deliberately not loaded (lib.rs), so importing it only ever threw into this.
-  const openExternal = (url: string) => { window.open(url, "_blank"); };
   const installed = !!status?.installed;
   const loggedIn  = !!status?.logged_in;
   const active    = !!status?.funnel_active;
@@ -587,8 +581,23 @@ export function SettingsPanel() {
   const [clearingAll, setClearingAll] = useState(false);
   const [clearingNvr, setClearingNvr] = useState(false);
   const [purgingOrphans, setPurgingOrphans] = useState(false);
-  const [updateInfo,       setUpdateInfo]       = useState<any>(null);
+  const [updateInfo,       setUpdateInfo]       = useState<UpdateInfo | null>(null);
   const [checkingUpdate,   setCheckingUpdate]   = useState(false);
+  // null = not installing; otherwise bytes so far / total (total unknown → null).
+  const [installProgress,  setInstallProgress]  = useState<{ got: number; total: number | null } | null>(null);
+  // Download → verify → install. On success the app exits into the installer
+  // (Windows) or restarts (macOS/Linux), so only failure ever returns here.
+  const installUpdate = async () => {
+    setInstallProgress({ got: 0, total: null });
+    const stop = await listen<{ downloaded: number; total: number | null }>("update:progress",
+      (e) => setInstallProgress({ got: e.payload.downloaded, total: e.payload.total }));
+    try {
+      await api.updateInstall();
+    } catch (e: any) {
+      showToast(String(e?.message ?? e), "error");
+      setInstallProgress(null);
+    } finally { stop(); }
+  };
   // Progressive disclosure — raw threshold knobs hide behind this persisted switch.
   const [showAdvanced, setShowAdvanced] = useState<boolean>(() => {
     try { return localStorage.getItem("sc-settings-advanced") === "1"; } catch { return false; }
@@ -632,7 +641,7 @@ export function SettingsPanel() {
       setTsStatus(st);
       if (st.enable_url) {
         showToast("One-time: enable Funnel for your Tailscale account in the opened page, then click again.", "info");
-        window.open(st.enable_url, "_blank");
+        openExternal(st.enable_url);
       } else if (st.funnel_active) {
         showToast(`Remote access ON — live links now use ${st.base_url}`, "success");
       }
@@ -1134,24 +1143,29 @@ export function SettingsPanel() {
             <Toggle checked={form.relaunch_after_crash ?? false}
               onChange={v => patch("relaunch_after_crash", v)} />
           </Field>
-            {/* The "GitHub Repository" text field lived here. `github_repo` has no
-                Rust reader at all — checkForUpdate takes the repo as a call
-                argument, and the persisted key was write-only. It is also the
-                app's OWN repo, so the panel was asking the user to configure the
-                vendor's identity, and then disabling "Check for Updates" until
-                they guessed it. */}
+          <Field label="Check for updates automatically" hint="When the app starts, then every 6 hours">
+            <Toggle checked={form.auto_update_check ?? true}
+              onChange={v => patch("auto_update_check", v)} />
+          </Field>
+          {(form.auto_update_check ?? true) && (
+            <Field label="Install updates automatically"
+              hint="Waits until no event is in progress, then installs and restarts">
+              <Toggle checked={form.auto_update_install ?? false}
+                onChange={v => patch("auto_update_install", v)} />
+            </Field>
+          )}
           <div style={{ padding: "8px 16px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <button className={styles.ghostBtn}
-              disabled={checkingUpdate}
+              disabled={checkingUpdate || !!installProgress}
               style={{ padding: "5px 14px", fontSize: 12 }}
               onClick={async () => {
                 setCheckingUpdate(true);
                 try {
-                  const info = await api.checkForUpdate(APP_REPO);
+                  const info = await api.updateCheck();
                   setUpdateInfo(info);
                   if (!info.available) showToast(`You're on the latest version (${info.current})`, "success");
                 } catch (e: any) {
-                  showToast(e.message ?? "Update check failed", "error");
+                  showToast(String(e?.message ?? e), "error");
                 } finally { setCheckingUpdate(false); }
               }}>
               <RefreshCw size={12} style={{ animation: checkingUpdate ? "spin 1s linear infinite" : "none" }} />
@@ -1159,7 +1173,7 @@ export function SettingsPanel() {
             </button>
             {updateInfo?.available && (
               <div style={{ flex: 1, background: "color-mix(in srgb, var(--accent) 8%, transparent)", border: "1px solid var(--border-accent)",
-                borderRadius: 10, padding: "8px 14px", display: "flex", flexDirection: "column", gap: 4 }}>
+                borderRadius: 10, padding: "8px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ fontSize: 13, fontWeight: 700, color: "var(--accent)" }}>
                     v{updateInfo.latest} available
@@ -1174,14 +1188,21 @@ export function SettingsPanel() {
                     {updateInfo.notes}
                   </div>
                 )}
-                {updateInfo.download_url && (
-                  <a href={updateInfo.download_url} target="_blank" rel="noopener noreferrer"
-                    style={{ alignSelf: "flex-start", marginTop: 4, padding: "5px 14px",
-                      fontSize: 12, fontWeight: 700, borderRadius: 20,
-                      background: "var(--accent-fill)", color: "var(--on-accent)",
-                      textDecoration: "none", display: "flex", alignItems: "center", gap: 5 }}>
-                    <ExternalLink size={11} /> Download v{updateInfo.latest}
-                  </a>
+                {installProgress ? (
+                  <UpdateProgress got={installProgress.got} total={installProgress.total} />
+                ) : (
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 2 }}>
+                    <button onClick={installUpdate}
+                      style={{ padding: "5px 14px", fontSize: 12, fontWeight: 700, borderRadius: 20, border: "none",
+                        background: "var(--accent-fill)", color: "var(--on-accent)", cursor: "pointer",
+                        display: "flex", alignItems: "center", gap: 5 }}>
+                      <RefreshCw size={11} /> Install and restart
+                    </button>
+                    <button className={styles.ghostBtn} style={{ padding: "5px 14px", fontSize: 12 }}
+                      onClick={() => openExternal(RELEASES_URL)}>
+                      <ExternalLink size={11} /> Release notes
+                    </button>
+                  </div>
                 )}
               </div>
             )}
@@ -1677,6 +1698,25 @@ function SecuritySection({ showToast }: { showToast: (msg: string, type: "succes
 
       <div style={{ fontSize: 10.5, color: "var(--text-muted)", marginTop: 12, lineHeight: 1.5 }}>
         Stops casual access — not someone with full control of this computer.
+      </div>
+    </div>
+  );
+}
+
+function UpdateProgress({ got, total }: { got: number; total: number | null }) {
+  const mb = (b: number) => (b / 1048576).toFixed(1);
+  const pct = total ? Math.min(100, Math.round((got / total) * 100)) : null;
+  const done = total !== null && got >= total;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 2 }}>
+      <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+        {done ? "Installing — Anivar will restart by itself"
+              : total ? `Downloading… ${pct}% (${mb(got)} of ${mb(total)} MB)`
+                      : `Downloading… ${mb(got)} MB`}
+      </span>
+      <div style={{ height: 4, borderRadius: 2, background: "var(--border)", overflow: "hidden" }}>
+        <div style={{ height: "100%", width: `${pct ?? 5}%`, background: "var(--accent)",
+          transition: "width .3s" }} />
       </div>
     </div>
   );

@@ -72,6 +72,8 @@ export interface Settings {
   /** Appliance mode: keep-alive Scheduled Task relaunches the app (headless)
    *  within 5 min after a hard crash. Opt-in, Windows-only. */
   relaunch_after_crash?: boolean;
+  auto_update_check?: boolean;
+  auto_update_install?: boolean;
   // Masking & zones (JSON-encoded per camera)
   camera_masks?: string;
   /** Depth Map Anonymization per cam: JSON {"<camId>": true}. Server-enforced. */

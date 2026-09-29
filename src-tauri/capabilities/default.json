@@ -18,6 +18,9 @@
     "fs:default",
     "fs:allow-write-file",
     "notification:default",
-    "updater:default"
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://*" }]
+    }
   ]
 }

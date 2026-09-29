@@ -121,6 +121,20 @@ export default function App() {
     return () => { un.then(f => f()); };
   }, []);
 
+  // The background update check (update_cmds.rs) found a newer release. Said
+  // once per version per session — the check repeats every 6 h.
+  useEffect(() => {
+    const told = new Set<string>();
+    const un = listen<{ latest: string; auto: boolean }>("update:available", (e) => {
+      if (told.has(e.payload.latest)) return;
+      told.add(e.payload.latest);
+      useStore.getState().showToast(e.payload.auto
+        ? `Anivar ${e.payload.latest} is downloading — it installs once no event is in progress`
+        : `Anivar ${e.payload.latest} is available — install it from Settings → App Updates`, "info");
+    });
+    return () => { un.then(f => f()); };
+  }, []);
+
   // ── Desktop login gate ──────────────────────────────────────────────────
   // `checked` gates the first render; `locked` shows the LoginGate. On boot we
   // ask the backend whether login is required + already unlocked, and try to
