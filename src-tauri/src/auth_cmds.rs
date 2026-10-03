@@ -168,7 +168,12 @@ pub async fn login(state: State<'_, Arc<AppState>>, password: String, remember: 
         let s = st.settings.read().await;
         (s.login_password_hash.clone(), s.auth_2fa_enabled)
     };
-    if hash.is_empty() { return Err("No password is set.".into()); }
+    if hash.is_empty() {
+        // Fail closed either way — an unreadable hash must never open the gate.
+        return Err(if crate::crypto::login_hash_unreadable() {
+            "Your saved password can't be checked: the encryption key file (.master_key) in the app's              data folder was replaced or lost. Restore the original file from a backup to log in.".into()
+        } else { "No password is set.".into() });
+    }
     if !auth::verify_password(&password, &hash) {
         if let Some(rem) = st.auth.record_fail() {
             return Err(format!("Too many attempts. Locked for {}s.", rem.as_secs()));

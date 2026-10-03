@@ -630,6 +630,10 @@ export function SettingsPanel() {
   }, []);
 
   // Remote access (Tailscale Funnel — compliant live/clip sharing).
+  // Saved secrets the current encryption key can't open (crypto.rs). They read
+  // as empty, so the feature behind each one stops — say which, once, up top.
+  const [lostSecrets, setLostSecrets] = useState<string[]>([]);
+  useEffect(() => { api.unreadableSecrets().then(setLostSecrets).catch(() => {}); }, []);
   const [tsStatus, setTsStatus] = useState<import("../../types").TailscaleStatus | null>(null);
   const [tsBusy, setTsBusy] = useState(false);
   const refreshTs = useCallback(() => { api.tailscaleStatus().then(setTsStatus).catch(() => setTsStatus(null)); }, []);
@@ -812,6 +816,14 @@ export function SettingsPanel() {
       </div>{/* /glassStack */}
 
       <div ref={contentRef} className={styles.content}>
+        {lostSecrets.length > 0 && (
+          <div role="alert" className={styles.section} style={{ padding: "12px 16px", fontSize: 12, lineHeight: 1.6,
+            color: "var(--text-secondary)", borderColor: "var(--accent)" }}>
+            <strong style={{ color: "var(--accent)" }}>Some saved secrets can't be read.</strong>{" "}
+            The encryption key file (<code>.master_key</code>) changed, so these need entering again:{" "}
+            {lostSecrets.join(", ")}. If you have a backup of the old key file, restoring it brings them back.
+          </div>
+        )}
 
         {/* ── Appearance ────────────────────────────────────────────────── */}
         <AppearanceSection />

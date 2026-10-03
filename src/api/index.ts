@@ -345,6 +345,8 @@ export const api = {
       "telegram_connect", { botToken }),
   /** Tailscale Funnel remote-access status (compliant live/clip sharing). */
   tailscaleStatus:   () => invoke<TailscaleStatus>("tailscale_status"),
+  /** Saved secrets the current key couldn't decrypt (crypto.rs), by name. */
+  unreadableSecrets: () => invoke<string[]>("unreadable_secrets"),
   /** Turn on Funnel for the stream port; may return a one-time enable_url. */
   tailscaleEnable:   () => invoke<TailscaleStatus>("tailscale_enable"),
 
