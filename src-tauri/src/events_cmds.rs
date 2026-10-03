@@ -99,6 +99,9 @@ pub(crate) async fn apply_settings_update(state: &Arc<AppState>, new_s: Settings
          g.depth_anonymize.clone(),
          g.relaunch_after_crash)
     };
+    let mqtt_cfg = |s: &Settings| (s.mqtt_host.clone(), s.mqtt_port, s.mqtt_username.clone(),
+                                    s.mqtt_password.clone(), s.mqtt_topic_prefix.clone());
+    let old_mqtt = mqtt_cfg(&*state.settings.read().await);
     let mut encrypted = new_s.clone();
     encrypt_settings_secrets(&state.master_key, &mut encrypted);
     let _ = save_settings_to_db(&state.db, &encrypted).await;
@@ -125,6 +128,12 @@ pub(crate) async fn apply_settings_update(state: &Arc<AppState>, new_s: Settings
     if old_depth != new_s.depth_anonymize {
         let st = state.clone();
         tokio::spawn(async move { reapply_depth_anonymize(&st).await; });
+    }
+
+    // MQTT broker changed → reconnect (or stop) the Home Assistant bridge.
+    if old_mqtt != mqtt_cfg(&new_s) {
+        let st = state.clone();
+        tokio::spawn(async move { crate::mqtt::restart(&st).await; });
     }
 
     // Crash auto-restart toggled → (un)register the keep-alive Scheduled Task.

@@ -347,6 +347,9 @@ export const api = {
   tailscaleStatus:   () => invoke<TailscaleStatus>("tailscale_status"),
   /** Saved secrets the current key couldn't decrypt (crypto.rs), by name. */
   unreadableSecrets: () => invoke<string[]>("unreadable_secrets"),
+  /** Try a broker with these values (mqtt.rs); resolves with a message or rejects. */
+  mqttTest: (host: string, port: number, username: string, password: string) =>
+    invoke<string>("mqtt_test", { host, port, username, password }),
   /** Turn on Funnel for the stream port; may return a one-time enable_url. */
   tailscaleEnable:   () => invoke<TailscaleStatus>("tailscale_enable"),
   tailscaleDisable:  () => invoke<TailscaleStatus>("tailscale_disable"),

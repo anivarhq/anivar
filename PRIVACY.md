@@ -18,7 +18,7 @@ a detail to leave undocumented.
 | Telemetry / analytics | **None.** No usage reporting, no crash reporting, no phone-home |
 | Account required | None |
 | Biometrics | Face descriptors and body-appearance vectors, stored locally — **special-category data** |
-| Leaves the machine | Only via features you turn on: cloud AI provider, Telegram, remote access, share links |
+| Leaves the machine | Only via features you turn on: cloud AI provider, Telegram, MQTT, remote access, share links |
 | Deleting it | Per person, per event, per camera, or wholesale — see [Deleting data](#deleting-data) |
 
 ---
@@ -95,6 +95,7 @@ Nothing, until you enable one of these. Each is off by default.
 | **Cloud AI provider** (OpenAI, Anthropic, Gemini, OpenRouter, …) | Event snapshots and a text prompt, for scene description | That provider, under their terms |
 | **On-device AI** (default) | Nothing — the model runs inside the app | — |
 | **Telegram** | Alert text, snapshots, and clips you or the agent send | Telegram |
+| **MQTT / Home Assistant** | Camera names, motion on/off, event start/end with object labels (e.g. "person"), camera online status. No images, no names of recognised people, no video | The broker you enter in Settings (normally on your own network) |
 | **Remote access** (Tailscale Funnel) | Your live streams and UI, over an authenticated tunnel | Whoever holds the credential |
 | **Share links** | The single clip you shared, until the link expires | Whoever has the link |
 

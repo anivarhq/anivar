@@ -32,6 +32,11 @@ export interface Settings {
   alert_muted_categories?: string[];
   camera_name: string;
   telegram_bot_token: string;
+  mqtt_host?: string;
+  mqtt_port?: number;
+  mqtt_username?: string;
+  mqtt_password?: string;
+  mqtt_topic_prefix?: string;
   telegram_chat_id: string;
   github_repo: string;
   device_name: string;
