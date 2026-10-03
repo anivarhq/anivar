@@ -794,16 +794,19 @@ export function LivePanel() {
                   onNextEvent={nextEv ? () => jumpToEvent(nextEv) : undefined}
                   onEnded={() => {
                     // An event clip that runs out rolls into the continuous
-                    // recording at its end, so "play this event" flows into
-                    // "keep watching" without a click. Everything else is the
-                    // controller's one chunk-advance rule.
+                    // recording, so "play this event" flows into "keep watching"
+                    // without a click. It continues from the clip's own last
+                    // frame, not `ended_at`: the cached clip is capped at 2
+                    // minutes (clip_export.rs MAX_SENT_CLIP_SECS) and runs past
+                    // the event by the post-buffer, so seeking to `ended_at` skipped
+                    // the middle of long events and replayed the tail of short ones.
+                    // Everything else is the controller's one chunk-advance rule.
                     if (clipSource.kind === "event" && selectedEvent) {
-                      const endIso = selectedEvent.ended_at
-                        ?? new Date(
-                          new Date(selectedEvent.started_at).getTime()
-                            + (selectedEvent.duration_secs ?? 10) * 1000
-                        ).toISOString();
-                      seekTo(new Date(endIso).getTime());
+                      const endMs = selectedEvent.ended_at
+                        ? new Date(selectedEvent.ended_at).getTime()
+                        : new Date(selectedEvent.started_at).getTime()
+                            + (selectedEvent.duration_secs ?? 10) * 1000;
+                      seekTo(playheadMs ?? endMs);
                       return;
                     }
                     handleEnded();
