@@ -1010,16 +1010,27 @@ pub(super) async fn handle_slash_command(state: &Arc<AppState>, cmd: &str, token
 /// — No raw data leakage (no clip IDs, timestamps, scores, camera names)
 pub(super) async fn build_daily_digest(state: &Arc<AppState>) -> String {
     // Fetch events with their risk levels from the last 24 hours
-    let rows: Vec<(String, f32, Option<f64>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+    type DigestRow = (String, f32, Option<f64>, Option<String>, Option<String>, Option<String>);
+    let rows: Result<Vec<DigestRow>, _> = sqlx::query_as(
         "SELECT me.started_at, me.peak_score, me.duration_secs, me.ai_summary, me.detections, aa.risk_level \
          FROM motion_events me \
          LEFT JOIN agent_alerts aa ON aa.event_id = me.id \
          WHERE me.started_at > strftime('%Y-%m-%dT%H:%M:%S','now','-24 hours') \
          ORDER BY me.started_at DESC"
-    ).fetch_all(&state.db).await.unwrap_or_default();
+    ).fetch_all(&state.db).await;
+    let date_str = Local::now().format("%b %d").to_string();
+    // A failed read used to become an empty list and then "All clear ✅" — the
+    // one thing a security digest must never say when it couldn't look.
+    let rows = match rows {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "daily digest: could not read events");
+            return format!("📊 Daily Summary — {date_str}\n\n⚠️ Couldn't read the event archive, \
+                            so this summary can't say whether anything happened. Open Anivar to check.");
+        }
+    };
 
     let total = rows.len();
-    let date_str = Local::now().format("%b %d").to_string();
 
     if total == 0 {
         return format!("📊 Daily Summary — {}\n\nAll clear — no events in the past 24 hours. ✅", date_str);
