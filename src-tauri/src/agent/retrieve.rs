@@ -231,10 +231,10 @@ pub(super) fn where_sql(q: &Query) -> (String, Vec<String>) {
             "date(started_at,'localtime') = date('now','-1 day','localtime')"),
         // Same clause `explore_events` has always used for "last night".
         When::LastNight => sql.push_str(
-            "started_at > datetime('now','-12 hours') \
+            "started_at > strftime('%Y-%m-%dT%H:%M:%S','now','-12 hours') \
              AND cast(strftime('%H', started_at,'localtime') as int) >= 20"),
         When::Hours(n)  => {
-            sql.push_str("started_at > datetime('now', ?)");
+            sql.push_str("started_at > strftime('%Y-%m-%dT%H:%M:%S','now', ?)");
             binds.push(format!("-{n} hours"));
         }
         When::Day(day)  => {
@@ -1213,7 +1213,7 @@ async fn person_evidence(
     // it is what lets a person answer attach the actual clips.
     let rows: Vec<(String, i64, Option<String>)> = sqlx::query_as(
         "SELECT seen_at, camera_id, event_id FROM face_sightings
-          WHERE person_name = ? COLLATE NOCASE AND seen_at > datetime('now','-30 days')
+          WHERE person_name = ? COLLATE NOCASE AND seen_at > strftime('%Y-%m-%dT%H:%M:%S','now','-30 days')
           ORDER BY seen_at DESC LIMIT 500"
     ).bind(who).fetch_all(db).await.unwrap_or_default();
 
@@ -1253,12 +1253,12 @@ async fn person_evidence(
     // and a suspiciously round one. Observed live on "find ranjith".
     let sightings: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM face_sightings
-          WHERE person_name = ? COLLATE NOCASE AND seen_at > datetime('now','-30 days')")
+          WHERE person_name = ? COLLATE NOCASE AND seen_at > strftime('%Y-%m-%dT%H:%M:%S','now','-30 days')")
         .bind(who).fetch_one(db).await.unwrap_or(rows.len() as i64);
     // Days are counted the same way, or "500 across 3 days" understates it too.
     let day_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(DISTINCT date(seen_at,'localtime')) FROM face_sightings
-          WHERE person_name = ? COLLATE NOCASE AND seen_at > datetime('now','-30 days')")
+          WHERE person_name = ? COLLATE NOCASE AND seen_at > strftime('%Y-%m-%dT%H:%M:%S','now','-30 days')")
         .bind(who).fetch_one(db).await.unwrap_or(days.len() as i64);
 
     Evidence {
@@ -2105,7 +2105,7 @@ async fn recurring_in(db: &sqlx::SqlitePool, q: &Query) -> Vec<String> {
                 "SELECT COUNT(*), COUNT(DISTINCT date(started_at,'localtime'))
                    FROM motion_events
                   WHERE {col} = ? COLLATE NOCASE
-                    AND started_at > datetime('now','-7 days')");
+                    AND started_at > strftime('%Y-%m-%dT%H:%M:%S','now','-7 days')");
             let row: Option<(i64, i64)> = sqlx::query_as(&sql)
                 .bind(&name).fetch_optional(db).await.ok().flatten();
             let Some((seen, days)) = row else { continue };
@@ -2803,7 +2803,7 @@ mod tests {
         crate::db::init_db(&pool).await.unwrap();
         for (id, cat) in [("p", Some("person")), ("v", Some("vehicle")), ("bare", None)] {
             sqlx::query("INSERT INTO motion_events(id, started_at, event_category)
-                         VALUES(?, datetime('now'), ?)")
+                         VALUES(?, strftime('%Y-%m-%dT%H:%M:%f+00:00','now'), ?)")
                 .bind(id).bind(cat).execute(&pool).await.unwrap();
         }
         let mut q = Query::new(Kind::Events, When::Today);
@@ -2933,6 +2933,28 @@ mod tests {
         assert!(row_budget(&s) >= 12);
     }
 
+    /// Rows store RFC 3339 (`2026-09-28T10:01:33.123+00:00`), but SQLite's
+    /// `datetime('now', …)` writes a SPACE between date and time. Comparing the
+    /// two as text put every event from earlier the same UTC day inside "the last
+    /// hour", because 'T' sorts after ' '. Test rows must be written the way
+    /// production writes them, or the bug hides (it did, in the tests below).
+    #[tokio::test]
+    async fn the_last_hour_means_the_last_hour() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::db::init_db(&pool).await.unwrap();
+        for (id, ago) in [("recent", "-10 minutes"), ("earlier", "-3 hours")] {
+            sqlx::query("INSERT INTO motion_events(id, started_at)
+                         VALUES(?, strftime('%Y-%m-%dT%H:%M:%f+00:00','now', ?))")
+                .bind(id).bind(ago).execute(&pool).await.unwrap();
+        }
+        let (wh, binds) = where_sql(&Query::new(Kind::Events, When::Hours(1)));
+        let sql = format!("SELECT id FROM motion_events WHERE {wh}");
+        let mut q = sqlx::query_scalar::<_, String>(&sql);
+        for b in &binds { q = q.bind(b); }
+        assert_eq!(q.fetch_all(&pool).await.unwrap(), vec!["recent".to_string()],
+                   "only the event inside the hour: {sql}");
+    }
+
     /// "The third time that van has been here" is a count over a WIDER window
     /// than the question asked about, and it must come from SQL — a model
     /// tallying rows returns a confident wrong number.
@@ -2949,7 +2971,7 @@ mod tests {
             ("e", "-10 minutes", "ZZ99ZZZ"),
         ] {
             sqlx::query("INSERT INTO motion_events(id, started_at, recognized_plate, event_category)
-                         VALUES(?, datetime('now', ?), ?, 'vehicle')")
+                         VALUES(?, strftime('%Y-%m-%dT%H:%M:%f+00:00','now', ?), ?, 'vehicle')")
                 .bind(id).bind(at).bind(plate).execute(&pool).await.unwrap();
         }
 
@@ -2995,7 +3017,7 @@ mod tests {
         crate::db::init_db(&pool).await.unwrap();
         for (id, who) in [("a", "Alex"), ("b", "Alex"), ("c", "Sam")] {
             sqlx::query("INSERT INTO motion_events(id, started_at, sub_label, event_category)
-                         VALUES(?, datetime('now','-1 hour'), ?, 'person')")
+                         VALUES(?, strftime('%Y-%m-%dT%H:%M:%f+00:00','now','-1 hour'), ?, 'person')")
                 .bind(id).bind(who).execute(&pool).await.unwrap();
         }
         let mut q = Query::new(Kind::Events, When::Hours(24));
@@ -3015,7 +3037,7 @@ mod tests {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         crate::db::init_db(&pool).await.unwrap();
         sqlx::query("INSERT INTO motion_events(id, started_at, sub_label, event_category)
-                     VALUES('a', datetime('now','-1 hour'), 'Sam', 'person')")
+                     VALUES('a', strftime('%Y-%m-%dT%H:%M:%f+00:00','now','-1 hour'), 'Sam', 'person')")
             .execute(&pool).await.unwrap();
 
         // Everything the query matches is already in `seen`, so a second pass
@@ -3269,7 +3291,7 @@ mod tests {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         crate::db::init_db(&pool).await.unwrap();
         for id in ["keep", "gone", "plain"] {
-            sqlx::query("INSERT INTO motion_events(id, started_at) VALUES(?, datetime('now'))")
+            sqlx::query("INSERT INTO motion_events(id, started_at) VALUES(?, strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))")
                 .bind(id).execute(&pool).await.unwrap();
             if id != "plain" {
                 sqlx::query("INSERT INTO event_bookmarks(event_id, cam_id, created_at)
@@ -3368,7 +3390,7 @@ mod tests {
             .fetch_all(&pool).await.expect("camera_names");
         sqlx::query(
             "SELECT seen_at, camera_id FROM face_sightings
-              WHERE person_name = ? COLLATE NOCASE AND seen_at > datetime('now','-30 days')
+              WHERE person_name = ? COLLATE NOCASE AND seen_at > strftime('%Y-%m-%dT%H:%M:%S','now','-30 days')
               ORDER BY seen_at DESC LIMIT 500")
             .bind("Ranjith").fetch_all(&pool).await.expect("person_evidence");
     }

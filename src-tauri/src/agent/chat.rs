@@ -449,7 +449,7 @@ pub(super) async fn build_situation_ctx(db: &sqlx::SqlitePool, last_chat: Option
     // Per-camera activity, last 6 hours.
     let cams: Vec<(Option<i64>, i64, String)> = sqlx::query_as(
         "SELECT cam_id, COUNT(*), MAX(started_at) FROM motion_events
-          WHERE started_at > datetime('now','-6 hours') GROUP BY cam_id"
+          WHERE started_at > strftime('%Y-%m-%dT%H:%M:%S','now','-6 hours') GROUP BY cam_id"
     ).fetch_all(db).await.unwrap_or_default();
     if cams.is_empty() {
         out.push_str("Last 6h: no activity on any camera.\n");
@@ -599,7 +599,7 @@ pub async fn chat_with_agent(
     let recent_events: Vec<(String, String, f32, Option<String>)> = sqlx::query_as(
         "SELECT id, started_at, peak_score, ai_summary
          FROM motion_events
-         WHERE started_at > datetime('now','-3 days')
+         WHERE started_at > strftime('%Y-%m-%dT%H:%M:%S','now','-3 days')
          ORDER BY started_at DESC LIMIT 10"
     ).fetch_all(&state.db).await.unwrap_or_default();
 

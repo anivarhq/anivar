@@ -364,7 +364,7 @@ pub async fn execute(state: &Arc<AppState>, name: &str, args: &Value) -> Option<
             let n = args.get("count").and_then(|v| v.as_i64()).unwrap_or(5).clamp(1, 20);
             let rows = sqlx::query_as(
                 "SELECT id, started_at, peak_score, ai_summary FROM motion_events
-                 WHERE started_at > datetime('now','-7 days') ORDER BY started_at DESC LIMIT ?"
+                 WHERE started_at > strftime('%Y-%m-%dT%H:%M:%S','now','-7 days') ORDER BY started_at DESC LIMIT ?"
             ).bind(n).fetch_all(&state.db).await;
             let rows: Vec<(String, String, f32, Option<String>)> =
                 match rows { Ok(r) => r, Err(e) => return db_unreadable("recent events", e) };
@@ -450,7 +450,7 @@ pub async fn execute(state: &Arc<AppState>, name: &str, args: &Value) -> Option<
             for (name, role, last) in &people {
                 let n7: i64 = sqlx::query_scalar(
                     "SELECT COUNT(*) FROM face_sightings
-                     WHERE person_name=? AND seen_at > datetime('now','-7 days')")
+                     WHERE person_name=? AND seen_at > strftime('%Y-%m-%dT%H:%M:%S','now','-7 days')")
                     .bind(name).fetch_one(&state.db).await.unwrap_or(0);
                 out.push_str(&format!("• {name} ({role}) — {} sightings this week, last seen {}\n",
                     n7, last.as_deref().map(fmt_when).unwrap_or_else(|| "never".into())));
@@ -470,7 +470,7 @@ pub async fn execute(state: &Arc<AppState>, name: &str, args: &Value) -> Option<
             if name.is_empty() { return Some("Which person? Give me their enrolled name.".into()); }
             let rows = sqlx::query_as(
                 "SELECT seen_at, camera_id FROM face_sightings
-                 WHERE person_name=? COLLATE NOCASE AND seen_at > datetime('now','-30 days')
+                 WHERE person_name=? COLLATE NOCASE AND seen_at > strftime('%Y-%m-%dT%H:%M:%S','now','-30 days')
                  ORDER BY seen_at DESC LIMIT 500")
                 .bind(name).fetch_all(&state.db).await;
             let rows: Vec<(String, i64)> =
@@ -504,7 +504,7 @@ pub async fn execute(state: &Arc<AppState>, name: &str, args: &Value) -> Option<
             let rows = sqlx::query_as(
                 "SELECT recognized_plate, COUNT(*), MAX(started_at) FROM motion_events
                  WHERE recognized_plate IS NOT NULL AND recognized_plate <> ''
-                   AND started_at > datetime('now','-30 days')
+                   AND started_at > strftime('%Y-%m-%dT%H:%M:%S','now','-30 days')
                  GROUP BY recognized_plate ORDER BY COUNT(*) DESC LIMIT 20")
                 .fetch_all(&state.db).await;
             let rows: Vec<(String, i64, String)> =
@@ -531,7 +531,7 @@ pub async fn execute(state: &Arc<AppState>, name: &str, args: &Value) -> Option<
         "audio_activity" => {
             let rows = sqlx::query_as(
                 "SELECT dominant_label, COUNT(*), MAX(started_at) FROM motion_events
-                 WHERE event_category='audio' AND started_at > datetime('now','-7 days')
+                 WHERE event_category='audio' AND started_at > strftime('%Y-%m-%dT%H:%M:%S','now','-7 days')
                  GROUP BY dominant_label ORDER BY COUNT(*) DESC LIMIT 15")
                 .fetch_all(&state.db).await;
             let rows: Vec<(Option<String>, i64, String)> =

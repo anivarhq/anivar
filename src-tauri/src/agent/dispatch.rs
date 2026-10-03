@@ -870,7 +870,7 @@ pub(super) async fn handle_slash_command(state: &Arc<AppState>, cmd: &str, token
             let settings = state.settings.read().await;
             let agent_ok = settings.agent_enabled;
             let event_count: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM motion_events WHERE started_at > datetime('now','-24 hours')"
+                "SELECT COUNT(*) FROM motion_events WHERE started_at > strftime('%Y-%m-%dT%H:%M:%S','now','-24 hours')"
             ).fetch_one(&state.db).await.unwrap_or(0);
             let guardian = if agent_ok { "On" } else { "Off" };
             let alerts = alert_level_label(&settings.alert_min_risk);
@@ -1014,7 +1014,7 @@ pub(super) async fn build_daily_digest(state: &Arc<AppState>) -> String {
         "SELECT me.started_at, me.peak_score, me.duration_secs, me.ai_summary, me.detections, aa.risk_level \
          FROM motion_events me \
          LEFT JOIN agent_alerts aa ON aa.event_id = me.id \
-         WHERE me.started_at > datetime('now','-24 hours') \
+         WHERE me.started_at > strftime('%Y-%m-%dT%H:%M:%S','now','-24 hours') \
          ORDER BY me.started_at DESC"
     ).fetch_all(&state.db).await.unwrap_or_default();
 
@@ -1630,7 +1630,7 @@ async fn send_person_detail(state: &Arc<AppState>, token: &str, chat_id: &str, p
     // 30-day pattern from face_sightings (same aggregation the app's roster uses).
     let sights: Vec<(String, i64)> = sqlx::query_as(
         "SELECT seen_at, camera_id FROM face_sightings
-          WHERE person_name=? AND seen_at > datetime('now','-30 days')
+          WHERE person_name=? AND seen_at > strftime('%Y-%m-%dT%H:%M:%S','now','-30 days')
           ORDER BY seen_at DESC LIMIT 5000"
     ).bind(&name).fetch_all(&state.db).await.unwrap_or_default();
     let n = sights.len();
@@ -1726,7 +1726,7 @@ async fn build_vehicles_menu(state: &Arc<AppState>, page: u32) -> (String, serde
     let rows_db: Vec<(String, i64, String)> = sqlx::query_as(
         "SELECT recognized_plate, COUNT(*), MAX(started_at) FROM motion_events
           WHERE recognized_plate IS NOT NULL AND recognized_plate <> ''
-            AND started_at > datetime('now','-30 days')
+            AND started_at > strftime('%Y-%m-%dT%H:%M:%S','now','-30 days')
           GROUP BY recognized_plate ORDER BY 2 DESC, 3 DESC"
     ).fetch_all(&state.db).await.unwrap_or_default();
     let known = state.settings.read().await.known_plates.clone();
@@ -1831,7 +1831,7 @@ async fn build_sounds_menu(state: &Arc<AppState>, page: u32) -> (String, serde_j
     // 7-day headline: which sounds, how often.
     let tops: Vec<(String, i64)> = sqlx::query_as(
         "SELECT COALESCE(NULLIF(dominant_label,''),'sound'), COUNT(*) FROM motion_events
-          WHERE event_category='audio' AND started_at > datetime('now','-7 days')
+          WHERE event_category='audio' AND started_at > strftime('%Y-%m-%dT%H:%M:%S','now','-7 days')
           GROUP BY 1 ORDER BY 2 DESC LIMIT 3"
     ).fetch_all(&state.db).await.unwrap_or_default();
     let headline = if tops.is_empty() { String::new() } else {
