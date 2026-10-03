@@ -184,7 +184,7 @@ mod native_cam_cmds;
 pub use native_cam_cmds::{get_active_cameras, get_camera_telemetry, get_camera_inventory, report_browser_cameras, list_native_cameras, start_native_camera, stop_native_camera, stop_all_native_cameras};
 
 mod events_cmds;
-pub use events_cmds::{get_storage_info, get_settings, save_settings, get_motion_events, keep_alive_event, store_detections, store_ai_summary};
+pub use events_cmds::{get_storage_info, get_settings, unreadable_secrets, save_settings, get_motion_events, keep_alive_event, store_detections, store_ai_summary};
 
 mod agent_cmds;
 pub use agent_cmds::{get_agent_alerts, delete_agent_alert, clear_all_agent_alerts, set_alert_feedback, get_reflection_prompt, report_behavior_events, get_agent_memory, set_agent_memory, list_agent_memory, delete_agent_memory, get_agent_status, analyze_snapshot, chat_app, get_chat_log, clear_chat_log, trigger_agent_now, query_events, explore_events};
@@ -509,6 +509,7 @@ pub fn run() {
             update_check,
             update_install,
             get_settings,
+            unreadable_secrets,
             save_settings,
             get_motion_events,
             delete_motion_event,

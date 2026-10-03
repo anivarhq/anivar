@@ -70,6 +70,13 @@ pub async fn get_storage_info(state: State<'_, Arc<AppState>>) -> Result<Storage
     })
 }
 
+/// Saved secrets that couldn't be decrypted this run (the key file changed),
+/// by name, so Settings can ask for them again instead of failing silently.
+#[tauri::command]
+pub fn unreadable_secrets() -> Vec<String> {
+    crate::crypto::unreadable_secrets().into_iter().map(String::from).collect()
+}
+
 #[tauri::command]
 pub async fn get_settings(state: State<'_, Arc<AppState>>) -> Result<Settings, String> {
     // Return in-memory settings — always decrypted (encryption only happens at DB write)
