@@ -294,10 +294,14 @@ export function ReviewHistoryView({ camId, camName, dayStr, initialEventId, use1
   const handleSkip = (deltaSec: number) => skip(deltaSec, eventBounds);
 
   const handleEnded = () => {
-    // An event clip that runs out rolls into the continuous recording at its end,
-    // so "play this event" flows into "keep watching" without a click.
+    // An event clip that runs out rolls into the continuous recording, so "play
+    // this event" flows into "keep watching" without a click. It continues from
+    // the clip's own last frame, not `ended_at`: the cached clip is capped at 2
+    // minutes (clip_export.rs MAX_SENT_CLIP_SECS) and runs past the event by the
+    // post-buffer, so seeking to `ended_at` skipped the middle of long events
+    // and replayed the tail of short ones.
     if (clipSource.kind === "event" && eventBounds) {
-      seekTo(eventBounds.endMs);
+      seekTo(playheadMs ?? eventBounds.endMs);
       return;
     }
     rollForward();
