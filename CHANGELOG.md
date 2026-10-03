@@ -7,6 +7,51 @@ and this project (will) adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-10-04
+
+The first release you can install from inside the app: on 0.1.6, open
+**Settings → App Updates → Install and restart**.
+
+### Added
+
+- **Home Assistant and MQTT.** Point Anivar at an MQTT broker on your
+  network (for example Home Assistant's Mosquitto add-on), and each camera
+  shows up in Home Assistant by itself, with:
+  - a motion sensor
+  - an online sensor
+  - the last thing it detected
+
+  Events are published as they start and end. Set it up in **Settings →
+  Home Assistant / MQTT**; **Test connection** checks the broker first. No
+  images or names of recognised people are sent.
+- **Turn remote access off, and see what you've shared.** **Settings →
+  Remote access** now has **Turn off**, lists the share links that are live,
+  and can **revoke all links** at once.
+- **The first-run setup installs a detector.** New installs used to finish
+  setup with nothing recognising objects. The last step now installs the
+  small YOLO26 model in one click, showing its licence. Live view also says
+  when no detector is installed.
+
+### Fixed
+
+- **"Anything in the last hour?" means the last hour.** The assistant,
+  daily summary and Telegram counts were including every event from earlier
+  the same day.
+- **The assistant never says "All clear" when it couldn't check.** If the
+  archive can't be read, it now says so. Asking about one licence plate also
+  finds plates seen only rarely.
+- **Long events play all the way through.** Events over two minutes stopped
+  at two minutes, and short ones replayed their last seconds.
+- **Exports that start while the camera was off begin where footage
+  resumes**, instead of skipping into the recording.
+- **Exports.** "Last 24 hours" (which always failed) is now "Last 6 hours",
+  the longest single export. Exports also write straight to disk instead of
+  holding the whole video in memory.
+- **Your saved keys and tokens are safer.** If the encryption key file
+  can't be read, Anivar now moves it aside instead of overwriting it, never
+  sends an encrypted value as if it were the key, and Settings names any
+  secret you need to re-enter.
+
 ## [0.1.6] - 2026-09-29
 
 ### Added
