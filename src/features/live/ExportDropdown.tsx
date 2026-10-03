@@ -29,7 +29,9 @@ const PRESETS: Array<{ label: string; secs: number }> = [
   { label: "Last 1 minute",  secs: 60 },
   { label: "Last 10 minutes", secs: 600 },
   { label: "Last hour",      secs: 3600 },
-  { label: "Last 24 hours",  secs: 86_400 },
+  // The server caps one export at 6 hours (nvr_stream.rs EXPORT_MAX_SECS); a
+  // "Last 24 hours" preset here always failed with HTTP 400.
+  { label: "Last 6 hours",   secs: 6 * 3600 },
 ];
 
 export function ExportDropdown({ camId, cameraName, selectedEvent, viewportRange }: Props) {

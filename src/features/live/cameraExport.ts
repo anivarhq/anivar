@@ -3,7 +3,7 @@
 // hit the actual filesystem path the user picks, not the browser sandbox.
 
 import { save } from "@tauri-apps/plugin-dialog";
-import { writeFile } from "@tauri-apps/plugin-fs";
+import { open, writeFile } from "@tauri-apps/plugin-fs";
 
 import type { MotionEvent } from "../../types";
 
@@ -43,12 +43,42 @@ export async function downloadVideo(
     });
     if (!dest) return;
     const resp = await fetch(srcUrl);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const ab = await resp.arrayBuffer();
-    await writeFile(dest, new Uint8Array(ab));
+    if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
+    await streamToFile(resp.body, dest);
     toast(`Saved ${suggested}`, "success");
   } catch (e: any) {
     toast(`Export failed: ${e?.message ?? String(e)}`, "error");
+  }
+}
+
+/** Write a download to disk as it arrives. This used to `arrayBuffer()` the
+ *  whole response first, so an hour of footage sat in the WebView's memory —
+ *  gigabytes — before a byte reached the file. Chunks are gathered to ~4 MB per
+ *  write so a long export isn't thousands of tiny IPC calls. */
+async function streamToFile(body: ReadableStream<Uint8Array>, dest: string): Promise<void> {
+  const file = await open(dest, { write: true, create: true, truncate: true });
+  const BATCH = 4 * 1024 * 1024;
+  let parts: Uint8Array[] = [];
+  let size = 0;
+  const flush = async () => {
+    if (size === 0) return;
+    const buf = new Uint8Array(size);
+    let off = 0;
+    for (const p of parts) { buf.set(p, off); off += p.length; }
+    await file.write(buf);
+    parts = []; size = 0;
+  };
+  try {
+    const reader = body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value); size += value.length;
+      if (size >= BATCH) await flush();
+    }
+    await flush();
+  } finally {
+    await file.close();
   }
 }
 
