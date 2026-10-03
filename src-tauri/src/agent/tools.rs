@@ -354,6 +354,22 @@ fn db_unreadable(what: &str, e: sqlx::Error) -> Option<String> {
          Tell the user you could not check — do NOT report this as nothing found."))
 }
 
+/// Plates seen in the last 30 days, most frequent first, optionally narrowed to
+/// those containing `filter` (already upper-cased). Filtering happens in SQL,
+/// before the LIMIT, so a rarely seen plate is still found.
+async fn vehicle_rows(db: &sqlx::SqlitePool, filter: &str)
+    -> Result<Vec<(String, i64, String)>, sqlx::Error>
+{
+    sqlx::query_as(
+        "SELECT recognized_plate, COUNT(*), MAX(started_at) FROM motion_events
+         WHERE recognized_plate IS NOT NULL AND recognized_plate <> ''
+           AND started_at > strftime('%Y-%m-%dT%H:%M:%S','now','-30 days')
+           AND (?1 = '' OR instr(upper(recognized_plate), ?1) > 0)
+         GROUP BY recognized_plate ORDER BY COUNT(*) DESC LIMIT 20")
+        .bind(filter)
+        .fetch_all(db).await
+}
+
 pub async fn execute(state: &Arc<AppState>, name: &str, args: &Value) -> Option<String> {
     let one_line = |raw: &str, max: usize| {
         let t = super::memory::extract_summary_text(raw);
@@ -401,12 +417,15 @@ pub async fn execute(state: &Arc<AppState>, name: &str, args: &Value) -> Option<
         }
         "get_event_analysis" => {
             let id = args.get("event_id").and_then(|v| v.as_str()).unwrap_or("");
-            let sum: Option<Option<String>> = sqlx::query_scalar("SELECT ai_summary FROM motion_events WHERE id=?")
-                .bind(id).fetch_optional(&state.db).await.ok();
-            Some(match sum {
-                Some(s) => one_line(s.as_deref().unwrap_or(""), 400),
-                None => "No such event.".into(),
-            })
+            // `.ok()` used to fold a failed read into "No such event."
+            let sum: Result<Option<Option<String>>, _> =
+                sqlx::query_scalar("SELECT ai_summary FROM motion_events WHERE id=?")
+                    .bind(id).fetch_optional(&state.db).await;
+            match sum {
+                Ok(Some(s)) => Some(one_line(s.as_deref().unwrap_or(""), 400)),
+                Ok(None) => Some("No such event.".into()),
+                Err(e) => db_unreadable("event", e),
+            }
         }
         "daily_summary" => Some(super::dispatch::build_daily_digest(state).await),
         "recall_memory" => {
@@ -440,12 +459,16 @@ pub async fn execute(state: &Arc<AppState>, name: &str, args: &Value) -> Option<
         "get_status" => Some(super::chat::build_situation_ctx(&state.db, None).await),
         // ── Entity skills — live DB reads over what the edge models have learned ──
         "people_overview" => {
-            let people: Vec<(String, String, Option<String>)> = sqlx::query_as(
+            // A failed read used to become an empty list, reported as
+            // "No people enrolled yet." — a confident falsehood.
+            let people: Vec<(String, String, Option<String>)> = match sqlx::query_as(
                 "SELECT name, role, last_seen_at FROM known_persons
                  ORDER BY last_seen_at IS NULL, last_seen_at DESC")
                 .fetch_all(&state.db).await
-                .map_err(|e| tracing::error!(error = %e, "guardian tool: people_overview failed"))
-                .unwrap_or_default();
+            {
+                Ok(p) => p,
+                Err(e) => return db_unreadable("enrolled people", e),
+            };
             let mut out = String::new();
             for (name, role, last) in &people {
                 let n7: i64 = sqlx::query_scalar(
@@ -501,16 +524,18 @@ pub async fn execute(state: &Arc<AppState>, name: &str, args: &Value) -> Option<
         }
         "vehicle_activity" => {
             let filter = args.get("plate").and_then(|v| v.as_str()).unwrap_or("").trim().to_uppercase();
-            let rows = sqlx::query_as(
-                "SELECT recognized_plate, COUNT(*), MAX(started_at) FROM motion_events
-                 WHERE recognized_plate IS NOT NULL AND recognized_plate <> ''
-                   AND started_at > strftime('%Y-%m-%dT%H:%M:%S','now','-30 days')
-                 GROUP BY recognized_plate ORDER BY COUNT(*) DESC LIMIT 20")
-                .fetch_all(&state.db).await;
+            // The plate filter is part of the query. It used to run AFTER
+            // `LIMIT 20`, so asking about any plate outside the 20 most frequent
+            // came back as "no vehicles".
+            let rows = vehicle_rows(&state.db, &filter).await;
             let rows: Vec<(String, i64, String)> =
                 match rows { Ok(r) => r, Err(e) => return db_unreadable("licence plate", e) };
             if rows.is_empty() {
-                return Some("No licence plates recognised in the last 30 days (the ALPR skill reads plates when vehicles are close enough).".into());
+                return Some(if filter.is_empty() {
+                    "No licence plates recognised in the last 30 days (the ALPR skill reads plates when vehicles are close enough).".into()
+                } else {
+                    format!("No plate matching {filter} in the last 30 days.")
+                });
             }
             let known = state.settings.read().await.known_plates.clone();
             let name_of = |plate: &str| -> Option<String> {
@@ -522,7 +547,6 @@ pub async fn execute(state: &Arc<AppState>, name: &str, args: &Value) -> Option<
             };
             let mut out = String::from("Vehicles in the last 30 days:\n");
             for (plate, n, last) in rows {
-                if !filter.is_empty() && !plate.to_uppercase().contains(&filter) { continue; }
                 let label = name_of(&plate).map(|n| format!(" ({n})")).unwrap_or_default();
                 out.push_str(&format!("• {plate}{label} — {n}×, last seen {}\n", fmt_when(&last)));
             }
@@ -573,6 +597,39 @@ pub fn tag_for_call(name: &str, args: &Value) -> Option<String> {
 #[cfg(test)]
 mod tag_tests {
     use super::*;
+
+    /// A plate outside the 20 most frequent used to come back as "no vehicles":
+    /// the filter ran after `LIMIT 20`.
+    #[tokio::test]
+    async fn a_rare_plate_is_found_past_the_top_twenty() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::db::init_db(&pool).await.unwrap();
+        for i in 0..25 {
+            // Plate i is seen (25 - i) times, so "RARE24" is seen once and ranks last.
+            for n in 0..(25 - i) {
+                sqlx::query("INSERT INTO motion_events(id, started_at, recognized_plate)
+                             VALUES(?, strftime('%Y-%m-%dT%H:%M:%f+00:00','now','-1 hours'), ?)")
+                    .bind(format!("e{i}-{n}")).bind(format!("RARE{i}"))
+                    .execute(&pool).await.unwrap();
+            }
+        }
+        let all = vehicle_rows(&pool, "").await.unwrap();
+        assert_eq!(all.len(), 20, "unfiltered is still capped at 20");
+        assert!(!all.iter().any(|r| r.0 == "RARE24"));
+        let one = vehicle_rows(&pool, "RARE24").await.unwrap();
+        assert_eq!(one.len(), 1, "the rare plate is found: {one:?}");
+        assert_eq!(one[0].1, 1);
+    }
+
+    /// A database that can't be read must say so, never "nothing found".
+    #[tokio::test]
+    async fn an_unreadable_archive_is_reported_not_read_as_empty() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        // Deliberately not initialised: motion_events doesn't exist.
+        let e = vehicle_rows(&pool, "").await.unwrap_err();
+        let msg = db_unreadable("licence plate", e).unwrap();
+        assert!(msg.starts_with("ERROR"), "{msg}");
+    }
 
     fn names(text: &str) -> Vec<&'static str> {
         parse_tags(text).into_iter().map(|c| c.tool.name).collect()
