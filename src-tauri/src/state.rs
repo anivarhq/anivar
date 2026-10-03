@@ -77,6 +77,8 @@ fn default_attach_snapshot_to_alerts()    -> bool { true }
 fn default_attach_clip_to_alerts()        -> bool { true }
 fn default_live_share_default_minutes()   -> u32  { 30 }
 fn default_tunnel_auto_stop()             -> bool { true }
+fn default_mqtt_port()                    -> u16  { 1883 }
+fn default_mqtt_topic_prefix()            -> String { "anivar".to_string() }
 // ── v7 richness knobs ────────────────────────────────────────────────────────
 fn default_strobe_profile()         -> String { "balanced".to_string() } // "conservative" | "balanced" | "aggressive"
 fn default_face_quality_floor()     -> f32    { 0.10 }                   // Laplacian blur floor on the ÷300 quality scale (was 0.20 on ÷1500 — too high, dropped real faces)
@@ -207,6 +209,19 @@ pub struct Settings {
     /// restart never cuts one off. Default off: the user opts in.
     #[serde(default)]
     pub auto_update_install: bool,
+    /// MQTT broker for the Home Assistant / home-automation bridge (mqtt.rs).
+    /// Empty = off. Plain TCP, for a broker on your own network.
+    #[serde(default)]
+    pub mqtt_host: String,
+    #[serde(default = "default_mqtt_port")]
+    pub mqtt_port: u16,
+    #[serde(default)]
+    pub mqtt_username: String,
+    /// Encrypted at rest like the other secrets (crypto.rs).
+    #[serde(default)]
+    pub mqtt_password: String,
+    #[serde(default = "default_mqtt_topic_prefix")]
+    pub mqtt_topic_prefix: String,
     /// Remote-access provider for live/clip share links. Tailscale Funnel is now
     /// the only implementation (Cloudflare was removed 2026-07-28 — trycloudflare
     /// quick tunnels are testing-only under its ToS). The field is retained so
@@ -507,6 +522,11 @@ impl Default for Settings {
             relaunch_after_crash: false,
             auto_update_check:   true,
             auto_update_install: false,
+            mqtt_host:           String::new(),
+            mqtt_port:           default_mqtt_port(),
+            mqtt_username:       String::new(),
+            mqtt_password:       String::new(),
+            mqtt_topic_prefix:   default_mqtt_topic_prefix(),
             depth_model: default_depth_model(),
             remote_provider: default_remote_provider(),
             camera_masks: String::new(),

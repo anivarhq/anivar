@@ -111,12 +111,13 @@ fn label(field: &str) -> &'static str {
         "xai_api_key"           => "xAI API key",
         "gemini_api_key"        => "Gemini API key",
         "openai_compatible_key" => "OpenAI-compatible API key",
+        "mqtt_password"         => "MQTT broker password",
         _                       => "login password",
     }
 }
 
 /// Every secret field on `Settings`, by name, so encrypt and decrypt can't drift.
-fn secret_fields(s: &mut Settings) -> [(&'static str, &mut String); 8] {
+fn secret_fields(s: &mut Settings) -> [(&'static str, &mut String); 9] {
     [
         ("telegram_bot_token",    &mut s.telegram_bot_token),
         ("openai_api_key",        &mut s.openai_api_key),
@@ -126,6 +127,7 @@ fn secret_fields(s: &mut Settings) -> [(&'static str, &mut String); 8] {
         ("gemini_api_key",        &mut s.gemini_api_key),
         ("openai_compatible_key", &mut s.openai_compatible_key),
         ("login_password_hash",   &mut s.login_password_hash),
+        ("mqtt_password",         &mut s.mqtt_password),
     ]
 }
 
@@ -173,6 +175,16 @@ mod tests {
         assert!(ct.starts_with("enc:"));
         assert_eq!(try_decrypt(&key, &ct).unwrap(), "sk-secret");
         assert_eq!(encrypt_secret(&key, &ct), ct, "encrypting a ciphertext is a no-op");
+    }
+
+    #[test]
+    fn the_mqtt_broker_password_is_stored_encrypted() {
+        let key = [3u8; 32];
+        let mut s = Settings { mqtt_password: "broker-pass".into(), ..Settings::default() };
+        encrypt_settings_secrets(&key, &mut s);
+        assert!(s.mqtt_password.starts_with("enc:"), "{}", s.mqtt_password);
+        decrypt_settings_secrets(&key, &mut s);
+        assert_eq!(s.mqtt_password, "broker-pass");
     }
 
     #[test]

@@ -214,11 +214,13 @@ pub async fn run_camera_health_loop(state: Arc<AppState>) {
                 tracing::warn!("CAMERA OFFLINE cam{cam}: {summary}");
                 state.app_handle.emit("camera:health",
                     serde_json::json!({ "cam_id": cam, "online": false })).ok();
+                crate::mqtt::camera_online(cam, false);
                 crate::agent::dispatch_intelligence_alert(&state, "camera_offline", &summary, cam, None).await;
             } else if fresh && offline.remove(&cam) {
                 tracing::info!("CAMERA ONLINE cam{cam}: frames resumed");
                 state.app_handle.emit("camera:health",
                     serde_json::json!({ "cam_id": cam, "online": true })).ok();
+                crate::mqtt::camera_online(cam, true);
                 crate::agent::dispatch_intelligence_alert(&state, "camera_online", "Camera is back online", cam, None).await;
             }
         }

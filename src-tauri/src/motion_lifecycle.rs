@@ -185,6 +185,7 @@ pub async fn tick_motion_event(
                 sqlx::query("INSERT INTO motion_events(id,started_at,peak_score,thumbnail,clip_path,cam_id) VALUES(?,?,?,?,NULL,?)")
                     .bind(&id_for_insert).bind(&now).bind(ms).bind(&thumb).bind(cam_id as i64)
                     .execute(&st.db).await.ok();
+                crate::mqtt::event_started(cam_id, &id_for_insert, ms);
             });
 
             cs.motion_active = Some(id.clone());
@@ -265,6 +266,13 @@ pub async fn tick_motion_event(
                     // The motion_min_frames debounce should already prevent
                     // this, but if it ever slips through we don't want junk
                     // empty rows showing up in the events strip.
+                    // For the MQTT bridge: the dominant object first, then the rest.
+                    let mqtt_labels: Vec<String> = {
+                        let mut rest: Vec<String> = cs.classes_seen.iter()
+                            .filter(|c| Some(*c) != cs.last_dominant.as_ref()).cloned().collect();
+                        rest.sort();
+                        cs.last_dominant.iter().cloned().chain(rest).collect()
+                    };
                     let state_for_clip = state.clone();
                     let post_buffer = settings.record_post_buffer_secs;
                     tokio::spawn(async move {
@@ -287,6 +295,7 @@ pub async fn tick_motion_event(
                         sqlx::query("UPDATE motion_events SET ended_at=?, duration_secs=? WHERE id=?")
                             .bind(&now).bind(dur).bind(&id_for_spawn)
                             .execute(&db).await.ok();
+                        crate::mqtt::event_ended(cam_id, &id_for_spawn, dur, &mqtt_labels);
                         if let Some(dj) = det_json {
                             sqlx::query("UPDATE motion_events SET detections=? WHERE id=?")
                                 .bind(dj).bind(&id_for_spawn).execute(&db).await.ok();

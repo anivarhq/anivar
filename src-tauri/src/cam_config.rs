@@ -113,5 +113,9 @@ pub async fn set_camera_config(
     }
 
     state.app_handle.emit("cameras:updated", ()).ok();
+    // Home Assistant learns cameras from MQTT discovery, sent on connect:
+    // reconnect so an added, renamed or removed camera shows up there too.
+    let st = state.inner().clone();
+    tokio::spawn(async move { crate::mqtt::restart(&st).await; });
     Ok(())
 }

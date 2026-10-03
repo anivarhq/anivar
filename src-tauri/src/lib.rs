@@ -120,6 +120,8 @@ pub use share_cmds::{generate_share_link, revoke_all_shares, list_active_shares}
 
 mod update_cmds;
 pub use update_cmds::{update_check, update_install};
+mod mqtt;
+pub use mqtt::mqtt_test;
 
 mod inference_cmds;
 pub use inference_cmds::{stream_frame, process_frame, get_inference_status, get_camera_snapshot};
@@ -508,6 +510,7 @@ pub fn run() {
             probe_mjpeg_url,
             update_check,
             update_install,
+            mqtt_test,
             get_settings,
             unreadable_secrets,
             save_settings,

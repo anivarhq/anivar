@@ -807,6 +807,7 @@ export function SettingsPanel() {
             // scroll-spy pill stayed stuck on "24/7 video" the whole way past
             // them - the very invariant the comment above is about.
             { id: "s-remote",        label: "Remote"      },
+            { id: "s-mqtt",          label: "Home Assistant" },
             { id: "s-updates",       label: "Updates"     },
             { id: "s-storage",       label: "Storage"     },
             // ── Alerts & sharing ──
@@ -1195,6 +1196,47 @@ export function SettingsPanel() {
                 </button>
               </>
             )}
+          </div>
+        </div>
+
+        {/* ── Home Assistant / MQTT ──────────────────────────────────── */}
+        <div id="s-mqtt" className={styles.section}>
+          <div className={styles.sectionHeader}>
+            <span className={styles.sectionTitle}><Radio size={12} /> Home Assistant / MQTT</span>
+          </div>
+          <div style={{ padding: "8px 16px 4px", fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+            Publishes motion, events and camera status to an MQTT broker on your network (for example the
+            Mosquitto add-on). Home Assistant finds each camera by itself. Leave the host empty to turn this off.
+          </div>
+          <div style={{ padding: "4px 14px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+            <ChannelField label="Broker host" more="IP address or host name, e.g. 192.168.1.10 or homeassistant.local">
+              <input value={form.mqtt_host ?? ""} placeholder="192.168.1.10"
+                onChange={e => patch("mqtt_host", e.target.value)} style={inputStyle} />
+            </ChannelField>
+            <ChannelField label="Port">
+              <input type="number" min={1} max={65535} value={form.mqtt_port ?? 1883}
+                onChange={e => patch("mqtt_port", Number(e.target.value) || 1883)} style={{ ...inputStyle, maxWidth: 110 }} />
+            </ChannelField>
+            <ChannelField label="Username" more="Leave empty if the broker allows anonymous clients">
+              <input value={form.mqtt_username ?? ""} onChange={e => patch("mqtt_username", e.target.value)} style={inputStyle} />
+            </ChannelField>
+            <ChannelField label="Password" more="Stored encrypted">
+              <input type="password" value={form.mqtt_password ?? ""} onChange={e => patch("mqtt_password", e.target.value)} style={inputStyle} />
+            </ChannelField>
+            <ChannelField label="Topic prefix" more="Topics look like anivar/cam1/motion">
+              <input value={form.mqtt_topic_prefix ?? "anivar"} onChange={e => patch("mqtt_topic_prefix", e.target.value)}
+                style={{ ...inputStyle, maxWidth: 200 }} />
+            </ChannelField>
+            <button className={styles.ghostBtn} style={{ alignSelf: "flex-start", padding: "5px 14px", fontSize: 12 }}
+              disabled={!(form.mqtt_host ?? "").trim()}
+              onClick={async () => {
+                try {
+                  showToast(await api.mqttTest(form.mqtt_host ?? "", form.mqtt_port ?? 1883,
+                    form.mqtt_username ?? "", form.mqtt_password ?? ""), "success");
+                } catch (e: any) { showToast(String(e?.message ?? e), "error"); }
+              }}>
+              Test connection
+            </button>
           </div>
         </div>
 

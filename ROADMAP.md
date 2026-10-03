@@ -50,8 +50,9 @@ Good places to start if you'd rather work on the engine than the interface:
 
 ## Deliberately not planned
 
-- **More alert channels.** Home Assistant, MQTT, webhooks, ntfy, Discord and
-  Slack were all built once and removed. Telegram is the one channel, and it
-  gets the attention the others would split.
+- **More alert channels.** Telegram is the one alert channel, and it gets the
+  attention that webhooks, ntfy, Discord or Slack would split. (Home Assistant
+  is covered differently: the MQTT bridge publishes motion, events and camera
+  status for automations, rather than sending alerts.)
 - **An Anivar cloud or account.** Everything runs on your own computer. Remote
   viewing goes over your own Tailscale network.
