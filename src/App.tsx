@@ -241,6 +241,7 @@ export default function App() {
       {/* ── Main ── */}
       <main className={styles.main}>
         <div style={{ display: tab === "live"     ? "flex" : "none", flex: 1, flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+          {tab === "live"     && <NoDetectorBanner onOpen={() => goTab("arsenal")} />}
           {tab === "live"     && <LivePanel />}
         </div>
         <div style={{ display: tab === "review"   ? "flex" : "none", flex: 1, flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
@@ -267,6 +268,34 @@ export default function App() {
 }
 
 // ── System telemetry popover (sidebar bottom, above the account button) ──────
+/** Detection does nothing until a detector model is installed — none ships with
+ *  the app — and nothing on the Live screen said so: cameras recorded, motion
+ *  fired, and objects were simply never recognised. One line, gone as soon as a
+ *  model loads (the inference loop picks one up within ~15 s of install). */
+function NoDetectorBanner({ onOpen }: { onOpen: () => void }) {
+  const [missing, setMissing] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const check = () => api.getInferenceStatus()
+      .then(s => { if (alive) setMissing(s.state === "not_installed"); }).catch(() => {});
+    check();
+    const iv = setInterval(check, 15_000);
+    const un = listen<{ status?: string }>("inference:status",
+      e => { if (alive) setMissing(e.payload?.status === "not_installed"); });
+    return () => { alive = false; clearInterval(iv); un.then(f => f()); };
+  }, []);
+  if (!missing) return null;
+  return (
+    <div role="status" style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 16px",
+      fontSize: 12, color: "var(--text-secondary)", borderBottom: "1px solid var(--border)" }}>
+      <span>Object detection is off — no detector model is installed, so motion is recorded but nothing is recognised.</span>
+      <button onClick={onOpen} className="btn-primary" style={{ marginLeft: "auto", padding: "4px 12px", fontSize: 11.5 }}>
+        Install one in Arsenal
+      </button>
+    </div>
+  );
+}
+
 // Edge-AI-style compact card: CPU / RAM / GPU bars + the active accelerator
 // + per-model inference latency. Polls only while open.
 function TelemetryPopover() {
