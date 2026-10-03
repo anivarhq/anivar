@@ -12,7 +12,8 @@
  *                       already running on DirectML/CPU (no download). This is the
  *                       fix for "TensorRT only installs when you dig up a button".
  *   3. Add a camera   — reuses the real AddCameraModal (USB / RTSP / ONVIF).
- *   4. All set        — asks the user to CHOOSE a detector. Nothing is bundled:
+ *   4. All set        — offers the smallest detector, licence shown, one click
+ *                       (DetectorInstallCard); bigger ones stay in Arsenal. Nothing is bundled:
  *                       shipping a model means distributing it, and the YOLO
  *                       weights are AGPL-3.0. The pick is the user's, made with
  *                       the licence in view (see THIRD-PARTY-NOTICES.md).
@@ -35,6 +36,7 @@ const cleanAccelerator = (s?: string) =>
   (s ?? "").split("→")[0].replace(/\(.*\)/, "").trim() || "this machine";
 import { api } from "../../api";
 import type { TrtxStatus, SystemMetrics, CameraConfig, Settings } from "../../types";
+import { findSkill, downloadSkill } from "../agent/skillDownload";
 import { AddCameraModal } from "../live/LivePanel";
 
 const ONBOARDED_KEY = "sc-onboarded";
@@ -183,10 +185,15 @@ function PerformanceStep({ trtx, metrics, settings, onStatus, onBack, onNext }: 
   const nvidia = !!trtx?.supported;                 // Windows + NVIDIA adapter
   const alreadyOn = !!trtx?.active;                 // an NVIDIA EP already passed its canary
   const epLabel = trtx ? (EP_LABEL[trtx.active_ep] ?? trtx.active_ep) : "";
-  // Non-NVIDIA: what are we running on? DirectML on any DX12 GPU, else CPU.
+  // Non-NVIDIA: what are we running on? The backend reports "CPU" until a model
+  // has loaded — which on first run it hasn't — so only name an accelerator it
+  // has actually reported. This used to fall back to "your GPU (DirectML)" and
+  // told every Mac, Linux and CPU-only user they had DirectML.
+  const reported = metrics?.accelerator && metrics.accelerator !== "CPU"
+    ? cleanAccelerator(metrics.accelerator) : null;
   const baseline = settings?.inference_device === "cpu"
     ? "your CPU"
-    : (metrics?.accelerator && metrics.accelerator !== "CPU" ? metrics.accelerator : "your GPU (DirectML)");
+    : (reported ?? "the fastest path this computer has");
 
   const enable = async () => {
     setInstalling(true); setErr(null); setProg({ percent: 0, downloaded: 0, total: 0, label: "Starting…", step: 0, steps: 5 });
@@ -270,8 +277,8 @@ function PerformanceStep({ trtx, metrics, settings, onStatus, onBack, onNext }: 
         )
       ) : (
         <InfoCard tone="neutral" icon={<Sparkles size={18} />}
-          title={`Running on ${baseline}`}
-          body="Detection is ready with no extra download. Acceleration packs are NVIDIA-only; your hardware already runs models on the best available path." />
+          title={`Models run on ${baseline}`}
+          body="Acceleration packs are NVIDIA-only, so there's nothing to download here. Anivar uses DirectML on Windows, CoreML on a Mac and the CPU otherwise. You'll install the detector itself on the last step." />
       )}
 
       <StepFooter onBack={onBack} onNext={onNext}
@@ -358,14 +365,14 @@ function FinishStep({ cams, onBack, onDone }: { cams: CameraConfig[]; onBack: ()
         <div style={{ fontSize: 12.5, color: "var(--text-secondary)", lineHeight: 1.6, maxWidth: 440 }}>
           Recording and motion detection work now.{" "}
           {configuredCount > 0 ? `${configuredCount} camera${configuredCount === 1 ? "" : "s"} recording.` : "Add a camera anytime from the Live tab."}
-          {" "}To recognise <em>what</em> moved — people, vehicles, animals — pick an
-          object-detection model in Arsenal. None is preinstalled, so the choice is yours.
+          {" "}To recognise <em>what</em> moved — people, vehicles, animals — install
+          an object detector below. None ships with the app: models carry their own
+          licences, so the choice is yours.
         </div>
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        <NextThing icon={<Download size={15} />} title="Choose a detector in Arsenal"
-          body="Object detection needs a model, and none ships with the app — models carry their own licences, so the pick is yours. Each one shows its licence next to it." />
+        <DetectorInstallCard />
         <NextThing icon={<Sparkles size={15} />} title="More models in Arsenal"
           body="Face recognition, license plates, semantic search, audio events — install any of them with one click." />
         <NextThing icon={<Shield size={15} />} title="Remote access & alerts in Settings"
@@ -380,6 +387,70 @@ function FinishStep({ cams, onBack, onDone }: { cams: CameraConfig[]; onBack: ()
         </button>
       </div>
     </>
+  );
+}
+
+/** The one model detection needs, installed right here rather than after a hunt
+ *  through Arsenal — new users used to finish onboarding with nothing detecting.
+ *  Still the user's choice, made with the licence in view, exactly as Arsenal
+ *  shows it: nothing is bundled, because shipping the weights would mean
+ *  distributing AGPL-3.0 code with the app. */
+function DetectorInstallCard() {
+  const def = findSkill("yolo26n");
+  const [st, setSt] = useState<"checking" | "none" | "installing" | "installed" | "error">("checking");
+  const [pct, setPct] = useState(0);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    api.listInstalledSkills()
+      .then(list => { if (alive) setSt(list.some(s => s.installed && s.id.startsWith("yolo26")) ? "installed" : "none"); })
+      .catch(() => { if (alive) setSt("none"); });
+    return () => { alive = false; };
+  }, []);
+
+  if (!def) return null;
+  const install = async () => {
+    setSt("installing"); setPct(0); setErr("");
+    try { await downloadSkill(def, p => setPct(p)); setSt("installed"); }
+    catch (e) { setErr(String(e)); setSt("error"); }
+  };
+
+  if (st === "installed") {
+    return (
+      <NextThing icon={<Check size={15} />} title="Object detection is installed"
+        body="It starts on your cameras within a few seconds. Larger, more accurate models are in Arsenal." />
+    );
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "12px 12px", borderRadius: 10,
+      border: "1px solid var(--border-strong)", background: "rgb(var(--ink) / 0.03)" }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+        <div style={{ color: "var(--accent)", marginTop: 1 }}><Download size={15} /></div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 700, fontSize: 12.5 }}>Install a detector — {def.name} ({def.sizeLabel})</div>
+          <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5, marginTop: 2 }}>
+            Licence: <strong>{def.license}</strong>. {def.licenseNote} Larger, more accurate models are in Arsenal.
+          </div>
+        </div>
+      </div>
+      {st === "installing" ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>Downloading… {pct}%</div>
+          <div style={{ height: 4, borderRadius: 2, background: "var(--border)", overflow: "hidden" }}>
+            <div style={{ height: "100%", width: `${Math.max(pct, 3)}%`, background: "var(--accent)", transition: "width .3s" }} />
+          </div>
+        </div>
+      ) : (
+        <button onClick={install} disabled={st === "checking"} className="btn-primary"
+          style={{ alignSelf: "flex-start", padding: "7px 14px", fontSize: 12 }}>
+          <Download size={13} /> {st === "error" ? "Try again" : `Install (${def.sizeLabel})`}
+        </button>
+      )}
+      {st === "error" && (
+        <div style={{ fontSize: 11, color: "var(--accent-amber)", lineHeight: 1.5 }}>{err}</div>
+      )}
+    </div>
   );
 }
 
