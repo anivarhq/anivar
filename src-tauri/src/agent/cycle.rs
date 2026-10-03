@@ -33,7 +33,7 @@ pub(super) async fn run_cycle(state: &Arc<AppState>, _settings: &Settings) {
              FROM motion_events
              WHERE ai_summary IS NULL
                AND ended_at IS NOT NULL
-               AND started_at > datetime('now', '-7 days')
+               AND started_at > strftime('%Y-%m-%dT%H:%M:%S','now', '-7 days')
              ORDER BY started_at DESC
              LIMIT 5",
         )

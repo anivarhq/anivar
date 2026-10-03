@@ -42,7 +42,7 @@ pub async fn get_status(state: &Arc<AppState>) -> AgentStatus {
     };
 
     let pending: i64 = sqlx::query_as::<_, (i64,)>(
-        "SELECT COUNT(*) FROM motion_events WHERE ai_summary IS NULL AND ended_at IS NOT NULL AND started_at > datetime('now','-24 hours')"
+        "SELECT COUNT(*) FROM motion_events WHERE ai_summary IS NULL AND ended_at IS NOT NULL AND started_at > strftime('%Y-%m-%dT%H:%M:%S','now','-24 hours')"
     ).fetch_one(&state.db).await.map(|(n,)| n).unwrap_or(0);
 
     let total: i64 = sqlx::query_as::<_, (i64,)>(
@@ -291,7 +291,7 @@ pub(super) async fn build_cross_camera_context(db: &SqlitePool) -> String {
     let rows: Vec<(String, i64, Option<String>)> = sqlx::query_as(
         "SELECT started_at, rowid, ai_summary
          FROM motion_events
-         WHERE started_at > datetime('now', '-10 minutes')
+         WHERE started_at > strftime('%Y-%m-%dT%H:%M:%S','now', '-10 minutes')
          ORDER BY started_at ASC LIMIT 20"
     ).fetch_all(db).await.unwrap_or_default();
 
@@ -310,7 +310,7 @@ pub(super) async fn build_cross_camera_context(db: &SqlitePool) -> String {
     let sightings: Vec<(String, i64, String)> = sqlx::query_as(
         "SELECT seen_at, camera_id, person_name
          FROM face_sightings
-         WHERE seen_at > datetime('now', '-10 minutes')
+         WHERE seen_at > strftime('%Y-%m-%dT%H:%M:%S','now', '-10 minutes')
          ORDER BY seen_at ASC LIMIT 20"
     ).fetch_all(db).await.unwrap_or_default();
 

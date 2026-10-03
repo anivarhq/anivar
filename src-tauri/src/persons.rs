@@ -1265,7 +1265,7 @@ pub async fn get_person_events(
                 .bind(pid).fetch_optional(&state.db).await.ok().flatten().unwrap_or_default();
             let sql = format!(
                 "{EV_SELECT}
-                  WHERE m.started_at > datetime('now', ?1)
+                  WHERE m.started_at > strftime('%Y-%m-%dT%H:%M:%S','now', ?1)
                     AND (
                       m.id IN (SELECT event_id FROM face_sightings  WHERE person_id=?2 AND event_id IS NOT NULL)
                       OR m.id IN (SELECT event_id FROM face_embeddings WHERE person_id=?2 AND event_id IS NOT NULL)
@@ -1335,7 +1335,7 @@ pub async fn list_vehicles(
     let rows: Vec<(String, Option<i64>, String, Option<String>, String)> = sqlx::query_as(
         "SELECT recognized_plate, cam_id, started_at, thumbnail, id FROM motion_events
           WHERE recognized_plate IS NOT NULL AND recognized_plate <> ''
-            AND started_at > datetime('now', ?)
+            AND started_at > strftime('%Y-%m-%dT%H:%M:%S','now', ?)
           ORDER BY started_at DESC"
     ).bind(format!("-{days} days")).fetch_all(&state.db).await.map_err(|e| e.to_string())?;
 
@@ -1464,7 +1464,7 @@ pub async fn get_person_stats(
 ) -> Result<Vec<PersonStats>, String> {
     let rows: Vec<(Option<String>, String, String, i64)> = sqlx::query_as(
         "SELECT person_id, person_name, seen_at, camera_id FROM face_sightings
-          WHERE seen_at > datetime('now','-30 days')
+          WHERE seen_at > strftime('%Y-%m-%dT%H:%M:%S','now','-30 days')
           ORDER BY seen_at DESC LIMIT 5000"
     ).fetch_all(&state.db).await.map_err(|e| e.to_string())?;
 
@@ -1493,7 +1493,7 @@ pub async fn get_audio_stats(
 ) -> Result<Vec<AudioStats>, String> {
     let rows: Vec<(Option<String>, String)> = sqlx::query_as(
         "SELECT dominant_label, started_at FROM motion_events
-          WHERE event_category='audio' AND started_at > datetime('now','-7 days')
+          WHERE event_category='audio' AND started_at > strftime('%Y-%m-%dT%H:%M:%S','now','-7 days')
           ORDER BY started_at DESC LIMIT 2000"
     ).fetch_all(&state.db).await.map_err(|e| e.to_string())?;
 
@@ -1601,7 +1601,7 @@ pub async fn list_vehicle_events(
                 CASE WHEN thumbnail IS NOT NULL AND thumbnail != '' THEN '@thumb' ELSE NULL END,
                 recognized_plate, plate_score, sub_label, vehicle_color, top_speed_kmh
            FROM motion_events
-          WHERE event_category='vehicle' AND started_at > datetime('now', ?)
+          WHERE event_category='vehicle' AND started_at > strftime('%Y-%m-%dT%H:%M:%S','now', ?)
             AND started_at < ? {from_clause} {to_clause} {clauses}
           ORDER BY started_at DESC
           LIMIT ?");
@@ -1690,7 +1690,7 @@ pub async fn list_audio_events(
                 CASE WHEN thumbnail IS NOT NULL AND thumbnail != '' THEN '@thumb' ELSE NULL END,
                 loudness_db, COALESCE(audio_meta, json_extract(attributes, '$.audio'))
            FROM motion_events
-          WHERE event_category='audio' AND started_at > datetime('now', ?)
+          WHERE event_category='audio' AND started_at > strftime('%Y-%m-%dT%H:%M:%S','now', ?)
             AND started_at < ? {from_clause} {to_clause} {cat_clause}
           ORDER BY started_at DESC
           LIMIT ?");

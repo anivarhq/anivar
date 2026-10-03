@@ -330,19 +330,19 @@ pub async fn explore_events(state: &Arc<AppState>, filter: &str) -> Vec<serde_js
 
     // Time window
     let time_clause = if f.contains("last hour") || f.contains("past hour") {
-        "started_at > datetime('now', '-1 hour')"
+        "started_at > strftime('%Y-%m-%dT%H:%M:%S','now', '-1 hour')"
     } else if f.contains("today") {
         "date(started_at, 'localtime') = date('now', 'localtime')"
     } else if f.contains("yesterday") {
         "date(started_at, 'localtime') = date('now', '-1 day', 'localtime')"
     } else if f.contains("last night") || f.contains("tonight") {
-        "started_at > datetime('now', '-12 hours') AND cast(strftime('%H', started_at, 'localtime') as int) >= 20"
+        "started_at > strftime('%Y-%m-%dT%H:%M:%S','now', '-12 hours') AND cast(strftime('%H', started_at, 'localtime') as int) >= 20"
     } else if f.contains("this week") || f.contains("week") {
-        "started_at > datetime('now', '-7 days')"
+        "started_at > strftime('%Y-%m-%dT%H:%M:%S','now', '-7 days')"
     } else if f.contains("last 24") || f.contains("24 hour") {
-        "started_at > datetime('now', '-24 hours')"
+        "started_at > strftime('%Y-%m-%dT%H:%M:%S','now', '-24 hours')"
     } else {
-        "started_at > datetime('now', '-24 hours')" // default: last 24h
+        "started_at > strftime('%Y-%m-%dT%H:%M:%S','now', '-24 hours')" // default: last 24h
     };
 
     // Risk filter — supports both old scale and new Agies scale

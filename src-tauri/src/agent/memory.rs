@@ -105,7 +105,7 @@ pub async fn decay_learned_memories(db: &SqlitePool) {
     sqlx::query(
         "UPDATE agent_memory SET score = score * 0.9
          WHERE memory_type = 'learned'
-         AND updated_at < datetime('now', '-3 days')"
+         AND updated_at < strftime('%Y-%m-%dT%H:%M:%S','now', '-3 days')"
     ).execute(db).await.ok();
     // Remove memories that have decayed to insignificance
     sqlx::query(

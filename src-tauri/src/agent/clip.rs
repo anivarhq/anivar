@@ -1125,7 +1125,7 @@ pub async fn analyze_event_clip(state: Arc<AppState>, event_id: String) {
                 let other: Vec<(i64, String)> = sqlx::query_as(
                     "SELECT camera_id, seen_at FROM face_sightings \
                      WHERE person_name = ? AND camera_id != ? \
-                       AND seen_at > datetime('now', '-30 minutes') \
+                       AND seen_at > strftime('%Y-%m-%dT%H:%M:%S','now', '-30 minutes') \
                      ORDER BY seen_at DESC LIMIT 3"
                 ).bind(name).bind(cam_id as i64)
                     .fetch_all(&state.db).await.unwrap_or_default();
