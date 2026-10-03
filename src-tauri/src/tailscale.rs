@@ -87,27 +87,44 @@ async fn read_status() -> (bool, String) {
 }
 
 /// Is a funnel currently serving (any config)?
-async fn funnel_active() -> bool {
+async fn funnel_active(port: u16) -> bool {
     match run_tailscale(&["funnel", "status", "--json"], 5).await {
         Some(o) => {
             let j: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap_or_default();
-            // Non-empty object with AllowFunnel/Web entries = active.
-            j.get("AllowFunnel").map(|v| v.as_object().map(|m| !m.is_empty()).unwrap_or(false))
-                .unwrap_or(false)
+            funnel_serves(&j, port)
         }
         None => false,
     }
 }
 
+/// Is a public Funnel up AND proxying to Anivar's own `port`? It used to count
+/// ANY Funnel on the machine, so another service's Funnel read as Anivar's, the
+/// UI showed "Active", and share links were handed a URL that served
+/// something else. `j` is `tailscale funnel status --json`:
+/// `{"Web":{"host:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8882"}}}},
+///   "AllowFunnel":{"host:443":true}}`.
+fn funnel_serves(j: &serde_json::Value, port: u16) -> bool {
+    let public = j.get("AllowFunnel").and_then(|v| v.as_object())
+        .is_some_and(|m| m.values().any(|v| v.as_bool() == Some(true)));
+    let suffix = format!(":{port}");
+    let ours = j.get("Web").and_then(|v| v.as_object()).is_some_and(|hosts| {
+        hosts.values().any(|h| h.get("Handlers").and_then(|v| v.as_object()).is_some_and(|hs| {
+            hs.values().any(|hd| hd.get("Proxy").and_then(|v| v.as_str())
+                .is_some_and(|p| p.trim_end_matches('/').ends_with(&suffix)))
+        }))
+    });
+    public && ours
+}
+
 /// Full status for the UI.
-pub async fn status() -> TailscaleStatus {
+pub async fn status(port: u16) -> TailscaleStatus {
     if !is_installed().await { return TailscaleStatus::default(); }
     let (logged_in, dns) = read_status().await;
     let base_url = if dns.is_empty() { String::new() } else { format!("https://{dns}") };
     TailscaleStatus {
         installed: true, logged_in,
         dns_name: dns, base_url,
-        funnel_active: funnel_active().await,
+        funnel_active: funnel_active(port).await,
         enable_url: String::new(),
     }
 }
@@ -156,7 +173,7 @@ pub async fn ensure_funnel(port: u16) -> Result<String, String> {
     }
 
     // Fast path: a funnel is already serving — nothing to do.
-    if funnel_active().await {
+    if funnel_active(port).await {
         return Ok(format!("https://{dns}"));
     }
 
@@ -225,7 +242,7 @@ pub async fn ensure_funnel(port: u16) -> Result<String, String> {
                 let _ = child.kill().await;
                 // The CLI neither succeeded nor printed a consent URL within the
                 // deadline. If a funnel got configured anyway, count it as success.
-                if funnel_active().await { return Ok(format!("https://{dns}")); }
+                if funnel_active(port).await { return Ok(format!("https://{dns}")); }
                 if combined.contains("Funnel is not enabled") {
                     return Err("Enable Funnel for your Tailscale account, then try again.".into());
                 }
@@ -248,8 +265,25 @@ pub async fn disable_funnel() {
 // ─── Tauri commands ──────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn tailscale_status() -> Result<TailscaleStatus, String> {
-    Ok(status().await)
+pub async fn tailscale_status(state: tauri::State<'_, std::sync::Arc<crate::AppState>>)
+    -> Result<TailscaleStatus, String>
+{
+    let port = state.settings.read().await.stream_port;
+    Ok(status(port).await)
+}
+
+/// Settings → Remote access → "Turn off". There was no way to switch the public
+/// Funnel off from the app: once on, it stayed on (and `funnel --bg` survives
+/// reboots) until the last share link happened to expire. Existing links stop
+/// working while it's off; turning it back on revives any that haven't expired.
+#[tauri::command]
+pub async fn tailscale_disable(state: tauri::State<'_, std::sync::Arc<crate::AppState>>)
+    -> Result<TailscaleStatus, String>
+{
+    let port = state.settings.read().await.stream_port;
+    disable_funnel().await;
+    tracing::info!("remote access: Funnel turned off from Settings");
+    Ok(status(port).await)
 }
 
 /// Turn on Funnel for the stream port. Returns the live status; on first run it
@@ -259,7 +293,7 @@ pub async fn tailscale_enable(state: tauri::State<'_, std::sync::Arc<crate::AppS
     -> Result<TailscaleStatus, String>
 {
     let port = state.settings.read().await.stream_port;
-    let mut st = status().await;
+    let mut st = status(port).await;
     match ensure_funnel(port).await {
         Ok(_) => { st.funnel_active = true; Ok(st) }
         Err(e) if e.starts_with("__ENABLE__") => {
@@ -267,5 +301,27 @@ pub async fn tailscale_enable(state: tauri::State<'_, std::sync::Arc<crate::AppS
             Ok(st)
         }
         Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::funnel_serves;
+
+    fn status(proxy: &str, allow: bool) -> serde_json::Value {
+        serde_json::json!({
+            "TCP": {"443": {"HTTPS": true}},
+            "Web": {"box.tail1.ts.net:443": {"Handlers": {"/": {"Proxy": proxy}}}},
+            "AllowFunnel": {"box.tail1.ts.net:443": allow}
+        })
+    }
+
+    #[test]
+    fn only_a_public_funnel_to_our_port_counts() {
+        assert!(funnel_serves(&status("http://127.0.0.1:8882", true), 8882));
+        assert!(!funnel_serves(&status("http://127.0.0.1:3000", true), 8882), "someone else's Funnel");
+        assert!(!funnel_serves(&status("http://127.0.0.1:8882", false), 8882), "served on the tailnet only");
+        assert!(!funnel_serves(&status("http://127.0.0.1:88820", true), 8882), "port prefix isn't a match");
+        assert!(!funnel_serves(&serde_json::json!({}), 8882), "nothing configured");
     }
 }

@@ -76,7 +76,7 @@ use capture::run_capture_loop;
 mod footage;
 
 mod tailscale;
-pub use tailscale::{tailscale_status, tailscale_enable};
+pub use tailscale::{tailscale_status, tailscale_enable, tailscale_disable};
 
 mod share_security;
 
@@ -628,6 +628,7 @@ pub fn run() {
             telegram_connect,
             tailscale_status,
             tailscale_enable,
+            tailscale_disable,
             auth_status,
             set_login_password,
             set_login_required,
