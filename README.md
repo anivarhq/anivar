@@ -1,10 +1,9 @@
 <p align="center">
-  <img src="assets/readme/banner.svg" width="100%" alt="Anivar — It watches. It listens. It remembers. Private AI security cameras on your own computer. No cloud, no account." />
+  <img src="assets/readme/banner.svg" width="100%" alt="Anivar NVR — It watches. It listens. It remembers. Private AI security cameras on your own computer. No cloud, no account." />
 </p>
 
 <p align="center">
   <a href="https://github.com/anivarhq/anivar/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/anivarhq/anivar?style=flat-square&labelColor=0d1117&color=C9605C"></a>
-  <a href="https://github.com/anivarhq/anivar/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/anivarhq/anivar/total?style=flat-square&labelColor=0d1117"></a>
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square&labelColor=0d1117"></a>
   <a href="https://github.com/anivarhq/anivar/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/anivarhq/anivar/ci.yml?branch=main&style=flat-square&labelColor=0d1117&label=CI"></a>
 </p>
@@ -17,8 +16,9 @@
   <a href="CONTRIBUTING.md"><b>Build from source</b></a>
 </p>
 
-Anivar turns your own Windows, Mac or Linux computer into a security-camera recorder with AI
-built in. Add your cameras and it records around the clock, spots people, cars and sounds, and
+**Anivar NVR** is a free, open-source alternative to Blue Iris, with AI built in. It turns your
+own Windows, Mac or Linux computer into a security-camera recorder: add your cameras and it
+records around the clock, spots people, cars and sounds, and
 learns the faces you name. Ask it *"what happened last night?"* and it answers with the clips.
 The video and the AI stay on your computer, and there is no subscription.
 
@@ -44,6 +44,18 @@ then go to **System Settings → Privacy & Security → Open Anyway**. After tha
 **Settings → App Updates** checks for a new version, verifies its signature and installs it, and
 can do so automatically ([what changed](CHANGELOG.md)). Versions up to 0.1.5 predate this, so
 install the next release over the top of them once, by hand.
+
+## Is it safe to install?
+
+- **The code is all here.** Every line is in this repository under Apache-2.0, and every
+  installer is built from it by the public [release workflow](.github/workflows/release.yml).
+- **Every download has a checksum** ([verify yours](#verify-your-download)), and updates are
+  signed: the app checks each one against a key built into it before installing.
+- **No account and no telemetry.** Nothing is sent anywhere until you turn on a feature that
+  sends it ([PRIVACY.md](PRIVACY.md)).
+- **Why Windows and macOS warn.** The installers aren't code-signed yet: that needs a signing
+  certificate, which is on the [roadmap](ROADMAP.md). The warning means "unknown publisher",
+  not "something was found".
 
 ## Private by design, and you can check
 
@@ -103,16 +115,19 @@ How each part works, in detail: [docs/FEATURES.md](docs/FEATURES.md).
 
 Checked September 2026; list prices in USD.
 
-| | **Anivar** | [Frigate](https://github.com/blakeblackshear/frigate) | [Blue Iris](https://blueirissoftware.com/) | [Ring](https://ring.com/plans) / [Google Home](https://store.google.com/us/product/google_home_premium) plans |
+| | **Anivar NVR** | [Blue Iris](https://blueirissoftware.com/) | [Frigate](https://github.com/blakeblackshear/frigate) | [Ring](https://ring.com/plans) / [Google Home](https://store.google.com/us/product/google_home_premium) plans |
 |---|---|---|---|---|
-| **Runs on** | A desktop app for Windows, macOS, Linux | A Linux server or Docker | Windows | Their cloud |
-| **Your video lives** | On your computer | On your server | On your PC | On their servers |
-| **Price** | Free (Apache-2.0) | Free (MIT) | $39.95 or $99.95, once | About $20 a month for the AI tier |
-| **Setup** | Installer, then add cameras in the app | Docker and a YAML config | Installer | Phone app |
-| **Maturity** | Alpha | Mature, large community | Mature | Mature |
+| **Runs on** | A desktop app for Windows, macOS, Linux | Windows | A Linux server or Docker | Their cloud |
+| **Your video lives** | On your computer | On your PC | On your server | On their servers |
+| **Price** | Free (Apache-2.0) | $39.95 or $99.95, once | Free (MIT) | About $20 a month for the AI tier |
+| **Setup** | Installer, then add cameras in the app | Installer | Docker and a YAML config | Phone app |
+| **Maturity** | Alpha | Mature | Mature, large community | Mature |
 
-If you already run a home server and want the most proven open-source option, Frigate is
-excellent. Anivar is for people who want the same privacy without running a server.
+If you run Blue Iris on a Windows PC, Anivar works the same way — an ordinary app recording your
+cameras — but it is free and open source, and its AI, including a language model you can ask
+about your footage, runs inside it. If you already run a home server and want the most proven
+open-source option, Frigate is excellent; Anivar is for people who want that privacy without
+running a server.
 
 **No spare camera?** [Chameleon IP](https://github.com/anivarhq/chameleon-ip), a sister project
 in early development, turns an old phone or computer into an RTSP / ONVIF camera that Anivar —
