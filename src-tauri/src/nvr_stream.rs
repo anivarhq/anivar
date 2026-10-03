@@ -352,6 +352,22 @@ pub(crate) async fn snapped_playback_start_ms(
 /// to produce a fragmented MP4 stream the browser can decode immediately.
 ///
 /// `end_secs = None` → unbounded (stream to EOF / client cancel).
+/// Does a segment that started at `seg_start` still have footage at `t`?
+/// Segments are ~10 s; a row without a recorded duration is given 10 s, and a
+/// 2 s slack absorbs rounding between the file's name and its real length.
+fn segment_covers(seg_start: f64, duration: Option<f64>, t: f64) -> bool {
+    t < seg_start + duration.unwrap_or(10.0) + 2.0
+}
+
+/// May a window that starts in a gap begin at the next segment, which starts at
+/// `next_start`? Always if it is close (`max_gap`, for a just-recorded segment
+/// that isn't indexed yet). For a bounded window, also whenever the segment
+/// starts before the window ends: an export from 10:30 to 11:30 with the
+/// camera off until 10:40 is 50 minutes of footage, not "no recording".
+fn next_segment_usable(next_start: f64, start: f64, end: Option<f64>, max_gap: f64) -> bool {
+    next_start - start <= max_gap || end.is_some_and(|e| next_start < e)
+}
+
 /// Builds the ffmpeg concat manifest for the segments overlapping
 /// `[start_secs, end_secs]` and writes it to a `_concat_*.txt` in `data_dir`.
 /// Returns `(manifest_path, duration)` where `duration` is the `-t` cut value
@@ -381,13 +397,24 @@ async fn build_concat_manifest(
     // a while". Only retries when the window is recent (within the last ~30s of
     // now) to avoid delaying genuinely-empty historical requests.
     let query_first = || async {
-        sqlx::query_as::<_, (String, String)>(
-            "SELECT path, started_at FROM nvr_segments
+        sqlx::query_as::<_, (String, String, Option<f64>)>(
+            "SELECT path, started_at, duration_secs FROM nvr_segments
              WHERE cam_id=? AND started_at <= ?
              ORDER BY started_at DESC LIMIT 1"
         )
         .bind(cam_id as i64).bind(&start_dt)
         .fetch_optional(db).await.unwrap_or(None)
+        // The latest segment at or before `start` only counts if it is still
+        // running at `start`. One that ENDED before it means `start` sits in a
+        // recording gap: seeking `start - seg_start` into a concat that has no
+        // gap in it counted the gap as footage, so an export from inside a
+        // 40-minute gap began 40 minutes after the gap ended.
+        .filter(|(_, started, dur)| {
+            let seg_unix = chrono::DateTime::parse_from_rfc3339(started)
+                .map(|t| t.timestamp() as f64).unwrap_or(start_secs);
+            segment_covers(seg_unix, *dur, start_secs)
+        })
+        .map(|(p, s, _)| (p, s))
     };
     let mut first_seg = query_first().await;
     if first_seg.is_none() {
@@ -402,6 +429,10 @@ async fn build_concat_manifest(
         }
     }
 
+    // Where the footage really begins: `start`, unless `start` is in a gap, in
+    // which case the first segment after it. The output length is measured from
+    // here, so a gap at the start doesn't push the end past `end_secs` either.
+    let mut clip_start_secs = start_secs;
     let (first_path, first_started, inpoint_secs) = match first_seg {
         Some((path, started)) => {
             let seg_unix = chrono::DateTime::parse_from_rfc3339(&started)
@@ -434,9 +465,10 @@ async fn build_concat_manifest(
                 Some((p, ts)) => {
                     let seg_unix = chrono::DateTime::parse_from_rfc3339(&ts)
                         .map(|t| t.timestamp() as f64).unwrap_or(start_secs);
-                    if seg_unix - start_secs > FALLBACK_MAX_GAP {
+                    if !next_segment_usable(seg_unix, start_secs, end_secs, FALLBACK_MAX_GAP) {
                         return None;
                     }
+                    clip_start_secs = seg_unix.max(start_secs);
                     (p, ts, 0.0)
                 }
                 None => return None,
@@ -548,7 +580,7 @@ async fn build_concat_manifest(
     let eff_inpoint = if relevant.first().map(|(p, _)| p == &inpoint_path).unwrap_or(false) {
         inpoint_secs
     } else { 0.0 };
-    let out_dur = end_secs.map(|e| (e - start_secs).max(1.0));
+    let out_dur = end_secs.map(|e| (e - clip_start_secs).max(1.0));
     // DIAGNOSTIC: the exact concat inputs + seek so a 262-byte empty export is
     // explainable (inpoint past the only segment? duration ~0? wrong first file?).
     tracing::info!(
@@ -838,3 +870,30 @@ pub(crate) async fn concat_window_to_file(
     true
 }
 
+
+#[cfg(test)]
+mod window_start_tests {
+    use super::{next_segment_usable, segment_covers};
+
+    #[test]
+    fn a_start_inside_a_segment_is_covered() {
+        assert!(segment_covers(1000.0, Some(10.0), 1005.0));
+        assert!(segment_covers(1000.0, None, 1009.0), "no duration recorded: assume ~10 s");
+    }
+
+    #[test]
+    fn a_start_in_a_gap_is_not_covered_by_the_segment_before_it() {
+        // Last segment 10:00:00–10:00:10, camera off, export asked from 10:30.
+        assert!(!segment_covers(0.0, Some(10.0), 30.0 * 60.0));
+    }
+
+    #[test]
+    fn a_gap_start_begins_at_the_next_segment_inside_the_window() {
+        let (start, end) = (30.0 * 60.0, 90.0 * 60.0); // 10:30–11:30
+        assert!(next_segment_usable(40.0 * 60.0, start, Some(end), 120.0), "footage resumes 10:40");
+        assert!(!next_segment_usable(95.0 * 60.0, start, Some(end), 120.0), "nothing until after the window");
+        // Unbounded (the player asking for one instant): only a nearby segment counts.
+        assert!(next_segment_usable(start + 60.0, start, None, 120.0));
+        assert!(!next_segment_usable(start + 600.0, start, None, 120.0));
+    }
+}
