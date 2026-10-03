@@ -347,6 +347,7 @@ export const api = {
   tailscaleStatus:   () => invoke<TailscaleStatus>("tailscale_status"),
   /** Turn on Funnel for the stream port; may return a one-time enable_url. */
   tailscaleEnable:   () => invoke<TailscaleStatus>("tailscale_enable"),
+  tailscaleDisable:  () => invoke<TailscaleStatus>("tailscale_disable"),
 
   // GPU picker
   listGpus: () => invoke<GpuInfo[]>("list_gpus"),

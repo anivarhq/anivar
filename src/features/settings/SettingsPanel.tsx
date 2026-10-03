@@ -632,8 +632,30 @@ export function SettingsPanel() {
   // Remote access (Tailscale Funnel — compliant live/clip sharing).
   const [tsStatus, setTsStatus] = useState<import("../../types").TailscaleStatus | null>(null);
   const [tsBusy, setTsBusy] = useState(false);
-  const refreshTs = useCallback(() => { api.tailscaleStatus().then(setTsStatus).catch(() => setTsStatus(null)); }, []);
+  // Links that are live right now. Listed so the owner can see what is shared,
+  // and revoked together — the backend had both, the app had neither.
+  const [shares, setShares] = useState<import("../../types").ShareEntry[]>([]);
+  const refreshTs = useCallback(() => {
+    api.tailscaleStatus().then(setTsStatus).catch(() => setTsStatus(null));
+    api.listActiveShares().then(setShares).catch(() => setShares([]));
+  }, []);
   useEffect(() => { refreshTs(); }, [refreshTs]);
+  const disableTs = async () => {
+    setTsBusy(true);
+    try {
+      setTsStatus(await api.tailscaleDisable());
+      showToast("Remote access is off. Links stop working until you turn it back on.", "success");
+    } catch (e: any) { showToast(e.message ?? String(e), "error"); }
+    finally { setTsBusy(false); }
+  };
+  const revokeAll = async () => {
+    if (!confirm("Revoke every share link you have sent? Anyone watching one loses access, and this can't be undone.")) return;
+    try {
+      await api.revokeAllShares();
+      showToast("All share links revoked.", "success");
+      refreshTs();
+    } catch (e: any) { showToast(e.message ?? String(e), "error"); }
+  };
   const enableTs = async () => {
     setTsBusy(true);
     try {
@@ -1120,9 +1142,15 @@ export function SettingsPanel() {
                 Tailscale installed but not signed in — open the Tailscale app and log in, then refresh.
               </span>
             ) : tsStatus?.funnel_active ? (
-              <span style={{ fontSize: 11.5, color: "var(--accent)", fontWeight: 700 }}>
-                ✓ Active — links use {tsStatus.base_url}
-              </span>
+              <>
+                <span style={{ fontSize: 11.5, color: "var(--accent)", fontWeight: 700 }}>
+                  ✓ Active — links use {tsStatus.base_url}
+                </span>
+                <button onClick={disableTs} disabled={tsBusy} className={styles.ghostBtn}
+                  style={{ padding: "5px 12px", fontSize: 11 }}>
+                  {tsBusy ? "Turning off…" : "Turn off"}
+                </button>
+              </>
             ) : (
               <button onClick={enableTs} disabled={tsBusy}
                 style={{ fontSize: 12, fontWeight: 700, padding: "6px 14px", borderRadius: 8, cursor: tsBusy ? "wait" : "pointer",
@@ -1131,6 +1159,30 @@ export function SettingsPanel() {
               </button>
             )}
             <button onClick={refreshTs} className={styles.ghostBtn} style={{ padding: "5px 12px", fontSize: 11 }}>Refresh</button>
+          </div>
+          <div style={{ padding: "0 16px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-secondary)" }}>
+              Active links ({shares.length})
+            </div>
+            {shares.length === 0 ? (
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Nothing is shared right now.</div>
+            ) : (
+              <>
+                {shares.map(sh => (
+                  <div key={`${sh.kind}:${sh.resource_id}`} style={{ fontSize: 11, color: "var(--text-secondary)", display: "flex", gap: 8 }}>
+                    <span style={{ fontWeight: 700 }}>{sh.kind === "live" ? "Live camera" : "Clip"}</span>
+                    <span>
+                      {sh.expires_at === 0 ? "until the app restarts"
+                        : `expires ${new Date(sh.expires_at * 1000).toLocaleString()}`}
+                    </span>
+                  </div>
+                ))}
+                <button onClick={revokeAll} className={styles.ghostBtn}
+                  style={{ alignSelf: "flex-start", padding: "5px 12px", fontSize: 11, marginTop: 2 }}>
+                  Revoke all links
+                </button>
+              </>
+            )}
           </div>
         </div>
 
