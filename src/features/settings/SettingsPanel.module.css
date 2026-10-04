@@ -480,3 +480,50 @@ select.numInput { text-align: left; padding-right: 22px; cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   .anchorPill { transition: opacity 0.18s ease; }
 }
+/* ── App Updates status ──────────────────────────────────────────────────────── */
+.updCard {
+  padding: 16px 18px;
+  border-bottom: 1px solid rgb(var(--ink) / 0.045);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.updRow { display: flex; align-items: center; gap: 14px; }
+.updRow > button { flex-shrink: 0; white-space: nowrap; }
+.updIcon {
+  width: 36px; height: 36px; flex-shrink: 0;
+  display: grid; place-items: center;
+  border-radius: 10px;
+  background: rgb(var(--ink) / 0.05);
+  color: var(--text-secondary);
+}
+.updText { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.updTitle { font-size: 13.5px; font-weight: 650; color: var(--text-primary); letter-spacing: -0.01em; }
+.updSub { font-size: 11.5px; color: var(--text-secondary); line-height: 1.45; }
+.updBar {
+  height: 4px; border-radius: 2px; overflow: hidden;
+  background: rgb(var(--ink) / 0.08);
+}
+.updBar > div { height: 100%; background: var(--accent); transition: width 0.3s ease; }
+.updBar > .updBarIndeterminate { width: 30%; animation: updSlide 1.2s ease-in-out infinite; }
+@keyframes updSlide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+.updNotes {
+  margin-left: 50px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.updNotesHeading {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-tertiary); margin-bottom: 4px;
+}
+.updNotes ul { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 3px; }
+.updNotes li { font-size: 12px; color: var(--text-secondary); line-height: 1.45; }
+.updLink {
+  align-self: flex-start;
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 0; border: none; background: none; cursor: pointer;
+  font-size: 12px; color: var(--accent);
+}
+.updLink:hover { color: var(--accent-light); }
+@media (prefers-reduced-motion: reduce) {
+  .updBar > .updBarIndeterminate { animation: none; width: 100%; opacity: 0.4; }
+}

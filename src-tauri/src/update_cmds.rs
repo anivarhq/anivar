@@ -15,7 +15,8 @@
 //!             bundle is replaced in place and we restart.
 //!
 //! ffmpeg/go2rtc children die with the process through the Job Object, the
-//! same as any other exit.
+//! same as any other exit. The installer must not: it is let out of the job
+//! just before it starts (`proc::let_next_children_outlive_us`).
 
 use crate::state::AppState;
 use serde_json::json;
@@ -40,6 +41,8 @@ async fn find_update(app: &AppHandle) -> Result<Option<Update>, String> {
             // Said out loud for the same reason the tray's Quit is: otherwise an
             // update and a crash leave the same trace, a log that just stops.
             tracing::info!("update: handing over to the installer — exiting");
+            #[cfg(windows)]
+            crate::proc::let_next_children_outlive_us();
         })
         .build()
         .map_err(check_err)?
