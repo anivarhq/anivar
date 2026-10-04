@@ -10,7 +10,6 @@ use tauri::Emitter;
 
 use crate::ensure_ffmpeg;
 use crate::hw::hw_encoder_args;
-use chrono::TimeZone as _;
 
 // ─── Per-camera mic registry for audio-in-recordings ─────────────────────────
 //
@@ -106,14 +105,41 @@ pub(crate) fn release_nvenc(cam: u8) {
 /// SINGLE SOURCE OF TRUTH for NVR segment timestamps. ffmpeg writes segment filenames in
 /// LOCAL time (`-strftime`), but the DB (and every event) stores UTC — so this is the one
 /// place the local→UTC conversion happens. Parse "YYYYMMDD" + "HHMMSS" as a LOCAL
-/// wall-clock time → UTC rfc3339. Returns None for a malformed or DST-ambiguous/skipped
-/// local time so callers can fall back to "now".
-pub(crate) fn segment_local_name_to_utc(date_part: &str, time_part: &str) -> Option<String> {
+/// wall-clock time → UTC rfc3339. Returns None for a malformed name.
+///
+/// `written_unix` is when the file was last written (its mtime). It settles the hour
+/// that happens twice when clocks go back: 01:30 occurs at both 00:30 and 01:30 UTC in
+/// London on the last Sunday of October. This used to return None there, the caller
+/// fell back to "now", and every segment of that hour got the wrong start and a 1 s
+/// length.
+pub(crate) fn segment_local_name_to_utc(date_part: &str, time_part: &str, written_unix: Option<i64>)
+    -> Option<String>
+{
+    local_name_to_utc(&chrono::Local, date_part, time_part, written_unix).map(|t| t.to_rfc3339())
+}
+
+fn local_name_to_utc<Tz: chrono::TimeZone>(tz: &Tz, date_part: &str, time_part: &str, written_unix: Option<i64>)
+    -> Option<chrono::DateTime<Utc>>
+{
     if date_part.len() != 8 || time_part.len() != 6 { return None; }
-    chrono::NaiveDateTime::parse_from_str(&format!("{date_part}{time_part}"), "%Y%m%d%H%M%S")
-        .ok()
-        .and_then(|n| chrono::Local.from_local_datetime(&n).single())
-        .map(|t| t.with_timezone(&Utc).to_rfc3339())
+    let naive = chrono::NaiveDateTime::parse_from_str(&format!("{date_part}{time_part}"), "%Y%m%d%H%M%S").ok()?;
+    match tz.from_local_datetime(&naive) {
+        chrono::LocalResult::Single(t) => Some(t.with_timezone(&Utc)),
+        // The segment STARTED before the file was last written, so the right
+        // occurrence is the latest one at or before the mtime (2 s of slack for
+        // clock rounding). With no mtime, take the earlier one.
+        chrono::LocalResult::Ambiguous(a, b) => {
+            let (a, b) = (a.with_timezone(&Utc), b.with_timezone(&Utc));
+            let (early, late) = if a <= b { (a, b) } else { (b, a) };
+            Some(match written_unix {
+                Some(w) if late.timestamp() <= w + 2 => late,
+                _ => early,
+            })
+        }
+        // A skipped wall-clock time (clocks went forward). ffmpeg's clock never
+        // shows one, so a name like this is not one of ours.
+        chrono::LocalResult::None => None,
+    }
 }
 
 //
@@ -503,7 +529,8 @@ pub(crate) async fn postprocess_nvr_segments(
             let stem = final_name.trim_end_matches(".mp4");
             let all_parts: Vec<&str> = stem.split('_').collect();
             let started_at_rfc = if all_parts.len() >= 3 {
-                segment_local_name_to_utc(all_parts[all_parts.len() - 2], all_parts[all_parts.len() - 1])
+                segment_local_name_to_utc(all_parts[all_parts.len() - 2], all_parts[all_parts.len() - 1],
+                    tmp_modified.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs() as i64))
                     .unwrap_or_else(|| Utc::now().to_rfc3339())
             } else {
                 Utc::now().to_rfc3339()
@@ -604,15 +631,14 @@ pub(crate) async fn reindex_existing_nvr_segments(nvr_dir: &std::path::Path, db:
         let time_p = all_parts[all_parts.len() - 1];
         if date_p.len() != 8 || time_p.len() != 6 { continue; }
 
-        let started_at_rfc = segment_local_name_to_utc(date_p, time_p)
-            .unwrap_or_else(|| Utc::now().to_rfc3339());
-
         let meta = tokio::fs::metadata(&path).await;
         let size_bytes = meta.as_ref().map(|m| m.len()).unwrap_or(0) as i64;
         let mtime_secs: Option<u64> = meta.as_ref().ok()
             .and_then(|m| m.modified().ok())
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs());
+        let started_at_rfc = segment_local_name_to_utc(date_p, time_p, mtime_secs.map(|s| s as i64))
+            .unwrap_or_else(|| Utc::now().to_rfc3339());
         let start_unix = chrono::DateTime::parse_from_rfc3339(&started_at_rfc)
             .map(|t| t.timestamp() as u64).unwrap_or(0);
         let duration_secs = mtime_secs
@@ -801,17 +827,17 @@ mod tests {
 
     #[test]
     fn rejects_malformed_filenames() {
-        assert!(segment_local_name_to_utc("2026062", "224035").is_none());  // 7-char date
-        assert!(segment_local_name_to_utc("20260629", "22403").is_none());  // 5-char time
-        assert!(segment_local_name_to_utc("notadate", "224035").is_none()); // non-numeric
-        assert!(segment_local_name_to_utc("", "").is_none());
+        assert!(segment_local_name_to_utc("2026062", "224035", None).is_none());  // 7-char date
+        assert!(segment_local_name_to_utc("20260629", "22403", None).is_none());  // 5-char time
+        assert!(segment_local_name_to_utc("notadate", "224035", None).is_none()); // non-numeric
+        assert!(segment_local_name_to_utc("", "", None).is_none());
     }
 
     #[test]
     fn round_trips_local_wall_clock() {
         // Filename is LOCAL wall-clock; the result is UTC. Converting back to local must
         // reproduce the exact digits — in ANY timezone (no DST gap at :40:35).
-        let utc = segment_local_name_to_utc("20260629", "224035").expect("valid");
+        let utc = segment_local_name_to_utc("20260629", "224035", None).expect("valid");
         let local = chrono::DateTime::parse_from_rfc3339(&utc)
             .expect("rfc3339")
             .with_timezone(&chrono::Local);
@@ -820,8 +846,29 @@ mod tests {
 
     #[test]
     fn emits_utc_offset_zero() {
-        let utc = segment_local_name_to_utc("20260101", "000000").expect("valid");
+        let utc = segment_local_name_to_utc("20260101", "000000", None).expect("valid");
         let dt = chrono::DateTime::parse_from_rfc3339(&utc).expect("rfc3339");
         assert_eq!(dt.offset().local_minus_utc(), 0, "stored timestamp must be UTC");
+    }
+
+    /// Clocks go back in London on 2026-10-25: 01:00–02:00 local happens twice,
+    /// at 00:xx UTC (BST) and again at 01:xx UTC (GMT). The file's mtime decides.
+    #[test]
+    fn the_repeated_hour_is_resolved_by_when_the_file_was_written() {
+        let tz = chrono_tz::Europe::London;
+        let first  = chrono::DateTime::parse_from_rfc3339("2026-10-25T00:30:00Z").unwrap().timestamp();
+        let second = chrono::DateTime::parse_from_rfc3339("2026-10-25T01:30:00Z").unwrap().timestamp();
+        // Written 10 s after each start.
+        let a = local_name_to_utc(&tz, "20261025", "013000", Some(first + 10)).unwrap();
+        let b = local_name_to_utc(&tz, "20261025", "013000", Some(second + 10)).unwrap();
+        assert_eq!(a.timestamp(), first,  "first 01:30 (BST)");
+        assert_eq!(b.timestamp(), second, "second 01:30 (GMT)");
+        // No mtime: the earlier occurrence, never "now".
+        assert_eq!(local_name_to_utc(&tz, "20261025", "013000", None).unwrap().timestamp(), first);
+        // An ordinary time is unaffected by the hint.
+        let noon = local_name_to_utc(&tz, "20261025", "120000", Some(0)).unwrap();
+        assert_eq!(noon.to_rfc3339(), "2026-10-25T12:00:00+00:00");
+        // The skipped hour in spring (clocks go forward 2026-03-29 01:00) can't be one of ours.
+        assert!(local_name_to_utc(&tz, "20260329", "013000", None).is_none());
     }
 }

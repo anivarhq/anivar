@@ -197,6 +197,10 @@ ort = { version = "=2.0.0-rc.12", features = ["cuda"] }
 # dlopen for the managed CUDA libraries. Windows uses the DLL search path instead.
 libloading = "0.8"
 
+[dev-dependencies]
+# Real time-zone rules for the DST tests in nvr_pipes.rs. Tests only, never shipped.
+chrono-tz = "0.10"
+
 [profile.dev]
 debug = false  # no debug symbols — avoids MSVC LNK1318 PDB size limit with many crates
 
