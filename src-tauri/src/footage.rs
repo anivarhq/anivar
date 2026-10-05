@@ -198,10 +198,10 @@ pub(crate) async fn clip_start_meta(
             }
             None => (3, 10),
         };
-        let Some((cam_id, start_secs, _end, is_open)) = event_clip_window(&s.db, pre, post, id).await else {
+        let Some((cam_id, start_secs, _end, growing)) = event_clip_window(&s.db, pre, post, id).await else {
             return StatusCode::NOT_FOUND.into_response();
         };
-        let ms = if is_open {
+        let ms = if growing {
             crate::nvr_stream::snapped_playback_start_ms(&s.db, cam_id, start_secs).await
         } else {
             (start_secs * 1000.0) as i64 // cached clip is re-encoded frame-accurate
@@ -220,13 +220,15 @@ pub(crate) async fn clip_start_meta(
 /// buffers. Shared by `footage_clip` (streams the full event in-app) and
 /// `agent::clip_export::ensure_event_clip` (caps + exports the file the agent
 /// SENDS). `pre`/`post` are `record_pre_buffer_secs` / `record_post_buffer_secs`.
-/// Returns `(cam_id, start_secs, end_secs)` or `None` if the event is unknown.
+/// Returns `(cam_id, start_secs, end_secs, growing)` or `None` if the event is
+/// unknown. `growing` = the window can still get longer, so nothing may cache
+/// it (see `window_still_growing`).
 pub(crate) async fn event_clip_window(
     db: &sqlx::SqlitePool,
     pre: i64,
     post: i64,
     event_id: &str,
-) -> Option<(u8, f64, f64, bool)> {  // (cam_id, start_secs, end_secs, is_open/in-progress)
+) -> Option<(u8, f64, f64, bool)> {
     let row: Option<(i64, String, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT cam_id, started_at, ended_at, first_object_at FROM motion_events WHERE id=?"
     ).bind(event_id).fetch_optional(db).await.unwrap_or(None);
@@ -304,7 +306,16 @@ pub(crate) async fn event_clip_window(
         return None;
     }
     let end_secs = end_ts as f64;
-    Some((cam_id as u8, start_secs, end_secs, is_open))
+    Some((cam_id as u8, start_secs, end_secs, window_still_growing(is_open, end_ts, ended_ts + post, now_ts)))
+}
+
+/// Can this clip window still get longer? An open event's can. So can a closed
+/// one cut short of `wanted_end`: footage is indexed 8–20 s after it's recorded
+/// (`nvr_pipes`), and the clip pre-warmed at close was cached short for good.
+/// A minute past `wanted_end`, whatever is indexed is all there is (the camera
+/// stopped), so the window is final even if short.
+fn window_still_growing(is_open: bool, end_ts: i64, wanted_end: i64, now_ts: i64) -> bool {
+    is_open || (end_ts < wanted_end - 1 && now_ts < wanted_end + 60)
 }
 
 /// v12: serve the event's clip as a virtual slice of the continuous NVR
@@ -340,7 +351,7 @@ pub(crate) async fn footage_clip(
         None => (3, 10),
     };
 
-    let (cam_id, start_secs, end_secs, is_open) = match event_clip_window(&s.db, pre, post, &id).await {
+    let (cam_id, start_secs, end_secs, growing) = match event_clip_window(&s.db, pre, post, &id).await {
         Some(w) => w,
         None    => return StatusCode::NOT_FOUND.into_response(),
     };
@@ -348,7 +359,8 @@ pub(crate) async fn footage_clip(
     // needle exactly (clip frame 0 == start_secs), instead of guessing the event time.
     let start_ms = (start_secs * 1000.0) as i64;
 
-    // IN-PROGRESS events: NEVER serve/keep a cached file — the footage is still growing,
+    // IN-PROGRESS events (or closed ones whose last footage isn't indexed yet): NEVER
+    // serve/keep a cached file — the footage is still growing,
     // so a cached partial would be frozen + later served as the "final" clip. Stream the
     // play-so-far window FRESH each request (mature NVRs in-progress model). Only a CLOSED
     // event uses the cached, re-encoded file below.
@@ -356,7 +368,7 @@ pub(crate) async fn footage_clip(
     // PREFER (closed) the cached, RE-ENCODED clip file (frame-accurate, faststart, no
     // black edges) and serve it with HTTP range support so seeking/±10s is instant. The
     // on-the-fly `-c copy` concat is the fallback (it can show black at a mid-GOP start).
-    if !is_open {
+    if !growing {
     if let Some(st) = s.app_handle.try_state::<std::sync::Arc<crate::AppState>>() {
         if let Some(clip_path) = crate::agent::clip_export::ensure_event_clip(&st, &id).await {
             // Path-safety: the file must live under data_dir.
@@ -373,7 +385,7 @@ pub(crate) async fn footage_clip(
             }
         }
     }
-    } // end `if !is_open` — closed events serve the cached file; open events fall through
+    } // end `if !growing` — closed events serve the cached file; open events fall through
 
     // Fallback (closed, no cache) / IN-PROGRESS (open): on-the-fly bounded concat of the
     // play-so-far window — always fresh, nothing stale cached.
@@ -507,4 +519,20 @@ pub(crate) async fn footage_stream(
     headers.insert("Cache-Control", HeaderValue::from_static("no-cache, no-store"));
     headers.insert("Connection",    HeaderValue::from_static("close"));
     (StatusCode::OK, headers, body).into_response()
+}
+
+#[cfg(test)]
+mod clip_window_tests {
+    use super::window_still_growing;
+
+    #[test]
+    fn a_clip_cut_short_by_unindexed_footage_is_not_final() {
+        let wanted = 1_000;
+        assert!(window_still_growing(true, wanted, wanted, wanted + 600), "an open event grows");
+        assert!(window_still_growing(false, wanted - 8, wanted, wanted + 14),
+            "8 s short, 14 s after the end: the last segment isn't indexed yet");
+        assert!(!window_still_growing(false, wanted, wanted, wanted + 14), "complete: final");
+        assert!(!window_still_growing(false, wanted - 8, wanted, wanted + 61),
+            "still short a minute later: the camera stopped, final as it is");
+    }
 }

@@ -223,7 +223,7 @@ pub(crate) async fn ensure_event_clip(state: &Arc<AppState>, event_id: &str) -> 
         let g = state.settings.read().await;
         (g.record_pre_buffer_secs as i64, g.record_post_buffer_secs as i64)
     };
-    let (cam_id, start_secs, end_raw, is_open) =
+    let (cam_id, start_secs, end_raw, growing) =
         crate::footage::event_clip_window(&state.db, pre, post, event_id).await?;
     let end_secs = end_raw.min(start_secs + MAX_SENT_CLIP_SECS);
 
@@ -253,12 +253,13 @@ pub(crate) async fn ensure_event_clip(state: &Arc<AppState>, event_id: &str) -> 
     // then published — it is structurally sound by construction. Trust it so the
     // once-per-boot integrity probe never re-decodes our own clean output.
     mark_clip_verified(&out_str);
-    // Only CACHE (persist clip_path) for a CLOSED event — its footage is final. An OPEN
-    // (in-progress) event's clip is still growing; caching it would freeze the partial
-    // and serve it forever as the "final" clip. We still return the freshly-generated
-    // file (so Telegram/share of an in-progress event works), just don't persist it —
-    // the close-time pre-warm regenerates + caches the complete clip once the event ends.
-    if !is_open {
+    // Only CACHE (persist clip_path) a FINAL window. An open event's clip is still
+    // growing, and so is a closed one whose last footage isn't indexed yet (the
+    // close-time pre-warm often runs before it is); caching either would freeze the
+    // partial and serve it forever as the "final" clip. We still return the freshly
+    // generated file (so Telegram/share works now), just don't persist it — the next
+    // request regenerates, and caches once the window is complete.
+    if !growing {
         sqlx::query("UPDATE motion_events SET clip_path=? WHERE id=?")
             .bind(&out_str).bind(event_id)
             .execute(&state.db).await.ok();
