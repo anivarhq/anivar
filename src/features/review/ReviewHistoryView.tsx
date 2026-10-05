@@ -174,15 +174,20 @@ export function ReviewHistoryView({ camId, camName, dayStr, initialEventId, use1
       .then(ms => { if (alive) setEvents(ms.filter(m => (m.cam_id ?? 0) === camId).map(markerToEvent)); })
       .catch(() => {});
     setSegmentsLoaded(false);
-    api.listNvrRecordings(camId, fromUtc, toUtc)
+    const loadSegments = () => api.listNvrRecordings(camId, fromUtc, toUtc)
       .then(recs => { if (alive) { setSegments(recs as Segment[]); setSegmentsLoaded(true); } })
       .catch(() => { if (alive) setSegmentsLoaded(true); }); // failed fetch = treat as known-empty, don't hang undimmed
+    loadSegments();
+    // The camera keeps recording. One list, refreshed like Live's, feeds both
+    // the timeline and the player — a stale copy here drew new footage that a
+    // click couldn't play.
+    const refresh = window.setInterval(() => { if (!document.hidden) loadSegments(); }, 30_000);
     // Server-side review items → severity bands on the timeline.
     api.getReviewSegments(fromUtc, toUtc)
       .then(ss => { if (alive) setReviewSegs(ss.filter(s => s.cam_id === camId)); })
       .catch(() => {});
     loadBookmarkIds();
-    return () => { alive = false; };
+    return () => { alive = false; window.clearInterval(refresh); };
   }, [camId, day, ymd, loadBookmarkIds]);
 
   // Resolve the selectedEvent object once events arrive (for prev/next + anchor).
@@ -472,6 +477,7 @@ export function ReviewHistoryView({ camId, camName, dayStr, initialEventId, use1
           selectedDate={day}
           positionMs={playheadMs}
           events={events}
+          segments={segments}
           selectedEventId={clipSource.kind === "event" ? clipSource.eventId : undefined}
           onSeek={seekTo}
           onSelectEvent={jumpToEvent}

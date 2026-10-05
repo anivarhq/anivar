@@ -827,6 +827,7 @@ export function LivePanel() {
                   selectedEventId={selectedEvent?.id ?? null}
                   positionMs={clipSource.kind === "none" ? null : (playheadMs ?? trueAnchorMs ?? clipAnchorMs ?? null)}
                   events={focusedCamEvents}
+                  segments={focusedCamSegments}
                   onSelectEvent={(ev) => {
                     setSelectedEvent(ev);
                     setClipSource({ kind: "event", eventId: ev.id });
