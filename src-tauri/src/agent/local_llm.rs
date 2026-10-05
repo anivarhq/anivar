@@ -23,8 +23,10 @@
 //! serialization (one generation at a time, which is what a single model wants)
 //! and a natural place to drop the model after an idle timeout.
 //!
-//! Text-only by design. Vision stays with a vision provider — `agent::clip`
-//! already falls back to its text path when images aren't usable.
+//! Text by default. The Vision tier (LFM2.5-VL-1.6B) can also see: with its
+//! projector (`mmproj.gguf`) installed, `generate_vision` sends frames through
+//! llama.cpp's multimodal helper. The other tiers are text-only, and callers
+//! check `vision_ready` before sending images.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;

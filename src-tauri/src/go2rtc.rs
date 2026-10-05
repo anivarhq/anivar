@@ -8,7 +8,9 @@
 //! never answers and the frontend's ladder (WebRTC → HLS → MJPEG) keeps the
 //! live view working.
 //!
-//! Windows-only for now (this appliance); other platforms no-op → HLS.
+//! Windows, macOS and Linux (x86_64 and arm64), each from a hash-pinned
+//! release asset (`asset`). Any other platform has no asset, so live view stays
+//! on HLS. Only RTSP cameras are restreamed (`rtsp.rs`).
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
