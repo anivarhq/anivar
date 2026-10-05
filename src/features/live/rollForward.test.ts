@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { chunkDay, findChunk, chunkPlayableEnd, shouldAdvance, CHUNK_MS } from "./usePlayback";
+import { chunkDay, findChunk, chunkPlayableEnd, shouldAdvance, resumeAt, CHUNK_MS } from "./usePlayback";
 import { mergeSegmentBands, type Segment } from "../nvr/NVRPanel";
 import { dayBoundsUtc } from "../../lib/time";
 
@@ -189,5 +189,18 @@ describe("everything the timeline draws must be seekable", () => {
       expect(findChunk(chunks, t), `${new Date(t).toISOString()} unreachable`).not.toBe(-1);
     }
     expect(findChunk(chunks, dayTo)).not.toBe(-1);
+  });
+});
+
+describe("resumeAt", () => {
+  const next = { start: DAY + CHUNK_MS, end: DAY + 2 * CHUNK_MS };
+  it("resumes past the seconds the last chunk already played into this hour", () => {
+    // The segment that straddles 01:00 started at 00:59:55 and played to 01:00:05.
+    expect(resumeAt(next, next.start + 5000)).toBe(next.start + 5000);
+  });
+  it("starts at the beginning when the last chunk ended at or before the hour", () => {
+    expect(resumeAt(next, next.start - 3000)).toBeNull();
+    expect(resumeAt(next, next.start + 200)).toBeNull();
+    expect(resumeAt(next, null)).toBeNull();
   });
 });

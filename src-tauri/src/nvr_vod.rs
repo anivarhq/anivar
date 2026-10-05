@@ -376,11 +376,15 @@ async fn vod_window_segments(
         }
     };
 
-    let end_dt = chrono::DateTime::<Utc>::from_timestamp(end_secs.ceil() as i64 + 60, 0)
+    // A window holds the segments that START inside it. It used to reach 60 s
+    // past its end, so the last minute of each hour played again as the first
+    // minute of the next: that segment is the next window's, which starts at
+    // its own beginning (EXT-X-START above).
+    let end_dt = chrono::DateTime::<Utc>::from_timestamp(end_secs.ceil() as i64, 0)
         .unwrap_or_else(Utc::now).to_rfc3339();
     let rows: Vec<(String, String, String, Option<f64>, i64)> = sqlx::query_as(
         "SELECT id, path, started_at, duration_secs, has_audio FROM nvr_segments
-         WHERE cam_id=? AND started_at >= ? AND started_at <= ?
+         WHERE cam_id=? AND started_at >= ? AND started_at < ?
          ORDER BY started_at ASC")
         .bind(cam_id as i64).bind(&first_started).bind(&end_dt)
         .fetch_all(db).await.unwrap_or_default();
@@ -493,6 +497,31 @@ mod tests {
         // What the playlist writer sees, and why it can now emit the discontinuity.
         let gap = segs[1].start_unix - (segs[0].start_unix + segs[0].duration);
         assert!(gap > 1.5, "a real outage must still register as a gap, got {gap}");
+    }
+
+    /// Two back-to-back hourly windows share no segment except the one that
+    /// straddles the hour (the player resumes past it, see `resumeAt`). The
+    /// window used to reach 60 s into the next hour, replaying its first minute.
+    #[tokio::test]
+    async fn an_hour_window_stops_at_the_hour() {
+        let db = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE nvr_segments (id TEXT, cam_id INTEGER, path TEXT, started_at TEXT, duration_secs REAL, has_audio INTEGER)")
+            .execute(&db).await.unwrap();
+        let file = std::env::temp_dir().join("anivar-vod-window-test.ts");
+        std::fs::write(&file, b"x").unwrap();
+        let hour = 1_790_000_000 - 1_790_000_000 % 3600; // an exact hour, as unix seconds
+        for (i, offset) in [-20i64, -10, 0, 10, 20, 50].into_iter().enumerate() {
+            let at = chrono::DateTime::<Utc>::from_timestamp(hour + offset, 0).unwrap().to_rfc3339();
+            sqlx::query("INSERT INTO nvr_segments VALUES (?, 0, ?, ?, 10.0, 0)")
+                .bind(format!("s{i}")).bind(file.to_string_lossy().to_string()).bind(at)
+                .execute(&db).await.unwrap();
+        }
+        let before = vod_window_segments(&db, 0, (hour - 3600) as f64, hour as f64).await.unwrap();
+        let after = vod_window_segments(&db, 0, hour as f64, (hour + 3600) as f64).await.unwrap();
+        let ids = |v: &[VodSeg]| v.iter().map(|x| x.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&before), ["s0", "s1"], "the hour before ends with the last segment that starts in it");
+        assert_eq!(ids(&after), ["s2", "s3", "s4", "s5"], "the next hour starts at the hour");
+        let _ = std::fs::remove_file(&file);
     }
 
     /// The same rule at a scale nobody disputes.
