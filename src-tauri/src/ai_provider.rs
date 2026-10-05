@@ -76,12 +76,17 @@ pub async fn test_ai_provider(
             }))
         }
 
-        "openai" => {
-            if settings.openai_api_key.is_empty() {
-                return Ok(serde_json::json!({ "ok": false, "error": "Missing OpenAI API key" }));
+        // The OpenAI-shaped clouds: `GET {base}/models` with bearer auth.
+        "openai" | "groq" | "xai" => {
+            let (name, base, key) = match settings.ai_provider.as_str() {
+                "openai" => ("OpenAI", "https://api.openai.com/v1", &settings.openai_api_key),
+                "groq"   => ("Groq", "https://api.groq.com/openai/v1", &settings.groq_api_key),
+                _        => ("xAI", "https://api.x.ai/v1", &settings.xai_api_key),
+            };
+            if key.is_empty() {
+                return Ok(serde_json::json!({ "ok": false, "error": format!("Missing {name} API key") }));
             }
-            let req = client.get("https://api.openai.com/v1/models")
-                .bearer_auth(&settings.openai_api_key);
+            let req = client.get(format!("{base}/models")).bearer_auth(key);
             match send(req).await {
                 Ok(data) => {
                     let models: Vec<String> = data["data"].as_array()
@@ -99,22 +104,6 @@ pub async fn test_ai_provider(
             let req = client.get("https://api.anthropic.com/v1/models")
                 .header("x-api-key", &settings.anthropic_api_key)
                 .header("anthropic-version", "2023-06-01");
-            match send(req).await {
-                Ok(data) => {
-                    let models: Vec<String> = data["data"].as_array()
-                        .map(|a| a.iter().filter_map(|m| m["id"].as_str().map(|s| s.to_string())).collect())
-                        .unwrap_or_default();
-                    Ok(serde_json::json!({ "ok": true, "models": models, "count": models.len() }))
-                }
-                Err(e) => Ok(serde_json::json!({ "ok": false, "error": e })),
-            }
-        }
-        "groq" => {
-            if settings.groq_api_key.is_empty() {
-                return Ok(serde_json::json!({ "ok": false, "error": "Missing Groq API key" }));
-            }
-            let req = client.get("https://api.groq.com/openai/v1/models")
-                .bearer_auth(&settings.groq_api_key);
             match send(req).await {
                 Ok(data) => {
                     let models: Vec<String> = data["data"].as_array()
