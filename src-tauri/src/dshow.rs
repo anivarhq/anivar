@@ -226,6 +226,7 @@ async fn spawn_capture(
             // inside tee's bracket options breaks its parser) — see
             // tee_segment_hls_spec. Harmless for the non-recording variant.
             .current_dir(&data_dir_for_spawn)
+            .stdin(std::process::Stdio::piped()) // `q` on stop finishes the segment
             .stdout(std::process::Stdio::piped())
             // stderr piped → WARN log below: recording errors are now diagnosable
             // (the old null'd stderr hid dshow "buffer full, dropping" for months).

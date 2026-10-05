@@ -184,7 +184,13 @@ pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::
                 // leave the same trace: a log that simply stops. The file writer
                 // is unbuffered, so this line is on disk before exit returns.
                 tracing::info!("Quit Anivar chosen from the tray — exiting");
-                std::process::exit(0)
+                // Recorders finish their segments first; exiting straight away let
+                // the job object kill them mid-file, losing up to 10 s per camera.
+                let state = app.state::<Arc<AppState>>().inner().clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::nvr_recording::stop_all_recorders(&state).await;
+                    std::process::exit(0)
+                });
             }
             _ => {}
         })

@@ -122,6 +122,7 @@ pub async fn start_rtsp_relay(
     ].map(String::from));
     let mut child = crate::proc::tokio_cmd(&ffmpeg_bin)
         .args(&det_args)
+        .stdin(std::process::Stdio::piped()) // `q` on stop (proc::stop_ffmpeg)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true)
@@ -249,6 +250,7 @@ pub async fn start_rtsp_relay(
         }
         let rec = crate::proc::tokio_cmd(&ffmpeg_bin)
             .args(&rargs)
+            .stdin(std::process::Stdio::piped()) // `q` on stop finishes the segment
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
             .spawn();
@@ -306,8 +308,8 @@ pub async fn stop_rtsp_relay(state: State<'_, Arc<AppState>>, cam_id: u8) -> Res
 /// camera used to only flip `enabled=0` in the DB, leaving its ffmpeg holding
 /// the webcam (LED on) until the whole app exited.
 pub(crate) async fn stop_capture_for_cam(state: &Arc<AppState>, cam_id: u8) {
-    if let Some(mut child) = state.rtsp_processes.lock().await.remove(&cam_id) {
-        child.kill().await.ok();
+    if let Some(child) = state.rtsp_processes.lock().await.remove(&cam_id) {
+        crate::proc::stop_ffmpeg(child).await; // a USB capture records: finish the segment
         state.app_handle.emit("rtsp:stopped", serde_json::json!({ "cam_id": cam_id })).ok();
         tracing::info!("capture stopped for cam{}", cam_id);
     }
@@ -324,8 +326,8 @@ pub(crate) async fn stop_capture_for_cam(state: &Arc<AppState>, cam_id: u8) {
     let is_rtsp_cam = state.capture_keys.lock().await.get(&cam_id)
         .map(|k| k.starts_with("rtsp:")).unwrap_or(false);
     if is_rtsp_cam {
-        if let Some(mut child) = state.nvr_processes.lock().await.remove(&cam_id) {
-            child.kill().await.ok();
+        if let Some(child) = state.nvr_processes.lock().await.remove(&cam_id) {
+            crate::proc::stop_ffmpeg(child).await;
         }
     }
     // Close any open audio event so it doesn't linger as perpetually in-progress.

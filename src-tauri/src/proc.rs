@@ -35,6 +35,23 @@ pub fn tokio_cmd(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Comman
     c
 }
 
+/// Stop an ffmpeg the way `q` at its console does, so it finishes the file it
+/// is writing. An MP4 segment's index (`moov`) is written last: a killed
+/// recorder left its segment unreadable, and up to 10 s of footage per camera
+/// was deleted at every camera stop, quit and update. `q` goes to stdin when we
+/// hold it (spawn with stdin piped). A pipe recorder's stdin is its frame pipe:
+/// the caller closes it first by dropping its sender, and end-of-input ends it
+/// the same way. Killed if it hasn't exited after 3 s.
+pub async fn stop_ffmpeg(mut child: tokio::process::Child) {
+    use tokio::io::AsyncWriteExt;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(b"q").await;
+    }
+    if tokio::time::timeout(std::time::Duration::from_secs(3), child.wait()).await.is_err() {
+        let _ = child.kill().await;
+    }
+}
+
 /// Put THIS process into a Job Object with KILL_ON_JOB_CLOSE, so every child we
 /// spawn (ffmpeg recorders/detection pipes, ollama, ...) dies with us
 /// — including Task Manager force-kills and crashes. Without this, a force-killed

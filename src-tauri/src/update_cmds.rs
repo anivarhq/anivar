@@ -23,7 +23,7 @@ use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 /// One install at a time: a click on "Install and restart" while the
@@ -36,11 +36,15 @@ fn check_err(e: impl std::fmt::Display) -> String {
 }
 
 async fn find_update(app: &AppHandle) -> Result<Option<Update>, String> {
+    let handle = app.clone();
     app.updater_builder()
-        .on_before_exit(|| {
+        .on_before_exit(move || {
             // Said out loud for the same reason the tray's Quit is: otherwise an
             // update and a crash leave the same trace, a log that just stops.
             tracing::info!("update: handing over to the installer — exiting");
+            // The installer is written and about to start: recorders finish their
+            // segments now (this hook is sync, called from the install task).
+            finish_recordings(&handle);
             #[cfg(windows)]
             crate::proc::let_next_children_outlive_us();
         })
@@ -114,7 +118,16 @@ fn install(app: &AppHandle, update: &Update, bytes: Vec<u8>) -> Result<(), Strin
     update.install(bytes).map_err(|e| format!("Couldn't install the update: {e}"))?;
     // Windows never gets here (the plugin exits into the installer). On macOS
     // and Linux the new version is on disk and only runs after a restart.
+    finish_recordings(app);
     app.restart()
+}
+
+/// Recorders finish their segments before the process goes away. Blocking:
+/// both callers are sync code running on the async runtime's worker threads.
+fn finish_recordings(app: &AppHandle) {
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    tokio::task::block_in_place(|| tauri::async_runtime::block_on(
+        crate::nvr_recording::stop_all_recorders(&state)));
 }
 
 /// True while any camera has an event open (`ended_at IS NULL` — see db.rs,
