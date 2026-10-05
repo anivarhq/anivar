@@ -46,31 +46,61 @@ pub fn tokio_cmd(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Comman
 /// boot-time orphan sweep remains the only safety net.
 #[cfg(windows)]
 pub fn adopt_kill_on_close_job() {
-    use windows::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    };
+    use windows::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE};
     use windows::Win32::System::Threading::GetCurrentProcess;
     unsafe {
         let job = match CreateJobObjectW(None, None) {
             Ok(h) => h,
             Err(e) => { tracing::warn!("job object create failed: {e}"); return; }
         };
-        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        if let Err(e) = SetInformationJobObject(
-            job,
-            JobObjectExtendedLimitInformation,
-            &info as *const _ as *const std::ffi::c_void,
-            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-        ) {
+        if let Err(e) = set_job_limits(job, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE) {
             tracing::warn!("job object limit set failed: {e}");
             return;
         }
         if let Err(e) = AssignProcessToJobObject(job, GetCurrentProcess()) {
             tracing::warn!("job object assign failed: {e}");
+            return;
         }
+        JOB.store(job.0 as usize, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+#[cfg(windows)]
+static JOB: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(windows)]
+unsafe fn set_job_limits(
+    job: windows::Win32::Foundation::HANDLE,
+    flags: windows::Win32::System::JobObjects::JOB_OBJECT_LIMIT,
+) -> windows::core::Result<()> {
+    use windows::Win32::System::JobObjects::{
+        JobObjectExtendedLimitInformation, SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    };
+    let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    info.BasicLimitInformation.LimitFlags = flags;
+    SetInformationJobObject(
+        job,
+        JobObjectExtendedLimitInformation,
+        &info as *const _ as *const std::ffi::c_void,
+        std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+    )
+}
+
+/// Called just before the updater launches the installer and exits: from now
+/// on, processes we start are NOT put in the job. Without this the installer
+/// joined the job and was killed with us the instant we exited, so "Install
+/// and restart" downloaded the update, closed the app, and installed nothing
+/// (0.1.6 and 0.1.7). Children already running (ffmpeg, go2rtc) stay in the
+/// job and still die with us.
+/// ponytail: a child another thread spawns in the milliseconds before exit
+/// also escapes; the boot-time orphan sweep catches it.
+#[cfg(windows)]
+pub fn let_next_children_outlive_us() {
+    use windows::Win32::System::JobObjects::{JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK};
+    let job = JOB.load(std::sync::atomic::Ordering::SeqCst);
+    if job == 0 { return; } // never joined a job: nothing holds the installer
+    let job = windows::Win32::Foundation::HANDLE(job as *mut std::ffi::c_void);
+    if let Err(e) = unsafe { set_job_limits(job, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK) } {
+        tracing::warn!("job object breakaway failed — the installer may not start: {e}");
     }
 }
 #[cfg(not(windows))]

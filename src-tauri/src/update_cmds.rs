@@ -15,7 +15,8 @@
 //!             bundle is replaced in place and we restart.
 //!
 //! ffmpeg/go2rtc children die with the process through the Job Object, the
-//! same as any other exit.
+//! same as any other exit. The installer must not: it is let out of the job
+//! just before it starts (`proc::let_next_children_outlive_us`).
 
 use crate::state::AppState;
 use serde_json::json;
@@ -40,6 +41,8 @@ async fn find_update(app: &AppHandle) -> Result<Option<Update>, String> {
             // Said out loud for the same reason the tray's Quit is: otherwise an
             // update and a crash leave the same trace, a log that just stops.
             tracing::info!("update: handing over to the installer — exiting");
+            #[cfg(windows)]
+            crate::proc::let_next_children_outlive_us();
         })
         .build()
         .map_err(check_err)?
@@ -51,16 +54,20 @@ async fn find_update(app: &AppHandle) -> Result<Option<Update>, String> {
 /// Settings → Updates → "Check for Updates".
 #[tauri::command]
 pub async fn update_check(app: AppHandle) -> Result<serde_json::Value, String> {
-    let current = app.package_info().version.to_string();
     Ok(match find_update(&app).await? {
-        Some(u) => json!({
-            "available": true,
-            "current":   current,
-            "latest":    u.version,
-            "notes":     u.body.clone().unwrap_or_default(),
-            "date":      u.date.map(|d| d.date().to_string()),
-        }),
-        None => json!({ "available": false, "current": current }),
+        Some(u) => info(&u),
+        None => json!({ "available": false, "current": app.package_info().version.to_string() }),
+    })
+}
+
+/// What the UI shows about an available update (Settings and the sidebar).
+fn info(u: &Update) -> serde_json::Value {
+    json!({
+        "available": true,
+        "current":   u.current_version,
+        "latest":    u.version,
+        "notes":     u.body.clone().unwrap_or_default(),
+        "date":      u.date.map(|d| d.date().to_string()),
     })
 }
 
@@ -120,7 +127,9 @@ async fn event_in_progress(db: &sqlx::SqlitePool) -> bool {
         .unwrap_or(true) // can't tell → assume busy; the wait below is bounded
 }
 
-/// Background check, 2 minutes after launch and every 6 hours after.
+/// Background check, 30 seconds after launch (once boot has settled) and every
+/// 6 hours after, roughly what Chrome does. What it finds shows as an arrow in
+/// the sidebar until it's installed.
 ///
 /// `auto_update_check` (default on): tell the UI an update exists.
 /// `auto_update_install` (default off): also download it, wait for a quiet
@@ -129,7 +138,7 @@ async fn event_in_progress(db: &sqlx::SqlitePool) -> bool {
 /// takes effect before the next network call or the install.
 pub(crate) fn spawn_auto_update(state: Arc<AppState>) {
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(120)).await;
+        tokio::time::sleep(Duration::from_secs(30)).await;
         loop {
             auto_update_once(&state).await;
             tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
@@ -147,7 +156,9 @@ async fn auto_update_once(state: &AppState) {
         Err(e) => { tracing::warn!("update: {e}"); return; }
     };
     let auto = settings().await.1;
-    let _ = app.emit("update:available", json!({ "latest": update.version, "auto": auto }));
+    let mut payload = info(&update);
+    payload["auto"] = json!(auto);
+    let _ = app.emit("update:available", payload);
     if !auto { return; }
     if INSTALLING.swap(true, Ordering::SeqCst) { return; }
 
