@@ -10,6 +10,7 @@ import { PersonsPanel } from "./features/persons/PersonsPanel";
 import { AgentPanel }   from "./features/agent/AgentPanel";
 import { Arsenal }      from "./features/agent/Arsenal";
 import { SettingsPanel } from "./features/settings/SettingsPanel";
+import { UpdateBadge, watchUpdates } from "./features/settings/UpdateStatus";
 import { Onboarding, isOnboarded, markOnboarded } from "./features/onboarding/Onboarding";
 import { Toast }        from "./components/ui/Toast";
 import { LoginGate }    from "./features/auth/LoginGate";
@@ -121,19 +122,8 @@ export default function App() {
     return () => { un.then(f => f()); };
   }, []);
 
-  // The background update check (update_cmds.rs) found a newer release. Said
-  // once per version per session — the check repeats every 6 h.
-  useEffect(() => {
-    const told = new Set<string>();
-    const un = listen<{ latest: string; auto: boolean }>("update:available", (e) => {
-      if (told.has(e.payload.latest)) return;
-      told.add(e.payload.latest);
-      useStore.getState().showToast(e.payload.auto
-        ? `Anivar ${e.payload.latest} is downloading — it installs once no event is in progress`
-        : `Anivar ${e.payload.latest} is available — install it from Settings → App Updates`, "info");
-    });
-    return () => { un.then(f => f()); };
-  }, []);
+  // In-app updates: the background check, progress and the "updated" note.
+  useEffect(() => watchUpdates(), []);
 
   // ── Desktop login gate ──────────────────────────────────────────────────
   // `checked` gates the first render; `locked` shows the LoginGate. On boot we
@@ -230,6 +220,7 @@ export default function App() {
         </nav>
 
         <div className={styles.sidebarFooter} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+          <UpdateBadge className={styles.iconBtn} activeClassName={styles.iconBtnActive} />
           <TelemetryPopover />
           <UserMenu
             onOpenSecurity={() => { goTab("settings"); setTimeout(() => document.getElementById("s-security")?.scrollIntoView({ behavior: "smooth", block: "start" }), 120); }}

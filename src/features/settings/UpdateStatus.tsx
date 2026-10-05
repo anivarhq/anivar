@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { AlertCircle, ArrowDownCircle, CheckCircle2, ExternalLink, RefreshCw } from "lucide-react";
 import { api, type UpdateInfo } from "../../api";
 import { openExternal } from "../../lib/openExternal";
+import { useStore } from "../../store";
 import styles from "./SettingsPanel.module.css";
 
 type Phase =
@@ -15,9 +16,59 @@ type Phase =
   | { k: "installing"; latest?: string }
   | { k: "error"; title: string; detail: string; info?: UpdateInfo };
 
-// The last result outlives the Settings panel, so reopening it doesn't ask
+// One update state for the whole app: the sidebar badge and the Settings card
+// are two views of it, and it outlives both, so reopening Settings doesn't ask
 // GitHub again or forget an update it already found.
-let remembered: Phase = { k: "idle" };
+let phase: Phase = { k: "idle" };
+const subscribers = new Set<() => void>();
+function setPhase(p: Phase) { phase = p; subscribers.forEach(f => f()); }
+const usePhase = () => useSyncExternalStore(
+  f => { subscribers.add(f); return () => { subscribers.delete(f); }; },
+  () => phase,
+);
+const infoOf = (p: Phase) => ("info" in p ? p.info : undefined);
+
+async function check() {
+  setPhase({ k: "checking" });
+  try {
+    const info = await api.updateCheck();
+    setPhase(info.available ? { k: "available", info } : { k: "current", info, at: new Date() });
+  } catch (e) { setPhase(failure(e)); }
+}
+
+// On success the app exits into the installer (Windows) or restarts, so
+// only a failure ever comes back here.
+async function install(info: UpdateInfo) {
+  setPhase({ k: "downloading", info, got: 0, total: null });
+  try { await api.updateInstall(); }
+  catch (e) { setPhase(failure(e, info)); }
+}
+
+/** Called once by App. Follows the background updater (update_cmds.rs): what
+ *  it finds, and the progress of an install whoever started it. Also says,
+ *  once, that an update just landed. */
+export function watchUpdates(): () => void {
+  getVersion().then(v => {
+    let last: string | null = null;
+    try { last = localStorage.getItem("sc-last-version"); localStorage.setItem("sc-last-version", v); } catch { /* private mode */ }
+    if (last && last !== v) useStore.getState().showToast(`Updated to Anivar NVR ${v}`, "success");
+  }).catch(() => {});
+  const busy = () => phase.k === "downloading" || phase.k === "installing";
+  const offs = [
+    listen<UpdateInfo & { auto: boolean }>("update:available", e => {
+      if (busy()) return;
+      const fresh = infoOf(phase)?.latest !== e.payload.latest;
+      setPhase({ k: "available", info: e.payload });
+      if (fresh) useStore.getState().showToast(e.payload.auto
+        ? `Anivar NVR ${e.payload.latest} is downloading — it installs once no event is in progress`
+        : `Anivar NVR ${e.payload.latest} is available — install it from the arrow in the sidebar`, "info");
+    }),
+    listen<{ downloaded: number; total: number | null }>("update:progress", e =>
+      setPhase({ k: "downloading", info: infoOf(phase), got: e.payload.downloaded, total: e.payload.total })),
+    listen<{ latest: string }>("update:installing", e => setPhase({ k: "installing", latest: e.payload.latest })),
+  ];
+  return () => { offs.forEach(p => p.then(f => f())); };
+}
 
 /** The changelog's top-level bullets, by section ("Added" → "New"). The
  *  manifest's notes are the whole release page — download steps, the
@@ -57,38 +108,11 @@ const released = (d?: string | null) => {
 const MAX_ITEMS = 8;
 
 export function UpdateStatus({ autoCheck }: { autoCheck: boolean }) {
-  const [phase, setPhaseState] = useState<Phase>(remembered);
+  const phase = usePhase();
   const [version, setVersion] = useState("");
-  const setPhase = (p: Phase) => { remembered = p; setPhaseState(p); };
-
-  const check = async () => {
-    setPhase({ k: "checking" });
-    try {
-      const info = await api.updateCheck();
-      setPhase(info.available ? { k: "available", info } : { k: "current", info, at: new Date() });
-    } catch (e) { setPhase(failure(e)); }
-  };
-
-  // On success the app exits into the installer (Windows) or restarts, so
-  // only a failure ever comes back here.
-  const install = async (info: UpdateInfo) => {
-    setPhase({ k: "downloading", info, got: 0, total: null });
-    try { await api.updateInstall(); }
-    catch (e) { setPhase(failure(e, info)); }
-  };
-
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});
-    if (autoCheck && remembered.k === "idle") check();
-    // The automatic path (update_cmds.rs) downloads and installs on its own;
-    // its progress shows here too, whoever started it.
-    const known = () => ("info" in remembered ? remembered.info : undefined);
-    const offs = [
-      listen<{ downloaded: number; total: number | null }>("update:progress", e =>
-        setPhase({ k: "downloading", info: known(), got: e.payload.downloaded, total: e.payload.total })),
-      listen<{ latest: string }>("update:installing", e => setPhase({ k: "installing", latest: e.payload.latest })),
-    ];
-    return () => { offs.forEach(p => p.then(f => f())); };
+    if (autoCheck && phase.k === "idle") check();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -184,6 +208,44 @@ export function UpdateStatus({ autoCheck }: { autoCheck: boolean }) {
           <button className={styles.updLink} onClick={() => openExternal(releaseUrl(latest))}>
             {total > MAX_ITEMS ? `All ${total} changes` : "Full release notes"} <ExternalLink size={11} />
           </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Sidebar arrow, shown only while there's an update to act on. One click
+ *  opens the same card as Settings → App Updates, with Install and restart. */
+export function UpdateBadge({ className, activeClassName }: { className: string; activeClassName: string }) {
+  const phase = usePhase();
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => { if (!wrapRef.current?.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+
+  const info = infoOf(phase);
+  const shown = phase.k === "available" || phase.k === "downloading" || phase.k === "installing"
+    || (phase.k === "error" && info?.available);
+  if (!shown) return null;
+  const label = phase.k === "downloading" ? "Downloading the update"
+    : phase.k === "installing" ? "Installing the update"
+    : `Anivar NVR ${info?.latest ?? ""} is available`;
+  return (
+    <div ref={wrapRef} style={{ position: "relative", display: "flex", justifyContent: "center" }}>
+      <button title={label} aria-label={label} aria-expanded={open} onClick={() => setOpen(o => !o)}
+        className={`${className} ${open ? activeClassName : ""}`} style={{ color: "var(--accent)" }}>
+        <ArrowDownCircle size={18} />
+        {phase.k === "available" && <span className={styles.updDot} />}
+      </button>
+      {open && (
+        <div className={styles.updPopover} role="dialog" aria-label="App update">
+          <UpdateStatus autoCheck={false} />
         </div>
       )}
     </div>

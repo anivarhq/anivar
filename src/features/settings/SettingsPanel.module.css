@@ -524,6 +524,22 @@ select.numInput { text-align: left; padding-right: 22px; cursor: pointer; }
   font-size: 12px; color: var(--accent);
 }
 .updLink:hover { color: var(--accent-light); }
+.updDot {
+  position: absolute; top: 6px; right: 6px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg-base);
+}
+.updPopover {
+  position: absolute; left: calc(100% + 12px); bottom: 0; z-index: 4000;
+  width: 420px; max-width: calc(100vw - 96px);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  box-shadow: 0 18px 50px rgba(0,0,0,0.5);
+  text-align: left;
+}
+.updPopover .updCard { border-bottom: none; }
 @media (prefers-reduced-motion: reduce) {
   .updBar > .updBarIndeterminate { animation: none; width: 100%; opacity: 0.4; }
 }
