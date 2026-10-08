@@ -1513,7 +1513,8 @@ export function SettingsPanel() {
 
           <Field label="Default share-link expiry" more="How long a 'Share Live View' / 'Share Clip' URL stays valid. Shorter = safer; longer = more convenient.">
             <select value={form.live_share_default_minutes ?? 30}
-              onChange={e => patch("live_share_default_minutes", parseInt(e.target.value, 10) || 30)}
+              // 0 is a real choice ("Until app restart"), so never `|| 30`.
+              onChange={e => { const v = parseInt(e.target.value, 10); patch("live_share_default_minutes", Number.isNaN(v) ? 30 : v); }}
               className={styles.numInput} style={{ width: 180 }}>
               <option value={15}>15 minutes</option>
               <option value={30}>30 minutes (default)</option>
