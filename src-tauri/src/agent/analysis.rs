@@ -9,21 +9,7 @@
 //! callers, and it exclusively owned the alert-rule evaluator, which is why
 //! user-written rules never fired.
 
-use serde::Deserialize;
-
 // ─── Core analysis ────────────────────────────────────────────────────────────
-
-pub(super) fn format_detections(json: Option<&str>) -> String {
-    let Some(j) = json else { return "none".to_string() };
-    #[derive(Deserialize)]
-    struct Det { label: String, score: f32 }
-    let Ok(dets) = serde_json::from_str::<Vec<Det>>(j) else { return "none".to_string() };
-    if dets.is_empty() { return "none".to_string() }
-    dets.iter()
-        .map(|d| format!("{} ({:.0}%)", d.label, d.score * 100.0))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
 
 // `analyze_event` DELETED. It was the legacy analysis path with no callers —
 // and it exclusively owned `evaluate_alert_conditions`, which is why the

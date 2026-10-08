@@ -14,7 +14,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use base64::Engine as _;
@@ -1476,7 +1475,18 @@ pub async fn analyze_event_clip(state: Arc<AppState>, event_id: String) {
         let (dom, cat, at) = row.unwrap_or((None, None, String::new()));
         (super::conditions::event_category_of(dom.as_deref().unwrap_or(""), cat.as_deref().unwrap_or("")), at)
     };
-    let should_alert = super::conditions::channel_alert_allowed(&settings, &risk_level, cam_id, category);
+    // A rule the user subscribed to ("anyone at the shed after dark") alerts
+    // whatever the risk threshold or quiet hours say, judged at the event's own
+    // hour. A camera turned off for alerts, or a muted category, still wins.
+    let event_hour = chrono::DateTime::parse_from_rfc3339(&started_at)
+        .map(|t| chrono::Timelike::hour(&t.with_timezone(&chrono::Local)))
+        .unwrap_or_else(|_| chrono::Timelike::hour(&chrono::Local::now()));
+    let rule_forced = super::memory::any_subscribe_rule_matches(
+        &state.db, category, &threat_type, &risk_level, event_hour).await
+        && !settings.alert_disabled_cameras.contains(&cam_id)
+        && !settings.alert_muted_categories.iter().any(|c| c == category);
+    let should_alert = rule_forced
+        || super::conditions::channel_alert_allowed(&settings, &risk_level, cam_id, category);
 
     // ── The user's plain-English alert rules ────────────────────────────────
     // "Tell me if anyone's at the shed after dark." This call is why the feature
@@ -2043,18 +2053,6 @@ pub(super) async fn run_daily_digest_loop_removed(state: Arc<AppState>) {
     }
 }
 
-/// List all memory entries whose key starts with a given prefix.
-pub(super) async fn list_memory_by_prefix(db: &SqlitePool, prefix: &str) -> Vec<(String, String)> {
-    let pattern = format!("{prefix}%");
-    sqlx::query_as::<_, (String, String)>(
-        "SELECT key, value FROM agent_memory WHERE key LIKE ? ORDER BY updated_at DESC LIMIT 20"
-    )
-    .bind(&pattern)
-    .fetch_all(db)
-    .await
-    .unwrap_or_default()
-}
-
 // ── on-device assistants intelligence extensions ──────────────────────────────────────────
 
 /// Dispatch an intelligence alert (loitering, crowd, repeat visitor) through
@@ -2076,7 +2074,7 @@ pub async fn dispatch_intelligence_alert(state: &Arc<AppState>, alert_type: &str
         // A silently-dead camera is a security hole — critical, survives quiet hours.
         "camera_offline" => ("other", "critical"),
         "camera_online"  => ("other", "monitor"),
-        "crowd" | "loitering" | "repeat_visitor" | "intrusion" | "running" | "climbing"
+        "crowd" | "loitering" | "intrusion" | "running" | "climbing"
             | "person crossing" => ("person", "suspicious"),
         // Someone on the ground: "fall" is deliberately NOT a mutable category and
         // critical survives quiet hours.

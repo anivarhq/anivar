@@ -124,21 +124,6 @@ pub(super) fn provider_supports_vision(settings: &crate::Settings) -> bool {
     !matches!(settings.ai_provider.as_str(), "local" | "")
 }
 
-/// As [`provider_supports_vision`], but knows about the on-device **Vision tier**.
-///
-/// Needs the data dir because "can this engine see" is, for on-device, a question
-/// about which files are on disk: the VL weights AND their projector. A VL model
-/// without its projector loads happily and then describes nothing, so both are
-/// checked.
-///
-/// Deliberately NOT merged into `provider_supports_vision`: most callers only
-/// hold `Settings`, and a version that silently answered "no" when it couldn't
-/// see the disk would be the same trap as keying off `vision_model`.
-pub(super) fn can_see(settings: &crate::Settings, data_dir: &std::path::Path) -> bool {
-    if provider_supports_vision(settings) { return true; }
-    super::local_llm::vision_ready(data_dir, &settings.local_llm_tier)
-}
-
 /// Is the active engine strong enough to JUDGE — risk level, threat type, "is this
 /// the same event as that one"?
 ///
@@ -174,38 +159,6 @@ pub(super) fn provider_can_classify_risk(settings: &crate::Settings) -> bool {
 pub(super) fn thinking_model(model: &str) -> bool {
     let m = model.to_lowercase();
     ["qwen3", "deepseek-r1", "magistral", "gpt-oss"].iter().any(|p| m.starts_with(p))
-}
-
-/// Belt-and-suspenders for thinking models that IGNORE `think:false` (qwen3-vl
-/// does, and Ollama doesn't extract the tags on tool-enabled requests): strip
-/// literal `<think>…</think>` blocks from content. An UNCLOSED `<think>` (the
-/// budget ran out mid-reasoning) keeps its tail — silently returning an empty
-/// string there gave the user a blank bubble and no explanation.
-pub(super) fn strip_think(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    loop {
-        match rest.find("<think>") {
-            None => { out.push_str(rest); break; }
-            Some(i) => {
-                out.push_str(&rest[..i]);
-                match rest[i..].find("</think>") {
-                    Some(j) => rest = &rest[i + j + "</think>".len()..],
-                    // Truncated mid-think. Keeping the reasoning is ugly; the
-                    // alternative is worse — dropping the tail returned an
-                    // EMPTY string and the user got a blank bubble with no clue
-                    // why. `usable()` still rejects it if it is genuinely junk.
-                    None => {
-                        out.push_str(rest[i + "<think>".len()..].trim());
-                        break;
-                    }
-                }
-            }
-        }
-    }
-    // qwen3-vl with /no_think wraps the reply in <answer>…</answer> — unwrap
-    // the markers, keep the reply.
-    out.replace("<answer>", "").replace("</answer>", "").trim().to_string()
 }
 
 /// Is this reply fit to show a human?
@@ -307,19 +260,6 @@ pub(super) fn context_limit(settings: &Settings) -> usize {
     // slightly generous costs a truncated prompt; being wrong the other way
     // wastes most of a large window.
     32_768
-}
-
-/// Rough token count for a prompt.
-///
-/// ~4 characters per token is the standard English approximation, and it is what
-/// BOTH paths use — including on-device. Counting exactly there would mean
-/// loading the GGUF just to tokenise, which is a model load to draw a progress
-/// ring. The estimate is good to roughly ±20 %, which is fine for "how full is
-/// this" and for choosing a row budget; the place where exactness actually
-/// matters — not overrunning the KV cache — is handled properly at generation
-/// time by `local_llm::split_context`, which tokenises for real.
-pub(super) fn estimate_tokens(text: &str) -> usize {
-    text.len().div_ceil(4)
 }
 
 /// Unified LLM call — routes to the correct provider based on settings.

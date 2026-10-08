@@ -16,7 +16,6 @@
 //! | [`clip`]    | THE event analysis pipeline (`analyze_event_clip`): face/plate recognition + multi-frame recall + frame annotation + VLM + live-event + backfill |
 //! | [`util`]    | Status helper, snapshot test, disk-guard, heartbeat, cross-camera context              |
 
-#![allow(dead_code)]
 
 mod analysis;
 mod chat;

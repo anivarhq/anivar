@@ -18,8 +18,6 @@ use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use super::types::*;
-use super::llm::call_llm;
-use crate::Settings;
 
 // ─── Memory helpers ───────────────────────────────────────────────────────────
 
@@ -142,73 +140,6 @@ pub async fn get_relevant_memories_for_event(db: &SqlitePool, cam_id: u8) -> Str
     else { parts.join("\n") }
 }
 
-/// Extract patterns from a completed event analysis and update memory.
-/// This is the "Curate" step of the observe/curate/execute memory loop.
-pub async fn extract_and_store_patterns(
-    db: &SqlitePool,
-    cam_id: u8,
-    event_time: &str,
-    risk_level: &str,
-    threat_type: &str,
-    ai_summary: Option<&str>,
-    detections_json: Option<&str>,
-) {
-    use chrono::Timelike as _;
-    use chrono::Datelike as _;
-    let dt = chrono::DateTime::parse_from_rfc3339(event_time)
-        .map(|t| t.with_timezone(&chrono::Local))
-        .unwrap_or_else(|_| chrono::Local::now());
-    let hour  = dt.hour();
-    let dow   = dt.weekday().to_string().to_lowercase(); // "mon", "tue", etc.
-    let night = !(6..22).contains(&hour);
-    let time_slot = if night { "night" }
-        else if hour < 12 { "morning" }
-        else if hour < 18 { "afternoon" }
-        else { "evening" };
-
-    // Pattern 1: Activity at this time slot
-    let activity_key = format!("pattern_cam{}_activity_{}_{}", cam_id, dow, time_slot);
-    let activity_val = format!("{} at {} {} ({})", threat_type, dow, time_slot, risk_level);
-    reinforce_memory(db, &activity_key, &activity_val, "learned").await;
-
-    // Pattern 2: Risk level at this time
-    if risk_level == "suspicious" || risk_level == "critical" {
-        let risk_key = format!("pattern_cam{}_high_risk_{}", cam_id, time_slot);
-        let risk_val = format!("High-risk events tend to occur in the {time_slot} ({dow})");
-        reinforce_memory(db, &risk_key, &risk_val, "learned").await;
-    }
-
-    // Pattern 3: Object/detection patterns
-    if let Some(det_json) = detections_json {
-        if let Ok(dets) = serde_json::from_str::<serde_json::Value>(det_json) {
-            let labels: Vec<String> = dets.as_array().unwrap_or(&vec![])
-                .iter()
-                .filter_map(|d| d.get("label").and_then(|l| l.as_str()).map(|s| s.to_string()))
-                .collect::<std::collections::HashSet<_>>().into_iter().collect();
-            for label in labels {
-                let obj_key = format!("pattern_cam{}_object_{}_{}", cam_id, label.to_lowercase(), time_slot);
-                let obj_val = format!("{} detected during {} ({})", label, time_slot, dow);
-                reinforce_memory(db, &obj_key, &obj_val, "learned").await;
-            }
-        }
-    }
-
-    // Pattern 4: AI summary observation log
-    if let Some(summary) = ai_summary {
-        if !summary.is_empty() {
-            let obs_key = format!("pattern_cam{}_observation_{}", cam_id, &Uuid::new_v4().to_string()[..8]);
-            let obs_val = format!("[{} {}] {}", dow, time_slot, summary);
-            // Single observation (confirmations=1), only persists if reinforced later
-            let now = Utc::now().to_rfc3339();
-            sqlx::query(
-                "INSERT OR IGNORE INTO agent_memory(key,value,updated_at,score,confirmations,created_at,memory_type)
-                 VALUES(?,?,?,0.5,1,?,?)"
-            ).bind(&obs_key).bind(obs_val).bind(&now).bind(&now).bind("learned")
-            .execute(db).await.ok();
-        }
-    }
-}
-
 // ─── OpenClaw-style narrative memory files ────────────────────────────────────
 //
 // Memory is stored as structured markdown in a small set of "files" (SQLite keys):
@@ -261,7 +192,20 @@ pub async fn append_memory_file(db: &SqlitePool, category: &str, entry: &str) {
 /// Lives here, not in the Telegram executor where it grew up, because BOTH
 /// surfaces need it: subscribing worked on Telegram and printed as literal
 /// `[SUBSCRIBE_ALERT:…]` text in the app.
-pub(super) fn parse_alert_rule(inner: &str) -> AlertRule {
+/// An hour of the day from "22", "6", "22:00" or "06:30" (whole hours: rule
+/// windows are hour-granular, and the minutes are dropped).
+fn parse_hour(v: &str) -> Option<u32> {
+    let (h, m) = v.trim().split_once(':').unwrap_or((v.trim(), "0"));
+    let (h, m): (u32, u32) = (h.trim().parse().ok()?, m.trim().parse().ok()?);
+    (h <= 23 && m <= 59).then_some(h)
+}
+
+/// Is `hour` inside the window? Wraps midnight when start > end (22-06).
+pub(super) fn hour_in_window(start: u32, end: u32, hour: u32) -> bool {
+    if start <= end { hour >= start && hour < end } else { hour >= start || hour < end }
+}
+
+pub(super) fn parse_alert_rule(inner: &str) -> Result<AlertRule, String> {
     let parts: Vec<&str> = inner.splitn(2, '|').collect();
     let mut rule = AlertRule {
         id: Uuid::new_v4().to_string()[..8].to_string(),
@@ -278,15 +222,20 @@ pub(super) fn parse_alert_rule(inner: &str) -> AlertRule {
         if let Some(v) = kv.strip_prefix("type=") {
             rule.threat_type = Some(v.trim().to_lowercase());
         } else if let Some(v) = kv.strip_prefix("hours=") {
-            if let Some((a, b)) = v.split_once('-') {
-                rule.hours_start = a.trim().parse().ok();
-                rule.hours_end   = b.trim().parse().ok();
-            }
+            // "22:00-06:00" used to fail to parse and leave the rule with NO
+            // window, which the matcher reads as "always". A window that can't be
+            // read is refused, never widened to the whole day.
+            let window = v.split_once('-').and_then(|(a, b)| Some((parse_hour(a)?, parse_hour(b)?)));
+            let Some((a, b)) = window else {
+                return Err(format!("I couldn't read the hours “{}”. Use a range like 22-06 or 22:00-06:00.", v.trim()));
+            };
+            rule.hours_start = Some(a);
+            rule.hours_end   = Some(b);
         } else if let Some(v) = kv.strip_prefix("min_risk=") {
             rule.min_risk = Some(v.trim().to_lowercase());
         }
     }
-    rule
+    Ok(rule)
 }
 
 /// One-line human confirmation of a saved rule, for whichever surface asked.
@@ -329,32 +278,30 @@ pub(super) async fn load_alert_rules(db: &SqlitePool) -> Vec<AlertRule> {
         .collect()
 }
 
-/// Returns true if any subscriber rule forces an alert for this event (Agies: event_subscribe).
-/// Used in dispatch to override the normal risk threshold gate.
-pub(super) async fn any_subscribe_rule_matches(db: &SqlitePool, threat_type: &str, risk: &str) -> bool {
-    use chrono::Timelike as _;
-    let rules = load_alert_rules(db).await;
-    if rules.is_empty() { return false; }
-    let hour = chrono::Local::now().hour();
+/// Does this saved rule want an alert for this event? `kind` matches either the
+/// event's category (person, vehicle, …) or its threat type; `hour` is the
+/// event's local hour.
+pub(super) fn rule_matches(rule: &AlertRule, category: &str, threat_type: &str, risk: &str, hour: u32) -> bool {
     let risk_rank = |r: &str| match r { "critical" => 3, "suspicious" => 2, "monitor" => 1, _ => 0 };
-    for rule in rules {
-        // Check threat_type
-        if let Some(ref rt) = rule.threat_type {
-            if rt != threat_type { continue; }
-        }
-        // Check time window (wraps midnight when start > end, e.g. 22-06)
-        if let (Some(hs), Some(he)) = (rule.hours_start, rule.hours_end) {
-            let in_window = if hs <= he { hour >= hs && hour < he }
-                            else        { hour >= hs || hour < he };
-            if !in_window { continue; }
-        }
-        // Check min_risk
-        if let Some(ref mr) = rule.min_risk {
-            if risk_rank(risk) < risk_rank(mr) { continue; }
-        }
-        if rule.force_alert { return true; }
+    if let Some(kind) = &rule.threat_type {
+        if kind != category && kind != threat_type { return false; }
     }
-    false
+    if let (Some(start), Some(end)) = (rule.hours_start, rule.hours_end) {
+        if !hour_in_window(start, end, hour) { return false; }
+    }
+    if let Some(min) = &rule.min_risk {
+        if risk_rank(risk) < risk_rank(min) { return false; }
+    }
+    rule.force_alert
+}
+
+/// Does any rule the user subscribed to (`[SUBSCRIBE_ALERT]`) force an alert for
+/// this event? Until now nothing called this: the assistant said "Alert rule
+/// added" and the rule never fired.
+pub(super) async fn any_subscribe_rule_matches(
+    db: &SqlitePool, category: &str, threat_type: &str, risk: &str, hour: u32,
+) -> bool {
+    load_alert_rules(db).await.iter().any(|r| rule_matches(r, category, threat_type, risk, hour))
 }
 
 /// Format all alert rules for display in chat / Telegram.
@@ -684,72 +631,6 @@ pub async fn read_core_memory(db: &SqlitePool) -> String {
     parts.join("\n\n")
 }
 
-/// Ask the LLM to consolidate a verbose memory key into a clean, actionable summary.
-/// Routes through the unified `call_llm` dispatcher so this honours the user's
-/// SELECTED provider (OpenAI / Claude / Gemini / …), not just Ollama — closing the
-/// last hardcoded-Ollama inference site.
-pub(super) async fn consolidate_memory_key(
-    settings: &Settings,
-    key: &str,
-    raw: &str,
-) -> Option<String> {
-    let system = "You are a memory consolidator for a security AI. \
-        Given a raw log of observations, rewrite it as a concise, structured summary. \
-        Preserve all factual patterns. Remove duplicates. Keep it under 300 words. \
-        Respond with plain text only — no JSON, no markdown.";
-    let user = format!("Consolidate this memory log for key '{key}':\n\n{raw}");
-    // Plain text (no JSON mode), no images.
-    call_llm(settings, system, &user, None, false)
-        .await
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
-/// Apply memory updates produced by an analysis response.
-pub(super) async fn apply_memory_updates(
-    db: &SqlitePool,
-    settings: &Settings,
-    updates: &MemoryUpdates,
-) {
-    if let Some(ref p) = updates.patterns {
-        if !p.trim().is_empty() {
-            append_memory(db, "patterns", p).await;
-            // Consolidate when patterns log gets long
-            if let Some(raw) = read_memory(db, "patterns").await {
-                if raw.lines().count() >= 30 {
-                    if let Some(clean) = consolidate_memory_key(settings, "patterns", &raw).await {
-                        write_memory(db, "patterns", &clean).await;
-                    }
-                }
-            }
-        }
-    }
-    if let Some(ref fp) = updates.known_false_positives {
-        if !fp.trim().is_empty() {
-            append_memory(db, "known_false_positives", fp).await;
-        }
-    }
-    if let Some(ref tr) = updates.threat_rules {
-        if !tr.trim().is_empty() {
-            write_memory(db, "threat_rules", tr).await;
-        }
-    }
-    // camera_profile is intentionally NOT auto-updated from VLM memory_updates.
-    // The VLM reliably hallucinates room-object inventories (e.g. "orange chair, desk,
-    // mirror") which then feed back into every analysis, creating a permanent loop.
-    // Users set camera_profile manually via Settings; the VLM reads it but cannot write it.
-    let _ = &updates.camera_profile; // consumed but not stored
-    if let Some(ref notes) = updates.person_notes {
-        for (person, note) in notes {
-            if !note.trim().is_empty() {
-                let key = format!("person:{}", person.to_lowercase().replace(' ', "_"));
-                append_memory(db, &key, note).await;
-            }
-        }
-    }
-}
-
 
 #[cfg(test)]
 mod recall_tests {
@@ -809,5 +690,44 @@ mod recall_tests {
             facts[1].when.unwrap().format("%Y-%m-%d").to_string(),
             "2026-07-22",
         );
+    }
+}
+
+#[cfg(test)]
+mod alert_rule_tests {
+    use super::{hour_in_window, parse_alert_rule, rule_matches};
+    use super::super::conditions::hhmm_in_window;
+
+    #[test]
+    fn both_hour_forms_parse_and_garbage_is_refused() {
+        for raw in ["night|hours=22-06", "night|hours=22:00-06:00", "night|hours=22 - 6"] {
+            let r = parse_alert_rule(raw).unwrap();
+            assert_eq!((r.hours_start, r.hours_end), (Some(22), Some(6)), "{raw}");
+        }
+        for bad in ["night|hours=late", "night|hours=25-06", "night|hours=22"] {
+            assert!(parse_alert_rule(bad).is_err(), "{bad} must not become an all-day rule");
+        }
+        assert_eq!(parse_alert_rule("any person|type=person").unwrap().hours_start, None, "no hours: all day, on purpose");
+    }
+
+    #[test]
+    fn windows_wrap_midnight() {
+        assert!(hour_in_window(22, 6, 23) && hour_in_window(22, 6, 0) && hour_in_window(22, 6, 5));
+        assert!(!hour_in_window(22, 6, 6) && !hour_in_window(22, 6, 12) && !hour_in_window(22, 6, 21));
+        assert!(hour_in_window(9, 17, 9) && !hour_in_window(9, 17, 17));
+        assert!(hhmm_in_window("22:00", "07:00", "23:30") && hhmm_in_window("22:00", "07:00", "06:59"));
+        assert!(!hhmm_in_window("22:00", "07:00", "07:00") && !hhmm_in_window("22:00", "07:00", "12:00"));
+        assert!(hhmm_in_window("13:00", "14:00", "13:15") && !hhmm_in_window("13:00", "14:00", "14:00"));
+    }
+
+    #[test]
+    fn a_rule_fires_for_its_kind_hours_and_risk() {
+        let r = parse_alert_rule("person at night|type=person|hours=22-06|min_risk=suspicious").unwrap();
+        assert!(rule_matches(&r, "person", "loitering", "suspicious", 23));
+        assert!(!rule_matches(&r, "person", "loitering", "suspicious", 14), "daytime");
+        assert!(!rule_matches(&r, "vehicle", "normal", "critical", 23), "another kind");
+        assert!(!rule_matches(&r, "person", "normal", "monitor", 23), "below its minimum risk");
+        let by_threat = parse_alert_rule("loitering|type=loitering").unwrap();
+        assert!(rule_matches(&by_threat, "person", "loitering", "monitor", 12), "type can name the threat too");
     }
 }
