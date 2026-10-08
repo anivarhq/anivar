@@ -539,13 +539,7 @@ pub async fn execute(state: &Arc<AppState>, name: &str, args: &Value) -> Option<
                 });
             }
             let known = state.settings.read().await.known_plates.clone();
-            let name_of = |plate: &str| -> Option<String> {
-                known.lines().find_map(|l| l.split_once('=').and_then(|(p, n)| {
-                    if p.trim().eq_ignore_ascii_case(plate) && !n.trim().is_empty() {
-                        Some(n.trim().to_string())
-                    } else { None }
-                }))
-            };
+            let name_of = |plate: &str| crate::alpr::match_known_plate(plate, &known);
             let mut out = String::from("Vehicles in the last 30 days:\n");
             for (plate, n, last) in rows {
                 let label = name_of(&plate).map(|n| format!(" ({n})")).unwrap_or_default();

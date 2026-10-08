@@ -837,7 +837,7 @@ pub async fn analyze_event_clip(state: Arc<AppState>, event_id: String) {
         let label_refs: Vec<&str> = parsed_dets.iter().map(|d| d.label.as_str()).collect();
         let dominant = dominant_label(&label_refs);
         let plate_name = recognised_plate.as_deref()
-            .and_then(|p| match_known_plate(p, &settings.known_plates));
+            .and_then(|p| crate::alpr::match_known_plate(p, &settings.known_plates));
         let sub_label: Option<String> = if !recognised_names.is_empty() {
             Some(recognised_names.join(", "))
         } else {
@@ -1367,7 +1367,7 @@ pub async fn analyze_event_clip(state: Arc<AppState>, event_id: String) {
     }
     if let Some(p) = &recognised_plate {
         let mut a = serde_json::json!({ "type": "plate", "value": p, "score": recognised_plate_score.unwrap_or(0.0) });
-        if let Some(n) = match_known_plate(p, &settings.known_plates) { a["known_name"] = serde_json::json!(n); }
+        if let Some(n) = crate::alpr::match_known_plate(p, &settings.known_plates) { a["known_name"] = serde_json::json!(n); }
         attributes.push(a);
     }
     if let Some((c, share)) = &vehicle_color {
@@ -1718,45 +1718,6 @@ fn build_embed_text(
         }
     }
     parts.join(". ")
-}
-
-/// Match a recognised plate against the user's `known_plates` setting
-/// ("PLATE=Name" per line). Normalises both sides to uppercase alphanumerics and
-/// accepts an exact match OR a 1-character edit distance (OCR tolerance, mature NVRs
-/// `match_distance`). Returns the friendly name when matched.
-fn match_known_plate(plate: &str, known_plates: &str) -> Option<String> {
-    let norm = |s: &str| s.chars().filter(|c| c.is_ascii_alphanumeric())
-        .flat_map(|c| c.to_uppercase()).collect::<String>();
-    let target = norm(plate);
-    if target.is_empty() { return None; }
-    for line in known_plates.lines() {
-        let line = line.trim();
-        let Some((pat, name)) = line.split_once('=') else { continue };
-        let pat_n = norm(pat);
-        let name = name.trim();
-        if pat_n.is_empty() || name.is_empty() { continue; }
-        if pat_n == target || levenshtein(&pat_n, &target) <= 1 {
-            return Some(name.to_string());
-        }
-    }
-    None
-}
-
-/// Levenshtein edit distance (plates are short, so the O(n·m) DP is trivial).
-fn levenshtein(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
-    let mut cur = vec![0usize; b.len() + 1];
-    for (i, ca) in a.iter().enumerate() {
-        cur[0] = i + 1;
-        for (j, cb) in b.iter().enumerate() {
-            let cost = if ca == cb { 0 } else { 1 };
-            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
-        }
-        std::mem::swap(&mut prev, &mut cur);
-    }
-    prev[b.len()]
 }
 
 // ─── Live event monitoring loop ───────────────────────────────────────────────
