@@ -357,12 +357,11 @@ pub(crate) async fn spawn_nvr_pipe(
 }
 
 
-/// Does this MP4 carry an audio track? Walks the top-level boxes to `moov`
-/// (front or back of the file) and looks for a `hdlr` whose handler type is
-/// `soun`. Same answer as `ffmpeg -i` (checked on real segments, a video-only
-/// copy and the oldest archive segment) without a process per segment.
-/// `None` when the file isn't a parseable MP4.
-pub(crate) fn mp4_has_audio<R: std::io::Read + std::io::Seek>(r: &mut R) -> Option<bool> {
+/// The body of an MP4's `moov` box, wherever it is (front with faststart, back
+/// without). `None` when the file isn't a parseable MP4 or has no `moov` yet (a
+/// segment still being written, or one killed before ffmpeg wrote it). The
+/// header questions below all start here, so none of them needs an ffmpeg.
+pub(crate) fn read_moov<R: std::io::Read + std::io::Seek>(r: &mut R) -> Option<Vec<u8>> {
     use std::io::SeekFrom;
     let len = r.seek(SeekFrom::End(0)).ok()?;
     let mut pos = 0u64;
@@ -386,13 +385,57 @@ pub(crate) fn mp4_has_audio<R: std::io::Read + std::io::Seek>(r: &mut R) -> Opti
             let body = (size - hdr_len).min(16 << 20) as usize;
             let mut buf = vec![0u8; body];
             r.read_exact(&mut buf).ok()?;
-            // hdlr box: size, "hdlr", version+flags, pre_defined, handler_type.
-            return Some((0..buf.len().saturating_sub(15)).any(|i|
-                &buf[i..i + 4] == b"hdlr" && &buf[i + 12..i + 16] == b"soun"));
+            return Some(buf);
         }
         pos = pos.checked_add(size)?;
     }
     None
+}
+
+/// Does this MP4 carry an audio track? A `hdlr` whose handler type is `soun`.
+/// Same answer as `ffmpeg -i` (checked on real segments, a video-only copy and
+/// the oldest archive segment) without a process per segment.
+pub(crate) fn mp4_has_audio<R: std::io::Read + std::io::Seek>(r: &mut R) -> Option<bool> {
+    read_moov(r).map(|m| moov_has_audio(&m))
+}
+
+fn moov_has_audio(moov: &[u8]) -> bool {
+    // hdlr box: size, "hdlr", version+flags, pre_defined, handler_type.
+    (0..moov.len().saturating_sub(15)).any(|i|
+        &moov[i..i + 4] == b"hdlr" && &moov[i + 12..i + 16] == b"soun")
+}
+
+/// The movie's duration in seconds, from `mvhd` (a direct child of `moov`).
+pub(crate) fn mp4_duration(moov: &[u8]) -> Option<f64> {
+    let mut pos = 0usize;
+    while pos + 8 <= moov.len() {
+        let size = u32::from_be_bytes(moov[pos..pos + 4].try_into().ok()?) as usize;
+        if size < 8 { return None; }
+        if &moov[pos + 4..pos + 8] == b"mvhd" {
+            let b = moov.get(pos + 8..pos + size)?;
+            // version 0: 32-bit times; version 1: 64-bit. Both: timescale, then duration.
+            let (scale, dur) = if b.first()? == &1 {
+                (u32::from_be_bytes(b.get(20..24)?.try_into().ok()?) as f64,
+                 u64::from_be_bytes(b.get(24..32)?.try_into().ok()?) as f64)
+            } else {
+                (u32::from_be_bytes(b.get(12..16)?.try_into().ok()?) as f64,
+                 u32::from_be_bytes(b.get(16..20)?.try_into().ok()?) as f64)
+            };
+            return (scale > 0.0).then(|| dur / scale);
+        }
+        pos += size;
+    }
+    None
+}
+
+/// Is the video H.264 in a 4:4:4 or 4:2:2 profile, which WebView2 can't decode?
+/// The `avcC` record's profile byte: 244 (High 4:4:4 Predictive), 122 (High
+/// 4:2:2) or 44 (CAVLC 4:4:4). `stsd`, which holds `avcC`, comes before the
+/// sample tables in `stbl`, so the first match is the real one.
+pub(crate) fn mp4_needs_420(moov: &[u8]) -> bool {
+    moov.windows(4).position(|w| w == b"avcC")
+        .and_then(|i| moov.get(i + 5))
+        .is_some_and(|p| matches!(p, 44 | 122 | 244))
 }
 
 /// Powers the per-segment `has_audio` flag that playback uses to decide
@@ -651,19 +694,23 @@ pub(crate) async fn reindex_existing_nvr_segments(nvr_dir: &std::path::Path, db:
             .unwrap_or_else(|| Utc::now().to_rfc3339());
         let start_unix = chrono::DateTime::parse_from_rfc3339(&started_at_rfc)
             .map(|t| t.timestamp() as u64).unwrap_or(0);
-        let duration_secs = mtime_secs
+        // The header says how long the segment is. The old guess (file time minus
+        // the start, minus 15 s) could over-declare a segment's length, and before
+        // a gap that made hls.js jump forward to escape the hole.
+        let p = path.clone();
+        let moov = tokio::task::spawn_blocking(move ||
+            std::fs::File::open(&p).ok().and_then(|mut f| read_moov(&mut f)))
+            .await.ok().flatten();
+        let duration_secs = moov.as_deref().and_then(mp4_duration).unwrap_or_else(|| mtime_secs
             .map(|mt| mt.saturating_sub(start_unix).saturating_sub(15).max(10))
-            .unwrap_or(60) as f64;
-        let ended_unix = start_unix + duration_secs as u64;
+            .unwrap_or(60) as f64);
+        let ended_unix = start_unix + duration_secs.round() as u64;
         let ended_at_rfc = chrono::DateTime::<Utc>::from_timestamp(ended_unix as i64, 0)
             .unwrap_or_else(Utc::now).to_rfc3339();
 
         // has_audio was left out here, so it defaulted to 0: every segment
         // recovered after a DB reset played silent, and exports dropped audio.
-        let p = path.clone();
-        let has_audio = tokio::task::spawn_blocking(move ||
-            std::fs::File::open(&p).ok().and_then(|mut f| mp4_has_audio(&mut f)))
-            .await.ok().flatten().unwrap_or(false);
+        let has_audio = moov.as_deref().is_some_and(moov_has_audio);
 
         let seg_id = uuid::Uuid::new_v4().to_string();
         sqlx::query(
@@ -823,6 +870,40 @@ mod tests {
         assert!(finished.exists(), "a segment stopped with `q` is footage");
         assert!(!killed.exists(), "a segment with no moov is unreadable");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn mp4_duration_reads_mvhd_in_both_versions() {
+        let mvhd = |version: u8, scale: u32, dur: u64| {
+            let mut b = vec![version, 0, 0, 0];
+            if version == 1 {
+                b.extend([0u8; 16]);                       // creation + modification
+                b.extend(scale.to_be_bytes());
+                b.extend(dur.to_be_bytes());
+            } else {
+                b.extend([0u8; 8]);
+                b.extend(scale.to_be_bytes());
+                b.extend((dur as u32).to_be_bytes());
+            }
+            b.extend([0u8; 80]);                           // rate, volume, matrix, …
+            mp4_box(b"mvhd", &b)
+        };
+        assert_eq!(mp4_duration(&mvhd(0, 1000, 10_040)), Some(10.04));
+        let mut moov = mp4_box(b"trak", b"");                 // mvhd needn't be first
+        moov.extend(mvhd(1, 90_000, 903_600));
+        assert_eq!(mp4_duration(&moov), Some(10.04));
+        assert_eq!(mp4_duration(&mp4_box(b"trak", b"")), None);
+    }
+
+    #[test]
+    fn only_a_4_4_4_or_4_2_2_profile_needs_a_transcode() {
+        // avcC: configurationVersion, then AVCProfileIndication.
+        let avcc = |profile: u8| mp4_box(b"stsd", &mp4_box(b"avcC", &[1, profile, 0, 31]));
+        assert!(mp4_needs_420(&avcc(244)), "High 4:4:4 Predictive (legacy yuvj444p)");
+        assert!(mp4_needs_420(&avcc(122)), "High 4:2:2");
+        assert!(!mp4_needs_420(&avcc(100)), "High: what every camera and recorder writes");
+        assert!(!mp4_needs_420(&avcc(66)), "Baseline");
+        assert!(!mp4_needs_420(b"no avcC at all (H.265, or not video)"));
     }
 
     #[test]

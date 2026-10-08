@@ -124,59 +124,20 @@ pub(crate) async fn nvr_vod_playlist(
     (StatusCode::OK, headers, Body::from(m3u8)).into_response()
 }
 
-/// Per-segment "needs 4:2:0 transcode" verdict — cached because segments are
-/// immutable, so the answer never changes. LEGACY footage recorded before the
+/// Does this segment need a 4:2:0 transcode? LEGACY footage recorded before the
 /// USB recorder forced 4:2:0 is H.264 4:4:4 (`yuvj444p`), which Chromium/WebView2
-/// CANNOT decode — the NVR timeline played black. Those segments get re-encoded to
-/// 4:2:0 on serve; all new (4:2:0) footage keeps the zero-cost `-c copy` path. The
-/// verdict is probed once via `ffmpeg -i` stderr (we ship ffmpeg, not ffprobe —
-/// same approach as `file_has_audio`).
-static SEG_NEEDS_420: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, bool>>> =
-    std::sync::OnceLock::new();
-
-async fn segment_needs_420_transcode(ffmpeg: &std::path::Path, seg_id: &str, path: &str) -> bool {
-    if let Some(v) = SEG_NEEDS_420.get_or_init(Default::default).lock().unwrap().get(seg_id).copied() {
-        return v;
-    }
-    // Single-flight: the probe is a whole awaited ffmpeg process and the cache is
-    // only written after it returns, so concurrent requests for the same cold
-    // segment each spawned their own.
-    //
-    // ponytail: one global gate, not per-id. The probe only fires for cold LEGACY
-    // 4:4:4 segments, so contention is negligible; store the verdict as a column
-    // on `nvr_segments` at index time if it ever shows up in a profile.
-    static PROBE_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-    let _permit = PROBE_GATE.lock().await;
-    if let Some(v) = SEG_NEEDS_420.get_or_init(Default::default).lock().unwrap().get(seg_id).copied() {
-        return v; // filled while we waited on the gate
-    }
-    // Bounded: this runs on the request path while holding PROBE_GATE, so a
-    // hung ffmpeg used to block every cold segment request queued behind it.
-    let probe = crate::proc::tokio_cmd(ffmpeg)
-        .args(["-hide_banner", "-i", path])
-        .kill_on_drop(true)
-        .output();
-    let out = tokio::time::timeout(std::time::Duration::from_secs(20), probe).await
-        .unwrap_or_else(|_| Err(std::io::Error::other("4:4:4 probe timed out")));
-    let needs = match out {
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            let vline = stderr.lines().find(|l| l.contains("Video:")).unwrap_or("");
-            // 4:2:0 tokens (yuv420p/yuvj420p/nv12) contain "420" → decodable, copy.
-            // Only clear 4:4:4 / 4:2:2 needs a transcode; anything ambiguous stays copy.
-            if vline.contains("420") { false } else { vline.contains("444") || vline.contains("422") }
-        }
-        Err(_) => false,
-    };
-    {
-        let mut m = SEG_NEEDS_420.get_or_init(Default::default).lock().unwrap();
-        // Bound the cache across a long session — heavy scrubbing over days adds
-        // one entry per distinct segment served, and old segments age out of
-        // retention anyway. Wholesale clear is fine: re-probing is one ffmpeg -i.
-        if m.len() > 4096 { m.clear(); }
-        m.insert(seg_id.to_string(), needs);
-    }
-    needs
+/// CANNOT decode, so the NVR timeline played black. Those segments get re-encoded
+/// to 4:2:0 on serve; everything else keeps the zero-cost `-c copy` path.
+///
+/// Read from the file's header (the `avcC` profile). This used to be an `ffmpeg -i`
+/// probe behind ONE app-wide lock, run for every segment because the answer isn't
+/// known until the probe runs: a cold hour queued ~360 probes one at a time.
+async fn segment_needs_420(path: &str) -> bool {
+    let p = path.to_string();
+    tokio::task::spawn_blocking(move || std::fs::File::open(&p).ok()
+        .and_then(|mut f| crate::nvr_pipes::read_moov(&mut f))
+        .is_some_and(|m| crate::nvr_pipes::mp4_needs_420(&m)))
+        .await.unwrap_or(false)
 }
 
 /// GET /nvr-vod/seg/:file?o=MEDIA_SECS  (`file` = `<segment-uuid>.ts`)
@@ -220,7 +181,7 @@ pub(crate) async fn nvr_vod_segment(
 
     // Legacy 4:4:4 segments can't be decoded by WebView2 — re-encode those to 4:2:0.
     // All new footage is 4:2:0 and takes the zero-transcode copy path.
-    let needs_420 = segment_needs_420_transcode(&ffmpeg, id, &path).await;
+    let needs_420 = segment_needs_420(&path).await;
 
     let mut args: Vec<String> = vec![
         "-hide_banner".into(), "-loglevel".into(), "error".into(),
