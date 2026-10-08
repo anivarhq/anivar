@@ -149,17 +149,16 @@ fn local_name_to_utc<Tz: chrono::TimeZone>(tz: &Tz, date_part: &str, time_part: 
 // Zero browser involvement: no MediaRecorder, no IPC round-trip, no UI thread.
 
 /// standard NVR pipeline:
-///   1. Record JPEG frames → ffmpeg → .tmp.mp4 segments (no special movflags)
-///   2. When a segment completes, post-process with -movflags +faststart → .mp4
-///   3. list_nvr_recordings only exposes .mp4 (post-processed, seekable) files
-///   4. .tmp.mp4 files are cleaned up on startup (orphans from killed sessions)
+///   1. Record → ffmpeg → `nvr/incoming/*.tmp.mp4` 10-second segments
+///   2. A finished segment (rotated, `moov` written) is renamed into `nvr/` and
+///      indexed in `nvr_segments` (`postprocess_nvr_segments`)
+///   3. Everything reads the DB, never the directory
 ///
-/// This mirrors mature NVRs exactly: record to cache, migrate with faststart.
 /// Output-side args for NVR segment recording — the SINGLE definition of the
 /// segment contract (gop/keyframes/10s cuts/tmp naming), shared by the legacy
 /// pipe recorder and the merged capture+record ffmpeg so they can never drift.
 pub(crate) fn segment_output_args(cam_id: u8, nvr_dir: &std::path::Path) -> Vec<String> {
-    let pattern = nvr_dir.join(format!("cam{}_%Y%m%d_%H%M%S.tmp.mp4", cam_id));
+    let pattern = incoming_dir(nvr_dir).join(format!("cam{}_%Y%m%d_%H%M%S.tmp.mp4", cam_id));
     vec![
         "-g".into(), "30".into(),
         "-force_key_frames".into(), "expr:gte(t,n_forced*1)".into(),
@@ -183,7 +182,7 @@ pub(crate) fn segment_output_args(cam_id: u8, nvr_dir: &std::path::Path) -> Vec<
 pub(crate) fn tee_segment_hls_spec(cam_id: u8) -> Vec<String> {
     let seg = format!(
         "[f=segment:segment_time=10:segment_format=mp4:reset_timestamps=1:\
-segment_time_delta=0.05:strftime=1]nvr/cam{cam_id}_%Y%m%d_%H%M%S.tmp.mp4");
+segment_time_delta=0.05:strftime=1]nvr/incoming/cam{cam_id}_%Y%m%d_%H%M%S.tmp.mp4");
     // discont_start: a respawned capture continues the previous playlist
     // (append_list) with a fresh encoder timeline — without the DISCONTINUITY
     // tag the player hits the PTS jump, errors, and re-attaches in a loop
@@ -219,13 +218,10 @@ pub(crate) async fn ensure_postprocessor(
     if RUNNING.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return; // already running
     }
-    let ffmpeg = match ensure_ffmpeg(data_dir).await {
-        Ok(f) => f,
-        Err(e) => { tracing::warn!("postprocessor: no ffmpeg: {e}"); RUNNING.store(false, std::sync::atomic::Ordering::SeqCst); return; }
-    };
     let nvr_dir = data_dir.join("nvr");
+    let _ = tokio::fs::create_dir_all(incoming_dir(&nvr_dir)).await;
     tokio::spawn(async move {
-        postprocess_nvr_segments(ffmpeg, nvr_dir, app_handle, db).await;
+        postprocess_nvr_segments(nvr_dir, app_handle, db).await;
     });
 }
 
@@ -239,7 +235,7 @@ pub(crate) async fn spawn_nvr_pipe(
 ) -> anyhow::Result<(tokio::sync::mpsc::Sender<Arc<Vec<u8>>>, tokio::process::Child)> {
     let ffmpeg   = ensure_ffmpeg(data_dir).await?;
     let nvr_dir  = data_dir.join("nvr");
-    tokio::fs::create_dir_all(&nvr_dir).await?;
+    tokio::fs::create_dir_all(incoming_dir(&nvr_dir)).await?;
     // Segment length: 10 SECONDS, matching mature NVRs. Short segments are the key to
     // CLIP AVAILABILITY — the segment covering a just-happened event rotates +
     // finalizes within seconds, so its clip plays on the first click instead of
@@ -438,55 +434,50 @@ pub(crate) fn mp4_needs_420(moov: &[u8]) -> bool {
         .is_some_and(|p| matches!(p, 44 | 122 | 244))
 }
 
-/// Powers the per-segment `has_audio` flag that playback uses to decide
-/// whether to map audio. Reads the MP4 header; only an unparseable file falls
-/// back to an `ffmpeg -i` probe, which is bounded so a hung ffmpeg can't stall
-/// the single postprocessor loop every camera's indexing goes through.
-async fn file_has_audio(ffmpeg: &std::path::Path, file: &std::path::Path) -> bool {
-    let p = file.to_path_buf();
-    let scanned = tokio::task::spawn_blocking(move ||
-        std::fs::File::open(&p).ok().and_then(|mut f| mp4_has_audio(&mut f)))
-        .await.ok().flatten();
-    if let Some(v) = scanned { return v; }
-    let probe = crate::proc::tokio_cmd(ffmpeg)
-        .args(["-hide_banner", "-i", &file.to_string_lossy()])
-        .kill_on_drop(true)
-        .output();
-    match tokio::time::timeout(std::time::Duration::from_secs(20), probe).await {
-        Ok(Ok(o)) => String::from_utf8_lossy(&o.stderr).contains(" Audio:"),
-        _ => false,
-    }
+/// Where recorders write the segment in progress. Finished segments are RENAMED
+/// out into `nvr/`, so the post-processor lists a handful of files every 2 s,
+/// never the archive (about 60k files per camera at 7-day retention).
+pub(crate) fn incoming_dir(nvr_dir: &std::path::Path) -> std::path::PathBuf {
+    nvr_dir.join("incoming")
 }
 
-/// Watches the NVR directory for completed .tmp.mp4 segments and converts them
-/// to seekable faststart .mp4 files.  A segment is "complete" when it has not
-/// been modified for at least segment_secs + 30 seconds (meaning ffmpeg has
-/// rotated to the next file).
-/// standard segment post-processor.
-/// Converts completed .tmp.mp4 → faststart .mp4 then indexes them in nvr_segments DB.
-/// The DB is the single source of truth — list_nvr_recordings and nvr_concat both
-/// query it instead of scanning the filesystem.
+/// Move a finished segment (ffmpeg has written its `moov`) out of `incoming/`
+/// into `nvr/`, returning its new path and the `moov`. `Ok(None)`: no `moov`,
+/// so the file can't be read (yet, or ever if ffmpeg was killed writing it).
+fn finish_segment(nvr_dir: &std::path::Path, tmp: &std::path::Path)
+    -> std::io::Result<Option<(std::path::PathBuf, Vec<u8>)>>
+{
+    let Some(moov) = std::fs::File::open(tmp).ok().and_then(|mut f| read_moov(&mut f)) else {
+        return Ok(None);
+    };
+    let name = tmp.file_name().unwrap_or_default().to_string_lossy().replace(".tmp.mp4", ".mp4");
+    let dest = nvr_dir.join(name);
+    std::fs::rename(tmp, &dest)?;
+    Ok(Some((dest, moov)))
+}
+
+/// Finalises segments as they finish. A segment is finished once ffmpeg has
+/// rotated away from it (no writes for a few seconds) and has written its
+/// `moov`. Finalising is a rename into `nvr/` plus a row in `nvr_segments`: the
+/// DB is the single source of truth, and every reader of these files is ffmpeg,
+/// which doesn't need faststart. (Each segment used to be remuxed with
+/// `-movflags +faststart`: a second ffmpeg per segment per camera, ~170 ms of CPU.)
 pub(crate) async fn postprocess_nvr_segments(
-    ffmpeg: std::path::PathBuf,
     nvr_dir: std::path::PathBuf,
     app_handle: tauri::AppHandle,
     db: SqlitePool,
 ) {
-    // A segment is "done" once ffmpeg has ROTATED away from it — detectable as
-    // the .tmp.mp4 not being modified for a short window. ffmpeg writes the
-    // active segment continuously, so a few seconds of no-modification reliably
-    // means it's closed. We keep this SMALL (not segment_secs*2) so a just-ended
-    // segment is finalized + indexed within seconds — that's what makes a fresh
-    // event's clip available almost immediately instead of minutes later, and
-    // keeps the DB the up-to-date single source of truth.
+    let incoming = incoming_dir(&nvr_dir);
+    // ffmpeg writes the active segment continuously, so a few seconds without a
+    // write reliably means it has rotated. Kept SMALL so a just-ended segment is
+    // indexed within seconds: that's what makes a fresh event's clip available.
     let stale_threshold = std::time::Duration::from_secs(8);
-    // Poll every 2 seconds for low finalize latency.
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
-    // Track how many times each file has failed so we can delete corrupt ones.
+    // Polls an idle segment has gone without a moov; it's discarded after three.
     let mut fail_counts: std::collections::HashMap<String, u8> = std::collections::HashMap::new();
     loop {
         interval.tick().await;
-        let mut entries = match tokio::fs::read_dir(&nvr_dir).await {
+        let mut entries = match tokio::fs::read_dir(&incoming).await {
             Ok(e) => e, Err(_) => continue,
         };
         while let Ok(Some(entry)) = entries.next_entry().await {
@@ -495,164 +486,92 @@ pub(crate) async fn postprocess_nvr_segments(
                 Some(f) => f.to_string(), None => continue,
             };
             if !fname.starts_with("cam") || !fname.ends_with(".tmp.mp4") { continue; }
-            // Already given up on this file (locked corrupt) — don't re-attempt
-            // every 5s; that's what jammed the pipeline.
+            // Already given up on this file (locked and unreadable).
             if fail_counts.get(&fname).copied().unwrap_or(0) >= 100 { continue; }
 
-            // Capture .tmp.mp4 mtime BEFORE postprocessing — this is when ffmpeg
-            // stopped writing the file (segment ended naturally). Used as ended_at.
-            let tmp_meta = match path.metadata() {
-                Ok(m) => m, Err(_) => continue,
-            };
-            let tmp_modified = match tmp_meta.modified() {
+            // When ffmpeg stopped writing: the segment's end, and what resolves
+            // the repeated hour at a DST change (see local_name_to_utc).
+            let tmp_modified = match path.metadata().and_then(|m| m.modified()) {
                 Ok(t) => t, Err(_) => continue,
             };
             let age = std::time::SystemTime::now().duration_since(tmp_modified).unwrap_or_default();
             if age < stale_threshold { continue; }
 
-            let final_name = fname.replace(".tmp.mp4", ".mp4");
-            let final_path = nvr_dir.join(&final_name);
-
-            if final_path.exists() {
-                let _ = tokio::fs::remove_file(&path).await;
-                continue;
-            }
-
-            // Run +faststart conversion. Bounded: this one loop indexes every
-            // camera, so a hung ffmpeg (locked or corrupt file) used to stop all
-            // indexing. A timeout counts as a failed attempt like any other.
-            let remux = crate::proc::tokio_cmd(&ffmpeg)
-                .args([
-                    "-hide_banner", "-loglevel", "error", "-y",
-                    "-i", &path.to_string_lossy(),
-                    "-c", "copy",
-                    "-movflags", "+faststart",
-                    &final_path.to_string_lossy(),
-                ])
-                .kill_on_drop(true)
-                .status();
-            let result = tokio::time::timeout(std::time::Duration::from_secs(120), remux).await
-                .unwrap_or_else(|_| Err(std::io::Error::other("faststart remux timed out")));
-
-            if !result.map(|s| s.success()).unwrap_or(false) {
+            let (nd, p) = (nvr_dir.clone(), path.clone());
+            let finished = match tokio::task::spawn_blocking(move || finish_segment(&nd, &p)).await {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let (final_path, moov) = match finished {
+                Ok(Some(done)) => done,
+                Err(e) => { tracing::warn!("NVR: couldn't finalise {fname}: {e} — retrying"); continue; }
+                Ok(None) => {
+                // No moov: ffmpeg was killed mid-segment and the file can't be read.
                 let count = fail_counts.entry(fname.clone()).or_insert(0);
                 *count += 1;
                 if *count >= 3 {
-                    // Corrupt (moov atom missing, ffmpeg killed mid-write). Get it
-                    // OUT of the way so it stops jamming the post-processor. Try a
-                    // delete first; if that fails (Windows file lock / still-open
-                    // handle), RENAME it to .corrupt — which the loop ignores
-                    // (it only scans .tmp.mp4). This is the fix for the infinite
-                    // "deleting corrupt segment" loop that blocked new segments
-                    // (and made today show no recordings).
+                    // Delete it, or if Windows won't (a handle still open), move it
+                    // aside as .corrupt, which this loop ignores, so it can never
+                    // jam indexing.
                     if tokio::fs::remove_file(&path).await.is_err() {
-                        let corrupt = nvr_dir.join(format!("{}.corrupt", fname));
+                        let corrupt = incoming.join(format!("{fname}.corrupt"));
                         if tokio::fs::rename(&path, &corrupt).await.is_err() {
-                            // Still stuck (locked): cap the counter high so we stop
-                            // retrying this file every 5s and move on to others.
                             *count = 250;
-                            tracing::warn!("NVR: cannot remove/rename corrupt {} (locked) — skipping", fname);
+                            tracing::warn!("NVR: cannot remove/rename unreadable {fname} (locked) — skipping");
                             continue;
                         }
-                        tracing::warn!("NVR: quarantined corrupt segment {} (delete failed)", fname);
+                        tracing::warn!("NVR: quarantined unreadable segment {fname} (delete failed)");
                     } else {
-                        tracing::warn!("NVR: deleted corrupt segment {} after 3 failed attempts", fname);
+                        tracing::warn!("NVR: deleted unreadable segment {fname} (no moov)");
                     }
                     fail_counts.remove(&fname);
-                } else {
-                    tracing::warn!("NVR postprocess attempt {}/3 failed for {}", count, fname);
                 }
                 continue;
-            }
+                }
+            };
             fail_counts.remove(&fname);
-            let _ = tokio::fs::remove_file(&path).await;
+            let final_name = fname.replace(".tmp.mp4", ".mp4");
 
-            // ── Index the segment in the DB (mature NVRs' approach) ─────────────────
-            // Parse started_at from the filename (local time → UTC)
+            // ── Index the segment in the DB ──────────────────────────────────
+            // started_at from the filename (local time → UTC)
             let stem = final_name.trim_end_matches(".mp4");
             let all_parts: Vec<&str> = stem.split('_').collect();
+            let written_unix = tmp_modified.duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64).unwrap_or(0);
             let started_at_rfc = if all_parts.len() >= 3 {
                 segment_local_name_to_utc(all_parts[all_parts.len() - 2], all_parts[all_parts.len() - 1],
-                    tmp_modified.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs() as i64))
+                    Some(written_unix))
                     .unwrap_or_else(|| Utc::now().to_rfc3339())
             } else {
                 Utc::now().to_rfc3339()
             };
-
-            // ended_at = .tmp.mp4 mtime (when ffmpeg finished writing the segment)
-            let ended_at_rfc = chrono::DateTime::<Utc>::from_timestamp(
-                tmp_modified.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64,
-                0,
-            ).unwrap_or_else(Utc::now).to_rfc3339();
-
-            // Exact duration = ended_at - started_at (accurate to the second)
             let start_unix = chrono::DateTime::parse_from_rfc3339(&started_at_rfc)
                 .map(|t| t.timestamp()).unwrap_or(0);
-            let end_unix = chrono::DateTime::parse_from_rfc3339(&ended_at_rfc)
-                .map(|t| t.timestamp()).unwrap_or(0);
-            let duration_secs = (end_unix - start_unix).max(1) as f64;
+            // Length from the header; the file's write time only as a fallback.
+            let duration_secs = mp4_duration(&moov)
+                .unwrap_or(((written_unix - start_unix).max(1)) as f64);
+            let ended_at_rfc = chrono::DateTime::<Utc>::from_timestamp(
+                start_unix + duration_secs.round() as i64, 0,
+            ).unwrap_or_else(Utc::now).to_rfc3339();
 
             let size_bytes = tokio::fs::metadata(&final_path).await
                 .map(|m| m.len()).unwrap_or(0) as i64;
-
             let cam_num: u8 = all_parts.first()
                 .and_then(|s| s.trim_start_matches("cam").parse().ok())
                 .unwrap_or(0);
-
             let seg_id = uuid::Uuid::new_v4().to_string();
             let path_str = final_path.to_string_lossy().to_string();
-            let filename = final_name.clone();
-            let has_audio = file_has_audio(&ffmpeg, &final_path).await;
 
             sqlx::query(
                 "INSERT OR IGNORE INTO nvr_segments(id,cam_id,path,started_at,ended_at,duration_secs,size_bytes,has_audio) VALUES(?,?,?,?,?,?,?,?)"
             )
             .bind(&seg_id).bind(cam_num as i64).bind(&path_str)
             .bind(&started_at_rfc).bind(&ended_at_rfc)
-            .bind(duration_secs).bind(size_bytes).bind(has_audio as i64)
+            .bind(duration_secs).bind(size_bytes).bind(moov_has_audio(&moov) as i64)
             .execute(&db).await.ok();
 
-            tracing::info!("NVR: indexed {} ({:.0}s)", filename, duration_secs);
-            app_handle.emit("nvr:segment-saved", serde_json::json!({ "filename": filename })).ok();
-        }
-    }
-}
-
-/// Delete orphaned .tmp.mp4 files left by a previously killed session.
-/// Called once on startup before NVR pipes are spawned.
-///
-/// CRITICAL: only delete files that are genuinely STALE. The frontend can race
-/// ahead of boot and start an external capture (dshow USB / RTSP relay) *before*
-/// this runs — its in-progress segment is a live `.tmp.mp4` being written right
-/// now. A true orphan from a dead session hasn't been touched in many seconds;
-/// an active segment is modified continuously. Deleting an active one truncated
-/// the recording (the "something is deleting my footage" bug for dshow cams).
-///
-/// Only UNREADABLE files are orphans. A recorder stopped with `q` (camera stop,
-/// quit, update) finishes its segment, `moov` and all, and the app may exit
-/// before the post-processor gets to it: that file is footage, left for the
-/// post-processor to index.
-pub(crate) async fn cleanup_orphaned_nvr_temps(nvr_dir: &std::path::Path) {
-    const STALE_SECS: u64 = 30; // a live segment is written every frame; 30s of silence ⇒ dead session
-    let mut entries = match tokio::fs::read_dir(nvr_dir).await { Ok(e) => e, Err(_) => return };
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let path = entry.path();
-        if path.to_str().map(|p| p.ends_with(".tmp.mp4")).unwrap_or(false) {
-            // Skip anything modified recently — it belongs to a capture that's
-            // already running (raced ahead of boot), not a previous session.
-            let fresh = path.metadata().ok()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.elapsed().ok())
-                .map(|age| age.as_secs() < STALE_SECS)
-                .unwrap_or(false);
-            if fresh { continue; }
-            let p = path.clone();
-            let finished = tokio::task::spawn_blocking(move ||
-                std::fs::File::open(&p).ok().and_then(|mut f| mp4_has_audio(&mut f)).is_some())
-                .await.unwrap_or(false);
-            if finished { continue; }
-            let _ = tokio::fs::remove_file(&path).await;
-            tracing::info!("NVR: removed orphaned {:?}", path.file_name().unwrap_or_default());
+            tracing::info!("NVR: indexed {} ({:.1}s)", final_name, duration_secs);
+            app_handle.emit("nvr:segment-saved", serde_json::json!({ "filename": final_name })).ok();
         }
     }
 }
@@ -667,7 +586,13 @@ pub(crate) async fn reindex_existing_nvr_segments(nvr_dir: &std::path::Path, db:
         let fname = match path.file_name().and_then(|n| n.to_str()) {
             Some(f) => f.to_string(), None => continue,
         };
-        if !fname.ends_with(".mp4") || fname.ends_with(".tmp.mp4") { continue; }
+        // A segment in progress from before `incoming/` existed: the post-processor
+        // finishes it there (or discards it if it has no moov).
+        if fname.ends_with(".tmp.mp4") {
+            let _ = tokio::fs::rename(&path, incoming_dir(nvr_dir).join(&fname)).await;
+            continue;
+        }
+        if !fname.ends_with(".mp4") { continue; }
 
         // Skip if already indexed
         let exists: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM nvr_segments WHERE path=?")
@@ -854,21 +779,22 @@ mod tests {
         f
     }
 
-    #[tokio::test]
-    async fn boot_cleanup_keeps_a_finished_segment_and_drops_a_killed_one() {
-        let dir = std::env::temp_dir().join(format!("anivar-cleanup-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let finished = dir.join("cam0_20261005_101500.tmp.mp4");
-        let killed   = dir.join("cam0_20261005_101510.tmp.mp4");
+    #[test]
+    fn a_finished_segment_moves_out_and_a_killed_one_stays_put() {
+        let dir = std::env::temp_dir().join(format!("anivar-finish-{}", uuid::Uuid::new_v4()));
+        let incoming = incoming_dir(&dir);
+        std::fs::create_dir_all(&incoming).unwrap();
+        let finished = incoming.join("cam0_20261005_101500.tmp.mp4");
+        let killed   = incoming.join("cam0_20261005_101510.tmp.mp4");
         std::fs::write(&finished, mp4_with(&[b"vide"], 1000)).unwrap();
         std::fs::write(&killed, mp4_box(b"ftyp", b"isom\0\0\0\0isom")).unwrap(); // no moov
-        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
-        for p in [&finished, &killed] {
-            std::fs::File::options().write(true).open(p).unwrap().set_modified(old).unwrap();
-        }
-        cleanup_orphaned_nvr_temps(&dir).await;
-        assert!(finished.exists(), "a segment stopped with `q` is footage");
-        assert!(!killed.exists(), "a segment with no moov is unreadable");
+
+        let (dest, moov) = finish_segment(&dir, &finished).unwrap().expect("has a moov");
+        assert_eq!(dest, dir.join("cam0_20261005_101500.mp4"));
+        assert!(dest.exists() && !finished.exists() && !moov.is_empty());
+
+        assert!(finish_segment(&dir, &killed).unwrap().is_none(), "no moov: not finished");
+        assert!(killed.exists(), "left for the post-processor to discard");
         std::fs::remove_dir_all(&dir).ok();
     }
 

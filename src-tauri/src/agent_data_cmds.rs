@@ -176,11 +176,13 @@ pub async fn clear_nvr_recordings(state: State<'_, Arc<AppState>>) -> Result<u64
     // 3. Sweep any stragglers on disk not tracked in the DB (orphans / .tmp).
     let nvr_dir2 = nvr_dir.clone();
     let swept = tokio::task::spawn_blocking(move || -> u64 {
-        let Ok(entries) = std::fs::read_dir(&nvr_dir2) else { return 0; };
         let mut c = 0u64;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() && std::fs::remove_file(&path).is_ok() { c += 1; }
+        for dir in [crate::nvr_pipes::incoming_dir(&nvr_dir2), nvr_dir2] {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() && std::fs::remove_file(&path).is_ok() { c += 1; }
+            }
         }
         c
     }).await.unwrap_or(0);
@@ -226,7 +228,8 @@ pub async fn clear_all_events(state: State<'_, Arc<AppState>>) -> Result<(), Str
     delete_all_clips_from_dir(&state.data_dir).await;
     let nvr_dir = state.data_dir.join("nvr");
     tokio::task::spawn_blocking(move || {
-        if let Ok(entries) = std::fs::read_dir(&nvr_dir) {
+        for dir in [crate::nvr_pipes::incoming_dir(&nvr_dir), nvr_dir] {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_file() { std::fs::remove_file(&path).ok(); }
