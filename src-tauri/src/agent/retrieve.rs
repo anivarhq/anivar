@@ -383,14 +383,27 @@ pub(crate) async fn camera_names(db: &sqlx::SqlitePool) -> BTreeMap<i64, String>
     rows.into_iter()
         .map(|(id, name)| {
             let n = name.trim();
-            (id, if n.is_empty() { format!("Camera {id}") } else { n.to_string() })
+            (id, if n.is_empty() { format!("Camera {}", id + 1) } else { n.to_string() })
         })
         .collect()
 }
 
-/// How to name a camera in output: its configured name, else the slot number.
-fn cam_label(names: &BTreeMap<i64, String>, cam: i64) -> String {
-    names.get(&cam).cloned().unwrap_or_else(|| format!("Camera {cam}"))
+/// How every surface names a camera: its configured name, else "Camera N"
+/// counted from 1, as the app shows it. The assistant and Telegram used to say
+/// "Camera 0" for what the app calls Camera 1, so `/snap 1` sent the second one.
+pub(crate) fn cam_label(names: &BTreeMap<i64, String>, cam: i64) -> String {
+    names.get(&cam).cloned().unwrap_or_else(|| format!("Camera {}", cam + 1))
+}
+
+/// The slot a person (or the model) means: "1" or "Camera 1" for the first
+/// camera, or its configured name, in any case.
+pub(crate) fn resolve_camera(names: &BTreeMap<i64, String>, said: &str) -> Option<i64> {
+    let s = said.trim();
+    let digits = s.strip_prefix("Camera ").or_else(|| s.strip_prefix("camera ")).unwrap_or(s);
+    if let Ok(n) = digits.trim().parse::<i64>() {
+        return (n >= 1).then_some(n - 1);
+    }
+    names.iter().find(|(_, name)| name.eq_ignore_ascii_case(s)).map(|(&id, _)| id)
 }
 
 // ─── Evidence ────────────────────────────────────────────────────────────────
@@ -657,9 +670,10 @@ pub(super) fn pre_resolve(
     }
 
     // ── slots ───────────────────────────────────────────────────────────────
-    if let Some((&cam, _)) = cams.iter().find(|(_, name)| {
+    // Longest name first, so "camera 12" isn't read as "Camera 1".
+    if let Some((&cam, _)) = cams.iter().filter(|(_, name)| {
         !name.trim().is_empty() && q.contains(&name.to_lowercase())
-    }) {
+    }).max_by_key(|(_, name)| name.len()) {
         query.cam = Some(cam);
     }
     // The SAME buckets the kind ladder uses. This was left on a stale raw list
@@ -2446,6 +2460,23 @@ mod tests {
 
     fn resolve(q: &str) -> Query {
         pre_resolve(q, &cams(), &people()).unwrap_or_else(|| panic!("unresolved: {q}"))
+    }
+
+    #[test]
+    fn cameras_are_counted_from_one_everywhere() {
+        // Two unnamed cameras, as camera_names returns them, plus one with a name.
+        let names = BTreeMap::from([(0, "Camera 1".to_string()), (1, "Camera 2".to_string()),
+                                    (2, "Front Door".to_string())]);
+        assert_eq!(cam_label(&names, 0), "Camera 1", "what the app calls the first camera");
+        assert_eq!(cam_label(&names, 7), "Camera 8", "an unconfigured slot still counts from 1");
+        assert_eq!(resolve_camera(&names, "1"), Some(0), "/snap 1 is the app's Camera 1");
+        assert_eq!(resolve_camera(&names, "Camera 2"), Some(1));
+        assert_eq!(resolve_camera(&names, "front door"), Some(2));
+        assert_eq!(resolve_camera(&names, "0"), None, "there is no Camera 0");
+        assert_eq!(resolve_camera(&names, "garage"), None, "an unknown name is not camera 0");
+        let twelve = BTreeMap::from([(0, "Camera 1".to_string()), (11, "Camera 12".to_string())]);
+        let q = pre_resolve("what did camera 12 see today", &twelve, &people()).unwrap();
+        assert_eq!(q.cam, Some(11), "not read as Camera 1");
     }
 
     #[test]

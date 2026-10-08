@@ -117,12 +117,21 @@ pub enum Evidence {
 pub async fn resolve(state: &Arc<AppState>, reply: &str) -> (String, Vec<Evidence>) {
     let mut text = reply.to_string();
     let mut out: Vec<Evidence> = Vec::new();
+    let names = super::retrieve::camera_names(&state.db).await;
 
     // Right to left, so each splice leaves the earlier spans valid.
     let calls = super::tools::parse_tags(&text);
     for call in calls.into_iter().rev() {
         let arg = |k: &str| call.args.get(k).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
         let num = |k: &str| call.args.get(k).and_then(|v| v.as_i64());
+        // The camera as the model named it: a name, or the number people see.
+        // None given: the first camera. One it named that doesn't exist is said
+        // so, never quietly swapped for camera 0.
+        let said_cam = call.args.get("camera")
+            .map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string()))
+            .unwrap_or_default();
+        let cam = if said_cam.trim().is_empty() { names.keys().next().copied() }
+                  else { super::retrieve::resolve_camera(&names, &said_cam) };
         // Query tools are model-facing text and already ran upstream.
         if call.tool.tag.is_empty() { continue; }
 
@@ -167,8 +176,12 @@ pub async fn resolve(state: &Arc<AppState>, reply: &str) -> (String, Vec<Evidenc
                 }
                 Some(Evidence::Events { label: "the clip".into(), cards, play: true })
             }
-            "snapshot"   => Some(Evidence::Snapshot { cam: num("camera").unwrap_or(0) as u8, burst: false }),
-            "live_video" => Some(Evidence::Snapshot { cam: num("camera").unwrap_or(0) as u8, burst: true }),
+            "snapshot" | "live_video" | "share_live" if cam.and_then(|c| u8::try_from(c).ok()).is_none() => {
+                text.replace_range(call.span.clone(), &format!("(there's no camera called “{}”)", said_cam.trim()));
+                continue;
+            }
+            "snapshot"   => Some(Evidence::Snapshot { cam: cam.unwrap_or(0) as u8, burst: false }),
+            "live_video" => Some(Evidence::Snapshot { cam: cam.unwrap_or(0) as u8, burst: true }),
             "send_person" => {
                 let name = arg("name");
                 if name.is_empty() { None } else {
@@ -182,7 +195,7 @@ pub async fn resolve(state: &Arc<AppState>, reply: &str) -> (String, Vec<Evidenc
                 let (kind, resource) = if call.tool.name == "share_clip" {
                     ("clip", arg("event_id"))
                 } else {
-                    ("live", num("camera").unwrap_or(0).to_string())
+                    ("live", cam.unwrap_or(0).to_string())
                 };
                 let mins = num("minutes").map(|m| m as u32).unwrap_or(
                     state.settings.read().await.live_share_default_minutes);
@@ -192,7 +205,7 @@ pub async fn resolve(state: &Arc<AppState>, reply: &str) -> (String, Vec<Evidenc
                             kind: if kind == "clip" { "clip" } else { "live" },
                             url, expires_at,
                             label: if kind == "clip" { "Private clip link".into() }
-                                   else { format!("Live view · camera {resource}") },
+                                   else { format!("Live view · {}", super::retrieve::cam_label(&names, cam.unwrap_or(0))) },
                         }),
                         // Link setup failures carry actionable guidance (the
                         // Tailscale consent URL). Surface it as prose, not silence.
