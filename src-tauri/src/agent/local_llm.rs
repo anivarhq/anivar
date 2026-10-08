@@ -906,7 +906,7 @@ mod tests {
             // `ProcessRefreshKind::new()` sets every field to false — memory()
             // then reads 0. `everything()` is what actually populates RSS.
             let s = System::new_with_specifics(
-                RefreshKind::new().with_processes(ProcessRefreshKind::everything()));
+                RefreshKind::nothing().with_processes(ProcessRefreshKind::everything()));
             s.process(sysinfo::get_current_pid().unwrap())
                 .map(|p| p.memory() / 1_048_576).unwrap_or(0)
         };

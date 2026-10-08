@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
@@ -136,5 +136,21 @@ impl RateLimiter {
             let retry_after = self.window.saturating_sub(elapsed).as_secs().max(1);
             (false, retry_after)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minted with hmac 0.12 / sha2 0.10: a link shared before the upgrade
+    /// still opens after it.
+    #[test]
+    fn a_link_minted_by_an_older_build_still_verifies() {
+        let old = "AAAAAAAAAAM.eyJraW5kIjoiY2xpcCIsInJlc291cmNlX2lkIjoiZXZ0LTEiLCJleHBpcmVzX2F0IjowfQ.7vEr4j49Ee6upf37CnVWiA";
+        let p = SharePayload { kind: "clip".into(), resource_id: "evt-1".into(), expires_at: 0 };
+        assert_eq!(sign_share_token(&[7u8; 32], 3, &p), old);
+        assert_eq!(verify_share_token(&[7u8; 32], 3, old).unwrap().resource_id, "evt-1");
+        assert!(verify_share_token(&[7u8; 32], 4, old).is_none(), "a revoke still invalidates it");
     }
 }

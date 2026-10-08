@@ -161,13 +161,6 @@ pub(crate) async fn cam_proxy(
     }
 }
 
-pub(crate) fn sha256_hex(data: &[u8]) -> String {
-    use sha2::{Sha256, Digest};
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    format!("{:x}", hasher.finalize())
-}
-
 /// WHEP SDP exchange proxy → go2rtc (sub-second WebRTC live view). The WebView
 /// posts its SDP offer here (token-authed, same origin as every other stream
 /// route); we forward to go2rtc's loopback API and return the SDP answer.
@@ -684,6 +677,12 @@ pub(crate) async fn share_live(
 #[cfg(test)]
 mod ssrf_tests {
     use super::*;
+
+    /// A share link redeemed before the sha2 upgrade keeps its cookie valid.
+    #[test]
+    fn the_share_cookie_digest_is_unchanged() {
+        assert_eq!(cookie_for(&[7u8; 32], "tok", "clip", "evt-1"), "45QDhaMWa4IfvSVJ-nw4UtTb_SXF7HzP");
+    }
 
     #[test]
     fn private_ranges_allowed_public_rejected() {

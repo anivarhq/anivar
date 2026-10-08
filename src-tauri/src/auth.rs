@@ -122,7 +122,7 @@ impl AuthState {
         let now = Instant::now();
         g.challenges.retain(|_, c| c.expires > now);
         g.challenges.insert(id.clone(), Challenge {
-            code_hash: crate::http_handlers::sha256_hex(code.as_bytes()),
+            code_hash: crate::provision::sha256_hex(code.as_bytes()),
             kind, expires: now + kind.ttl(), tries: 0,
         });
         Ok((id, code))
@@ -139,7 +139,7 @@ impl AuthState {
         if ch.tries > OTP_MAX_TRIES { g.challenges.remove(id); return Err("Too many attempts — request a new code.".into()); }
         let want = ch.code_hash.clone();
         let kind = ch.kind;
-        let got = crate::http_handlers::sha256_hex(code.trim().as_bytes());
+        let got = crate::provision::sha256_hex(code.trim().as_bytes());
         if crate::constant_time_eq(want.as_bytes(), got.as_bytes()) {
             g.challenges.remove(id);
             Ok(kind)

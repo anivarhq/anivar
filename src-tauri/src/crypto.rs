@@ -14,7 +14,7 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use crate::Settings;
 
 // ─── Encryption helpers (AES-256-GCM for sensitive settings) ─────────────────
-use aes_gcm::{Aes256Gcm, KeyInit, aead::{Aead, AeadCore, OsRng as AeadOsRng}};
+use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead};
 
 /// Load the key, or create one on a genuine first run.
 ///
@@ -64,8 +64,8 @@ pub(crate) fn encrypt_secret(key: &[u8; 32], plaintext: &str) -> String {
     // Already encrypted: wrapping it again made it undecryptable in one step.
     if plaintext.starts_with("enc:") { return plaintext.to_string(); }
     let cipher = Aes256Gcm::new_from_slice(key).expect("valid key");
-    let nonce = Aes256Gcm::generate_nonce(&mut AeadOsRng);
-    let ciphertext = cipher.encrypt(&nonce, plaintext.as_bytes()).unwrap_or_default();
+    let nonce: [u8; 12] = rand::random();
+    let ciphertext = cipher.encrypt(&nonce.into(), plaintext.as_bytes()).unwrap_or_default();
     format!("enc:{}:{}", B64.encode(nonce), B64.encode(ciphertext))
 }
 
@@ -81,8 +81,8 @@ fn try_decrypt(key: &[u8; 32], stored: &str) -> Result<String, ()> {
     let ct_bytes    = B64.decode(&rest[colon + 1..]).map_err(|_| ())?;
     if nonce_bytes.len() != 12 { return Err(()); }
     let cipher = Aes256Gcm::new_from_slice(key).expect("valid key");
-    let nonce  = aes_gcm::Nonce::from_slice(&nonce_bytes);
-    cipher.decrypt(nonce, ct_bytes.as_ref()).ok()
+    let nonce  = aes_gcm::Nonce::try_from(&nonce_bytes[..]).map_err(|_| ())?;
+    cipher.decrypt(&nonce, ct_bytes.as_ref()).ok()
         .and_then(|v| String::from_utf8(v).ok())
         .ok_or(())
 }
@@ -175,6 +175,14 @@ mod tests {
         assert!(ct.starts_with("enc:"));
         assert_eq!(try_decrypt(&key, &ct).unwrap(), "sk-secret");
         assert_eq!(encrypt_secret(&key, &ct), ct, "encrypting a ciphertext is a no-op");
+    }
+
+    /// Encrypted by aes-gcm 0.10, before the 0.11 upgrade: the stored format
+    /// must still open, or every saved key and token is lost on update.
+    #[test]
+    fn a_secret_saved_by_an_older_build_still_decrypts() {
+        let stored = "enc:lJbAt9RbzHR4JAkn:KH2nNqYOC3q6JxBeShYzGvQQcLDITsCyEnQcm/ox9AOBig==";
+        assert_eq!(try_decrypt(&[7u8; 32], stored).unwrap(), "telegram-token-123");
     }
 
     #[test]
