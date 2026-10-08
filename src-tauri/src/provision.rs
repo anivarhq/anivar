@@ -151,7 +151,7 @@ pub(crate) async fn fetch_to_file(
 /// Hex SHA-256 of a byte slice.
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
-    format!("{:x}", Sha256::digest(bytes))
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Hex SHA-256 of a file on disk.
@@ -404,6 +404,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    /// Download checksums are compared as lowercase hex.
+    #[test]
+    fn sha256_is_lowercase_hex() {
+        assert_eq!(sha256_hex(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     }
 
     /// A zip in, the right flattened files out — including the nested layout the

@@ -42,7 +42,7 @@ async fn issue_remember(state: &Arc<AppState>, want: bool) -> Option<String> {
     };
     if !want || !enabled { return None; }
     let token = auth::gen_remember_token();
-    let hash = crate::http_handlers::sha256_hex(token.as_bytes());
+    let hash = crate::provision::sha256_hex(token.as_bytes());
     let _ = sqlx::query("INSERT OR REPLACE INTO auth_remember(token_hash, expires_at) VALUES(?, datetime('now', ?))")
         .bind(&hash).bind(format!("+{days} days")).execute(&state.db).await;
     Some(token)
@@ -214,7 +214,7 @@ pub async fn login_verify_otp(
 pub async fn auth_resume(state: State<'_, Arc<AppState>>, remember_token: String) -> Result<bool, String> {
     let st = state.inner().clone();
     if remember_token.is_empty() { return Ok(false); }
-    let hash = crate::http_handlers::sha256_hex(remember_token.as_bytes());
+    let hash = crate::provision::sha256_hex(remember_token.as_bytes());
     let row: Option<(String,)> = sqlx::query_as(
         "SELECT token_hash FROM auth_remember WHERE token_hash=? AND expires_at > datetime('now')"
     ).bind(&hash).fetch_optional(&st.db).await.map_err(|e| e.to_string())?;
@@ -234,7 +234,7 @@ pub async fn logout(state: State<'_, Arc<AppState>>, remember_token: Option<Stri
     let st = state.inner().clone();
     st.auth.set_unlocked(false);
     if let Some(t) = remember_token {
-        let hash = crate::http_handlers::sha256_hex(t.as_bytes());
+        let hash = crate::provision::sha256_hex(t.as_bytes());
         let _ = sqlx::query("DELETE FROM auth_remember WHERE token_hash=?").bind(&hash).execute(&st.db).await;
     }
     Ok(())
