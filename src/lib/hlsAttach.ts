@@ -99,7 +99,12 @@ export function attachSource(
     return {
       isHls: false, playingDateMs: () => null, dateAtMs: () => null,
       seekToDate: () => false, // a plain file has no wall-clock anchors
-      destroy: () => { /* src players need no teardown */ },
+      // Clearing src and reloading is how a media download is aborted; otherwise
+      // a replaced clip kept downloading until the element was garbage-collected.
+      // Only if the element still plays OUR file: a newer source may own it now.
+      destroy: () => {
+        if (video.getAttribute("src") === url) { video.removeAttribute("src"); video.load(); }
+      },
     };
   }
   // VOD tuning (the live view keeps its own config in HlsFeed).
