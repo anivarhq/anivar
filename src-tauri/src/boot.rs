@@ -567,9 +567,13 @@ pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::
             let nvr_enabled = state2.settings.read().await.nvr_enabled;
             if !nvr_enabled { return; }
             let seg_mins = state2.settings.read().await.nvr_segment_mins;
-            // Clean up any .tmp.mp4 files orphaned by the previous session
+            // Clean up any .tmp.mp4 files orphaned by the previous session, and
+            // index the finished ones: a camera stopped cleanly before quit
+            // leaves its last segment complete but not yet post-processed. The
+            // post-processor otherwise starts only with a capture, and may never.
             let nvr_dir = state2.data_dir.join("nvr");
             cleanup_orphaned_nvr_temps(&nvr_dir).await;
+            crate::nvr_pipes::ensure_postprocessor(&state2.data_dir, state2.app_handle.clone(), state2.db.clone()).await;
             // (HLS dir is wiped synchronously at setup start — before the
             // frontend can race a capture spawn. Never wipe it here: a capture
             // may already be writing the fresh playlist.)
