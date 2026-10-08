@@ -150,6 +150,17 @@ export function shouldAdvance(
   return playheadMs >= playable - 2000;
 }
 
+/**
+ * Where the next chunk starts after this one ends, or null for its beginning.
+ *
+ * A recording segment that straddles the hour belongs to the chunk it STARTED
+ * in, and plays to its end there, a few seconds into the next hour. Starting
+ * the next chunk at its own beginning would show those seconds twice.
+ */
+export function resumeAt(next: Chunk, playheadMs: number | null): number | null {
+  return playheadMs != null && playheadMs > next.start + 500 && playheadMs < next.end ? playheadMs : null;
+}
+
 interface Args {
   camId: number;
   /** The day's recorded segments — the source of truth for coverage. */
@@ -318,9 +329,9 @@ export function usePlayback({ camId, segments, streamInfo, dayFromUtc, dayToUtc 
       }
       return;
     }
-    setPlaybackStart(null); // play the next chunk from its start
+    setPlaybackStart(resumeAt(chunks[chunkIdx + 1], playheadMs));
     setChunkIdx(chunkIdx + 1);
-  }, [chunk, chunkIdx, chunks.length, coverageBands, playheadMs, dayToUtc]);
+  }, [chunk, chunkIdx, chunks, coverageBands, playheadMs, dayToUtc]);
 
   /**
    * Cross an empty chunk instead of stopping on it.
