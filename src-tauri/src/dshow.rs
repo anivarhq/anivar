@@ -159,7 +159,7 @@ async fn spawn_capture(
         .unwrap_or((Vec::new(), None));
     let v_input = camera_input_args(ffmpeg, device_label).await?;
     if nvr_on {
-        let _ = tokio::fs::create_dir_all(state.data_dir.join("nvr")).await;
+        let _ = tokio::fs::create_dir_all(crate::nvr_pipes::incoming_dir(&state.data_dir.join("nvr"))).await;
         // The tee output also writes the live HLS playlist (same single encode).
         let _ = tokio::fs::create_dir_all(state.data_dir.join("hls")).await;
     }

@@ -211,12 +211,12 @@ pub async fn start_rtsp_relay(
 
         let nvr_dir = state.data_dir.join("nvr");
         let hls_dir = state.data_dir.join("hls");
-        tokio::fs::create_dir_all(&nvr_dir).await.ok();
+        tokio::fs::create_dir_all(crate::nvr_pipes::incoming_dir(&nvr_dir)).await.ok();
         tokio::fs::create_dir_all(&hls_dir).await.ok();
         // 10-second segments — the same contract as USB cams (short segments =
         // clips available seconds after an event; the old 60s+ here made fresh
         // RTSP clips lag a minute behind).
-        let pattern = nvr_dir.join(format!("cam{}_rtsp_%Y%m%d_%H%M%S.tmp.mp4", cam));
+        let pattern = crate::nvr_pipes::incoming_dir(&nvr_dir).join(format!("cam{}_rtsp_%Y%m%d_%H%M%S.tmp.mp4", cam));
         let is_rtsp2 = url.starts_with("rtsp://");
         let mut rargs: Vec<String> = vec!["-hide_banner".into(), "-loglevel".into(), "error".into(), "-y".into()];
         rargs.extend(relay_input_flags(&url, &transport));

@@ -15,7 +15,7 @@ use crate::{
     db::{init_db, load_or_create_auth_token, load_settings_from_db},
     ensure_ffmpeg,
     inference::run_inference_loop,
-    nvr_pipes::{cleanup_orphaned_nvr_temps, prune_orphaned_nvr_segments, reindex_existing_nvr_segments, spawn_hls_pipe, spawn_nvr_pipe},
+    nvr_pipes::{prune_orphaned_nvr_segments, reindex_existing_nvr_segments, spawn_hls_pipe, spawn_nvr_pipe},
     start_http_server,
 };
 
@@ -567,32 +567,14 @@ pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::
             let nvr_enabled = state2.settings.read().await.nvr_enabled;
             if !nvr_enabled { return; }
             let seg_mins = state2.settings.read().await.nvr_segment_mins;
-            // Clean up any .tmp.mp4 files orphaned by the previous session, and
-            // index the finished ones: a camera stopped cleanly before quit
-            // leaves its last segment complete but not yet post-processed. The
-            // post-processor otherwise starts only with a capture, and may never.
-            let nvr_dir = state2.data_dir.join("nvr");
-            cleanup_orphaned_nvr_temps(&nvr_dir).await;
+            // The post-processor indexes what the previous session finished (a
+            // camera stopped cleanly before quit leaves its last segment complete
+            // in incoming/) and discards what it couldn't; it otherwise starts
+            // only with a capture, and may never.
             crate::nvr_pipes::ensure_postprocessor(&state2.data_dir, state2.app_handle.clone(), state2.db.clone()).await;
             // (HLS dir is wiped synchronously at setup start — before the
             // frontend can race a capture spawn. Never wipe it here: a capture
             // may already be writing the fresh playlist.)
-            // Sweep leaked `_concat_*.txt` manifests in the data dir (the streaming
-            // path leaks one when the client aborts mid-stream). Harmless but they pile up.
-            if let Ok(mut rd) = tokio::fs::read_dir(&state2.data_dir).await {
-                while let Ok(Some(ent)) = rd.next_entry().await {
-                    if let Some(n) = ent.file_name().to_str() {
-                        if n.starts_with("_concat_") && n.ends_with(".txt") {
-                            let _ = tokio::fs::remove_file(ent.path()).await;
-                        }
-                    }
-                }
-            }
-            // Re-index any .mp4 files that exist on disk but aren't in the DB
-            // (happens after app restart or DB clear)
-            reindex_existing_nvr_segments(&nvr_dir, &state2.db).await;
-            // Drop DB rows whose file is gone so the DB-only listing matches disk.
-            prune_orphaned_nvr_segments(&state2.db).await;
             let enc = state2.hw_encoder.read().unwrap().clone();
             // Every ENABLED camera (all 16 slots) gets its server-side bring-up.
             // (This query was `cam_id < 4` — the single hard blocker that left
@@ -681,6 +663,29 @@ pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::
                     state2.hls_processes.lock().await.insert(cam_id, child);
                 }
             }
+
+            // Archive housekeeping, AFTER the cameras are up: these list the whole
+            // nvr/ folder (tens of thousands of files), and live view used to wait
+            // for two such scans at every boot.
+            let state_scan = Arc::clone(&state2);
+            tauri::async_runtime::spawn(async move {
+                // Sweep leaked `_concat_*.txt` manifests in the data dir (the streaming
+                // path leaks one when the client aborts mid-stream). Harmless but they pile up.
+                if let Ok(mut rd) = tokio::fs::read_dir(&state_scan.data_dir).await {
+                    while let Ok(Some(ent)) = rd.next_entry().await {
+                        if let Some(n) = ent.file_name().to_str() {
+                            if n.starts_with("_concat_") && n.ends_with(".txt") {
+                                let _ = tokio::fs::remove_file(ent.path()).await;
+                            }
+                        }
+                    }
+                }
+                // Re-index any .mp4 files that exist on disk but aren't in the DB
+                // (happens after app restart or DB clear)
+                reindex_existing_nvr_segments(&state_scan.data_dir.join("nvr"), &state_scan.db).await;
+                // Drop DB rows whose file is gone so the DB-only listing matches disk.
+                prune_orphaned_nvr_segments(&state_scan.db).await;
+            });
 
             // ── Watchdog ──────────────────────────────────────────────────────
             // The NVR ffmpeg pipe can exit mid-session (frame starvation, crash),
