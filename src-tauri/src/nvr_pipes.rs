@@ -584,6 +584,11 @@ pub(crate) async fn postprocess_nvr_segments(
 /// now. A true orphan from a dead session hasn't been touched in many seconds;
 /// an active segment is modified continuously. Deleting an active one truncated
 /// the recording (the "something is deleting my footage" bug for dshow cams).
+///
+/// Only UNREADABLE files are orphans. A recorder stopped with `q` (camera stop,
+/// quit, update) finishes its segment, `moov` and all, and the app may exit
+/// before the post-processor gets to it: that file is footage, left for the
+/// post-processor to index.
 pub(crate) async fn cleanup_orphaned_nvr_temps(nvr_dir: &std::path::Path) {
     const STALE_SECS: u64 = 30; // a live segment is written every frame; 30s of silence ⇒ dead session
     let mut entries = match tokio::fs::read_dir(nvr_dir).await { Ok(e) => e, Err(_) => return };
@@ -598,6 +603,11 @@ pub(crate) async fn cleanup_orphaned_nvr_temps(nvr_dir: &std::path::Path) {
                 .map(|age| age.as_secs() < STALE_SECS)
                 .unwrap_or(false);
             if fresh { continue; }
+            let p = path.clone();
+            let finished = tokio::task::spawn_blocking(move ||
+                std::fs::File::open(&p).ok().and_then(|mut f| mp4_has_audio(&mut f)).is_some())
+                .await.unwrap_or(false);
+            if finished { continue; }
             let _ = tokio::fs::remove_file(&path).await;
             tracing::info!("NVR: removed orphaned {:?}", path.file_name().unwrap_or_default());
         }
@@ -795,6 +805,24 @@ mod tests {
         if mdat_first > 0 { f.extend(mp4_box(b"mdat", &vec![0u8; mdat_first])); }
         f.extend(mp4_box(b"moov", &traks));
         f
+    }
+
+    #[tokio::test]
+    async fn boot_cleanup_keeps_a_finished_segment_and_drops_a_killed_one() {
+        let dir = std::env::temp_dir().join(format!("anivar-cleanup-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let finished = dir.join("cam0_20261005_101500.tmp.mp4");
+        let killed   = dir.join("cam0_20261005_101510.tmp.mp4");
+        std::fs::write(&finished, mp4_with(&[b"vide"], 1000)).unwrap();
+        std::fs::write(&killed, mp4_box(b"ftyp", b"isom\0\0\0\0isom")).unwrap(); // no moov
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
+        for p in [&finished, &killed] {
+            std::fs::File::options().write(true).open(p).unwrap().set_modified(old).unwrap();
+        }
+        cleanup_orphaned_nvr_temps(&dir).await;
+        assert!(finished.exists(), "a segment stopped with `q` is footage");
+        assert!(!killed.exists(), "a segment with no moov is unreadable");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

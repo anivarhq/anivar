@@ -68,14 +68,26 @@ pub async fn start_nvr(
 pub async fn stop_nvr(state: State<'_, Arc<AppState>>, cam_id: u8) -> Result<(), String> {
     // Drop the pipe sender — ffmpeg stdin closes, process exits cleanly and finalises the segment
     state.nvr_pipe_txs.lock().await.remove(&cam_id);
-    // Kill any legacy ffmpeg process (RTSP relay path)
-    if let Some(mut child) = state.nvr_processes.lock().await.remove(&cam_id) {
-        child.kill().await.ok();
+    // ...and give it the chance to: it used to be killed right here, mid-segment.
+    if let Some(child) = state.nvr_processes.lock().await.remove(&cam_id) {
+        crate::proc::stop_ffmpeg(child).await;
     }
     // Also signal legacy browser MediaRecorder (harmless if not running)
     state.app_handle.emit("nvr:stop", serde_json::json!({ "cam_id": cam_id })).ok();
     tracing::info!("NVR stopped for cam{}", cam_id);
     Ok(())
+}
+
+/// Before quitting or installing an update: every recorder finishes the
+/// segment it's writing, all at once (about a second for any number of
+/// cameras, 3 s at worst), instead of the job object killing them mid-file.
+/// ponytail: a watchdog respawn in that window is killed at exit as before.
+pub(crate) async fn stop_all_recorders(state: &AppState) {
+    state.nvr_pipe_txs.lock().await.clear(); // pipe recorders: end of input
+    let mut children: Vec<_> = state.rtsp_processes.lock().await.drain().map(|(_, c)| c).collect();
+    children.extend(state.nvr_processes.lock().await.drain().map(|(_, c)| c));
+    tracing::info!("finishing {} recorder segment(s) before exit", children.len());
+    futures::future::join_all(children.into_iter().map(crate::proc::stop_ffmpeg)).await;
 }
 
 #[tauri::command]
