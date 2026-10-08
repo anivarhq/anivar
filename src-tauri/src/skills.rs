@@ -85,13 +85,23 @@ async fn reject_if_not_a_file(dest: &Path, got: u64) -> Result<(), String> {
 /// SAME path (`skills/local_llm/model.gguf`), and a superseded 230 MB file
 /// satisfies every "is a weight file present" test there is — so without a floor
 /// the upgrade is never offered and the user keeps the old brain forever.
+/// `<data>/skills/<id>`, for an id that can only name a folder inside it. These
+/// commands create and recursively DELETE that folder: `..` or an absolute path
+/// would point them anywhere on disk.
+fn skill_dir(data_dir: &Path, skill_id: &str) -> Result<std::path::PathBuf, String> {
+    let ok = !skill_id.is_empty()
+        && skill_id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    if !ok { return Err(format!("invalid skill id {skill_id:?}")); }
+    Ok(data_dir.join("skills").join(skill_id))
+}
+
 #[tauri::command]
 pub async fn check_skill_installed(
     skill_id: String,
     min_bytes: Option<u64>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<bool, String> {
-    let skill_dir = state.data_dir.join("skills").join(&skill_id);
+    let skill_dir = skill_dir(&state.data_dir, &skill_id)?;
     if let Some(floor) = min_bytes.filter(|b| *b > MIN_MODEL_BYTES) {
         // A specific floor means a specific file: don't let the generic
         // "any weight file will do" fallback below wave through the old one.
@@ -164,7 +174,7 @@ pub async fn download_skill(
 ) -> Result<(), String> {
     use tauri::Emitter;
 
-    let skills_dir = state.data_dir.join("skills").join(&skill_id);
+    let skills_dir = skill_dir(&state.data_dir, &skill_id)?;
     tokio::fs::create_dir_all(&skills_dir).await.map_err(|e| e.to_string())?;
 
     let filename = filename
@@ -253,8 +263,8 @@ pub async fn remove_skill(
     skill_id: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
+    let mut targets = vec![skill_dir(&state.data_dir, &skill_id)?];
     let skills = state.data_dir.join("skills");
-    let mut targets = vec![skills.join(&skill_id)];
     match skill_id.as_str() {
         "yolo26x"     => targets.push(skills.join("yolo26")),
         "alpr_global" => targets.push(skills.join("alpr")),
@@ -373,6 +383,15 @@ fn walk_dir_size(p: &Path) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_skill_id_can_only_name_a_folder_inside_skills() {
+        let data = Path::new("data");
+        for bad in ["..", r"C:\x", "/etc", "a/b", r"a\b", "", "Yolo26n", "yolo 26"] {
+            assert!(skill_dir(data, bad).is_err(), "{bad:?} must be rejected");
+        }
+        assert_eq!(skill_dir(data, "local_llm_fast").unwrap(), data.join("skills").join("local_llm_fast"));
+    }
 
     /// The regression that shipped in v0.1.0: `audio_yamnet`'s class map is a
     /// legitimate 14,096-byte CSV, and the flat 64 KB floor rejected it, which

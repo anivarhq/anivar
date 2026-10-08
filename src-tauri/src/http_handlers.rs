@@ -292,15 +292,10 @@ fn live_limiter() -> &'static crate::share_security::RateLimiter {
     LIVE_LIMITER.get_or_init(|| crate::share_security::RateLimiter::new(120, Duration::from_secs(60)))
 }
 
-/// Helper: best-effort client IP extraction. Proxies put the real IP in
-/// `cf-connecting-ip`; X-Forwarded-For is the standard fallback.
-fn client_ip(headers: &HeaderMap) -> String {
-    headers.get("cf-connecting-ip")
-        .or_else(|| headers.get("x-forwarded-for"))
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.split(',').next().unwrap_or("").trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown".to_string())
+/// The rate-limit key for a share route (see `server::client_key`).
+type Peer = Option<axum::extract::ConnectInfo<std::net::SocketAddr>>;
+fn client_ip(peer: Peer, headers: &HeaderMap) -> String {
+    crate::server::client_key(peer.map(|c| c.0), headers)
 }
 
 /// Derive the HttpOnly cookie value from the share token + resource. The
@@ -364,10 +359,11 @@ fn expired_link_page() -> Response {
 /// browser history past this hop.
 pub(crate) async fn redeem(
     AxumState(s): AxumState<StreamState>,
+    peer: Peer,
     headers: HeaderMap,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Response {
-    let ip = client_ip(&headers);
+    let ip = client_ip(peer, &headers);
     let (ok, retry_after) = redeem_limiter().check(&ip);
     if !ok {
         return share_error_page(
@@ -473,10 +469,11 @@ async fn expected_cookie_for(
 /// GET /clips/:event_id.mp4 (cookie-gated)
 pub(crate) async fn share_clip(
     AxumState(s): AxumState<StreamState>,
+    peer: Peer,
     headers: HeaderMap,
     Path(event_id_with_ext): Path<String>,
 ) -> Response {
-    let ip = client_ip(&headers);
+    let ip = client_ip(peer, &headers);
     let (ok, retry_after) = clip_limiter().check(&ip);
     if !ok {
         return share_error_page(
@@ -526,10 +523,11 @@ pub(crate) async fn share_clip(
 /// GET /live/:cam_id.mjpeg (cookie-gated, multipart MJPEG stream)
 pub(crate) async fn share_live(
     AxumState(s): AxumState<StreamState>,
+    peer: Peer,
     headers: HeaderMap,
     Path(cam_with_ext): Path<String>,
 ) -> Response {
-    let ip = client_ip(&headers);
+    let ip = client_ip(peer, &headers);
     let (ok, retry_after) = live_limiter().check(&ip);
     if !ok {
         return share_error_page(

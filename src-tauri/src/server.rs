@@ -78,16 +78,8 @@ pub(crate) async fn require_token(
         return next.run(req).await;
     }
 
-    // Caller key for failure counting. The server has no ConnectInfo; behind the
-    // Tailscale tunnel X-Forwarded-For is the real client. A local caller can
-    // forge it, which at worst dodges this limiter -- the token is the barrier.
-    let ip = req.headers()
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .unwrap_or("unknown")
-        .trim()
-        .to_string();
+    let peer = req.extensions().get::<axum::extract::ConnectInfo<SocketAddr>>().map(|c| c.0);
+    let ip = client_key(peer, req.headers());
 
     // Max 15 failed attempts per caller per 60 seconds.
     let now = Instant::now();
@@ -108,6 +100,25 @@ pub(crate) async fn require_token(
     }
     attempts.push(now);
     (StatusCode::UNAUTHORIZED, "Access denied — use the full link from Anivar").into_response()
+}
+
+/// Who a rate limit counts against: the socket peer, or for a request that came
+/// through Tailscale Funnel, the client its proxy names. The proxy connects from
+/// loopback and APPENDS the real address to X-Forwarded-For, so only the last
+/// entry is trustworthy, and only from loopback. Anything earlier in the header,
+/// or the header from any other peer, was written by the client and used to let
+/// it pick (or keep rotating) its own bucket.
+pub(crate) fn client_key(peer: Option<SocketAddr>, headers: &axum::http::HeaderMap) -> String {
+    let Some(peer) = peer else { return "unknown".into() };
+    if peer.ip().is_loopback() {
+        let proxied = headers.get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.rsplit(',').next())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        if let Some(client) = proxied { return client.to_string(); }
+    }
+    peer.ip().to_string()
 }
 
 /// `<scheme>://localhost` or `<scheme>://localhost:<port>`, and nothing else.
@@ -267,7 +278,7 @@ pub fn start_http_server(
             match loop_bind_reuseaddr(addr6).await {
                 Some(l6) => {
                     tracing::info!("Stream server listening on {} (IPv6)", addr6);
-                    if let Err(e) = axum::serve(l6, app6).await {
+                    if let Err(e) = axum::serve(l6, app6.into_make_service_with_connect_info::<SocketAddr>()).await {
                         tracing::error!("IPv6 stream server error: {}", e);
                     }
                 }
@@ -286,7 +297,7 @@ pub fn start_http_server(
         match listener {
             Some(listener) => {
                 tracing::info!("Stream server listening on {}", addr);
-                if let Err(e) = axum::serve(listener, app).await {
+                if let Err(e) = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await {
                     tracing::error!("Stream server error: {}", e);
                 }
             }
@@ -331,7 +342,21 @@ async fn loop_bind_reuseaddr(addr: SocketAddr) -> Option<tokio::net::TcpListener
 
 #[cfg(test)]
 mod cors_tests {
-    use super::is_local_origin;
+    use super::{client_key, is_local_origin};
+    use std::net::SocketAddr;
+
+    #[test]
+    fn the_rate_limit_key_ignores_headers_the_client_wrote() {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert("x-forwarded-for", "6.6.6.6, 203.0.113.9".parse().unwrap());
+        h.insert("cf-connecting-ip", "7.7.7.7".parse().unwrap());
+        let proxy: SocketAddr = "127.0.0.1:50000".parse().unwrap();
+        let lan: SocketAddr = "192.168.1.20:50000".parse().unwrap();
+        assert_eq!(client_key(Some(proxy), &h), "203.0.113.9", "the hop the local proxy appended");
+        assert_eq!(client_key(Some(lan), &h), "192.168.1.20", "a LAN client can't name its own bucket");
+        assert_eq!(client_key(Some(proxy), &Default::default()), "127.0.0.1");
+        assert_eq!(client_key(None, &h), "unknown");
+    }
 
     #[test]
     fn only_exact_localhost_origins_pass() {
