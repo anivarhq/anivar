@@ -50,7 +50,7 @@ pub struct ToolSpec {
     pub cat: ToolCat,
 }
 
-const P_CAM:  ToolParam = ToolParam { name: "camera", ty: "integer", desc: "camera slot index (0-based)", required: false };
+const P_CAM:  ToolParam = ToolParam { name: "camera", ty: "string", desc: "the camera's name, or its number as shown (Camera 1 is 1)", required: false };
 const P_EVID: ToolParam = ToolParam { name: "event_id", ty: "string", desc: "the event id", required: true };
 const P_MINS: ToolParam = ToolParam { name: "minutes", ty: "integer", desc: "link validity in minutes", required: false };
 
@@ -516,7 +516,8 @@ pub async fn execute(state: &Arc<AppState>, name: &str, args: &Value) -> Option<
                 { hours[chrono::Timelike::hour(&utc) as usize] += 1; }
             }
             let peak = hours.iter().enumerate().max_by_key(|(_, c)| **c).map(|(h, _)| h).unwrap_or(0);
-            let mut cam_list: Vec<String> = cams.iter().map(|c| format!("cam {}", c + 1)).collect();
+            let names = super::retrieve::camera_names(&state.db).await;
+            let mut cam_list: Vec<String> = cams.iter().map(|c| super::retrieve::cam_label(&names, *c)).collect();
             cam_list.sort();
             Some(format!(
                 "{name}: {total} sighting(s) across {} day(s) in the last 30 days. Last seen {last}. Cameras: {}. Most often around {:02}:00–{:02}:00 local.",

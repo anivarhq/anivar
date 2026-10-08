@@ -453,9 +453,10 @@ pub(super) async fn build_situation_ctx(db: &sqlx::SqlitePool, last_chat: Option
     if cams.is_empty() {
         out.push_str("Last 6h: no activity on any camera.\n");
     } else {
+        let names = super::retrieve::camera_names(db).await;
         for (cam, n, last) in cams {
-            out.push_str(&format!("Camera {}: {n} events in the last 6h, latest {}.\n",
-                cam.unwrap_or(0), rel_time(&last)));
+            out.push_str(&format!("{}: {n} events in the last 6h, latest {}.\n",
+                super::retrieve::cam_label(&names, cam.unwrap_or(0)), rel_time(&last)));
         }
     }
 

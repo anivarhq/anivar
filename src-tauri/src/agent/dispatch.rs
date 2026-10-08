@@ -572,8 +572,7 @@ pub(super) async fn render_evidence(
 
 /// A camera's configured name, or a plain "Camera N".
 async fn camera_label(state: &Arc<AppState>, cam: i64) -> String {
-    super::retrieve::camera_names(&state.db).await
-        .get(&cam).cloned().unwrap_or_else(|| format!("Camera {cam}"))
+    super::retrieve::cam_label(&super::retrieve::camera_names(&state.db).await, cam)
 }
 
 /// Events → a numbered list and a tap grid.
@@ -590,8 +589,7 @@ async fn render_events(
 ) {
     if cards.is_empty() { return; }
     let names = super::retrieve::camera_names(&state.db).await;
-    let cam_of = |c: &super::evidence::EventCard| names.get(&c.cam).cloned()
-        .unwrap_or_else(|| format!("Camera {}", c.cam));
+    let cam_of = |c: &super::evidence::EventCard| super::retrieve::cam_label(&names, c.cam);
 
     // "Send me that clip" — upload the footage itself, not a card about it.
     if play {
@@ -864,8 +862,11 @@ pub(super) async fn handle_slash_command(state: &Arc<AppState>, cmd: &str, token
             String::new()
         }
         "/status" => {
+            let names = super::retrieve::camera_names(&state.db).await;
             let cameras = state.latest_frames.read().await;
-            let active: Vec<String> = cameras.keys().map(|k| format!("Camera {}", k)).collect();
+            let mut slots: Vec<i64> = cameras.keys().map(|k| *k as i64).collect();
+            slots.sort();
+            let active: Vec<String> = slots.iter().map(|k| super::retrieve::cam_label(&names, *k)).collect();
             let cam_str = if active.is_empty() { "No cameras active".into() } else { active.join(", ") };
             let settings = state.settings.read().await;
             let agent_ok = settings.agent_enabled;
@@ -988,13 +989,30 @@ pub(super) async fn handle_slash_command(state: &Arc<AppState>, cmd: &str, token
             String::new()
         }
         "/snap" | "/snapshot" => {
-            let cam_id: u8 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-            match state.latest_frames.read().await.get(&cam_id).cloned() {
+            // "/snap 1" is what the app calls Camera 1; a name works too. No
+            // argument: the first camera with a picture.
+            let names = super::retrieve::camera_names(&state.db).await;
+            let said = parts.get(1).map(|s| s.trim()).unwrap_or("");
+            let cam = if said.is_empty() {
+                state.latest_frames.read().await.keys().min().map(|k| *k as i64)
+            } else {
+                super::retrieve::resolve_camera(&names, said)
+            };
+            let Some(cam) = cam else {
+                return if said.is_empty() { "No camera is sending pictures right now.".into() }
+                       else { format!("I don't know a camera called “{said}”. Try /snap 1, or its name.") };
+            };
+            let label = super::retrieve::cam_label(&names, cam);
+            let jpeg = match u8::try_from(cam) {
+                Ok(c) => state.latest_frames.read().await.get(&c).cloned(),
+                Err(_) => None,
+            };
+            match jpeg {
                 Some(jpeg) => {
-                    send_telegram_photo(token, chat_id, jpeg, &format!("Camera {} — snapshot {}", cam_id, Local::now().format("%H:%M"))).await;
+                    send_telegram_photo(token, chat_id, jpeg, &format!("{label} — snapshot {}", Local::now().format("%H:%M"))).await;
                     String::new() // photo sent, no text needed
                 }
-                None => format!("No frame from Camera {} — is it active?", cam_id),
+                None => format!("No picture from {label} — is it on?"),
             }
         }
         _ => String::new(), // unknown command — let the model handle it
