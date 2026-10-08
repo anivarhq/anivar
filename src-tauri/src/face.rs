@@ -531,27 +531,37 @@ fn detect_and_embed(
     size: FaceModelSize,
     det_thr: f32,
 ) -> Vec<(FaceDetection, FaceEmbedding)> {
+    let found = with_face_models(&state.data_dir, size, |models| {
+        let dets = models.detect(jpeg, det_thr).unwrap_or_default();
+        dets.into_iter()
+            .filter_map(|d| models.align_and_embed(jpeg, &d).ok().map(|e| (d, e)))
+            .collect()
+    });
+    found.unwrap_or_else(|e| {
+        // A load failure here silently disables ALL face recognition, so
+        // make it visible (the People tab's health strip surfaces the same
+        // via `face_debug`). Was `debug` — too quiet for a total outage.
+        tracing::warn!("face models unavailable ({size:?}): {e} — recognition disabled until fixed");
+        Vec::new()
+    })
+}
+
+/// Run `f` on THE shared face models for `size`, loading them only if they aren't
+/// loaded yet (or another size is). Recognition, enrollment and the People tab's
+/// status checks all go through here; the status checks used to build two fresh
+/// ORT sessions on every call, each time People was opened or refocused. The
+/// mutex is held for the call and released before return.
+fn with_face_models<T>(
+    data_dir: &Path,
+    size: FaceModelSize,
+    f: impl FnOnce(&mut FaceModels) -> T,
+) -> anyhow::Result<T> {
     let cell = FACE_MODELS.get_or_init(|| Mutex::new(None));
-    let mut guard = match cell.lock() { Ok(g) => g, Err(_) => return Vec::new() };
-    // (Re)load if the configured size changed since the last call.
-    let need_reload = guard.as_ref().map(|m| m.size()) != Some(size);
-    if need_reload {
-        match FaceModels::try_load(&state.data_dir, size) {
-            Ok(m)  => *guard = Some(m),
-            Err(e) => {
-                // A load failure here silently disables ALL face recognition, so
-                // make it visible (the People tab's health strip surfaces the same
-                // via `face_debug`). Was `debug` — too quiet for a total outage.
-                tracing::warn!("face models unavailable ({size:?}): {e} — recognition disabled until fixed");
-                return Vec::new();
-            }
-        }
+    let mut guard = cell.lock().map_err(|_| anyhow::anyhow!("face model lock poisoned"))?;
+    if guard.as_ref().map(|m| m.size()) != Some(size) {
+        *guard = Some(FaceModels::try_load(data_dir, size)?);
     }
-    let models = guard.as_mut().unwrap();
-    let dets = models.detect(jpeg, det_thr).unwrap_or_default();
-    dets.into_iter()
-        .filter_map(|d| models.align_and_embed(jpeg, &d).ok().map(|e| (d, e)))
-        .collect()
+    Ok(f(guard.as_mut().expect("loaded just above")))
 }
 
 /// One-shot face recognition for a single JPEG. Returns the list of confident
@@ -902,7 +912,7 @@ pub async fn face_pipeline_status(state: State<'_, Arc<AppState>>) -> Result<Str
         return Err("No face model installed — install it in the Cookbook or via the Enroll tab.".into());
     };
     let data_dir = state.data_dir.clone();
-    let loaded = tokio::task::spawn_blocking(move || FaceModels::try_load(&data_dir, tier))
+    let loaded = tokio::task::spawn_blocking(move || with_face_models(&data_dir, tier, |_| ()))
         .await.map_err(|e| e.to_string())?;
     match loaded {
         Ok(_)  => Ok(format!("ready: {}", tier.skill_id())),
@@ -952,41 +962,40 @@ pub async fn face_debug(
         dbg.embedder_installed = dir.join("embedder.onnx").exists();
 
         let Some(t) = tier else { dbg.note = "No face model installed".into(); return dbg; };
-        let mut models = match FaceModels::try_load(&data_dir, t) {
-            Ok(m)  => { dbg.detector_loaded = true; dbg.embedder_loaded = true; m }
-            Err(e) => { dbg.note = format!("Model failed to load: {e}"); return dbg; }
-        };
-
-        match jpeg {
-            Some(jpeg) => {
-                if let Ok(im) = image::load_from_memory(&jpeg) { dbg.img_w = im.width(); dbg.img_h = im.height(); }
-                match models.detect(&jpeg, 0.05) {
-                    Ok(dets) => {
-                        dbg.raw_faces = dets.len();
-                        dbg.max_conf = dets.iter().map(|d| d.score).fold(0.0, f32::max);
-                        let mut embed_err: Option<String> = None;
-                        for d in &dets {
-                            match models.align_and_embed(&jpeg, d) {
-                                Ok(_)  => dbg.embedded_faces += 1,
-                                Err(e) => if embed_err.is_none() { embed_err = Some(e.to_string()); },
+        let ran = with_face_models(&data_dir, t, |models| {
+            dbg.detector_loaded = true; dbg.embedder_loaded = true;
+            match jpeg {
+                Some(jpeg) => {
+                    if let Ok(im) = image::load_from_memory(&jpeg) { dbg.img_w = im.width(); dbg.img_h = im.height(); }
+                    match models.detect(&jpeg, 0.05) {
+                        Ok(dets) => {
+                            dbg.raw_faces = dets.len();
+                            dbg.max_conf = dets.iter().map(|d| d.score).fold(0.0, f32::max);
+                            let mut embed_err: Option<String> = None;
+                            for d in &dets {
+                                match models.align_and_embed(&jpeg, d) {
+                                    Ok(_)  => dbg.embedded_faces += 1,
+                                    Err(e) => if embed_err.is_none() { embed_err = Some(e.to_string()); },
+                                }
                             }
+                            // Always include the numbers so nothing is hidden.
+                            let base = format!("{} face(s) @ {:.2}, {} embedded",
+                                dbg.raw_faces, dbg.max_conf, dbg.embedded_faces);
+                            dbg.note = if dbg.raw_faces == 0 {
+                                "0 faces — improve lighting / center your face".into()
+                            } else if dbg.embedded_faces == 0 {
+                                format!("{base} — embed failed: {}", embed_err.unwrap_or_default())
+                            } else {
+                                base
+                            };
                         }
-                        // Always include the numbers so nothing is hidden.
-                        let base = format!("{} face(s) @ {:.2}, {} embedded",
-                            dbg.raw_faces, dbg.max_conf, dbg.embedded_faces);
-                        dbg.note = if dbg.raw_faces == 0 {
-                            "0 faces — improve lighting / center your face".into()
-                        } else if dbg.embedded_faces == 0 {
-                            format!("{base} — embed failed: {}", embed_err.unwrap_or_default())
-                        } else {
-                            base
-                        };
+                        Err(e) => dbg.note = format!("detect error: {e}"),
                     }
-                    Err(e) => dbg.note = format!("detect error: {e}"),
                 }
+                None => dbg.note = "Models loaded".into(),
             }
-            None => dbg.note = "Models loaded".into(),
-        }
+        });
+        if let Err(e) = ran { dbg.note = format!("Model failed to load: {e}"); }
         dbg
     }).await.map_err(|e| e.to_string())?;
 
