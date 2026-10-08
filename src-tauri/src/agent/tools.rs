@@ -26,9 +26,6 @@ fn fmt_when(iso: &str) -> String {
         .unwrap_or_else(|_| iso.chars().take(16).collect())
 }
 
-#[derive(Clone, Copy, PartialEq)]
-pub enum ToolCat { Media, Events, Alerts, Memory, System, Entities }
-
 pub struct ToolParam {
     pub name: &'static str,
     pub ty: &'static str,           // "string" | "integer"
@@ -47,7 +44,6 @@ pub struct ToolSpec {
     /// One-line description (used in the prompt catalog + /help + tool schema).
     pub desc: &'static str,
     pub params: &'static [ToolParam],
-    pub cat: ToolCat,
 }
 
 const P_CAM:  ToolParam = ToolParam { name: "camera", ty: "string", desc: "the camera's name, or its number as shown (Camera 1 is 1)", required: false };
@@ -56,70 +52,70 @@ const P_MINS: ToolParam = ToolParam { name: "minutes", ty: "integer", desc: "lin
 
 pub const TOOLS: &[ToolSpec] = &[
     // ── System / status ──────────────────────────────────────────────────────
-    ToolSpec { name: "get_status", tag: "", slash: Some("status"), cat: ToolCat::System,
+    ToolSpec { name: "get_status", tag: "", slash: Some("status"),
         desc: "Current camera + system status (which cameras are live, recent activity).", params: &[] },
 
     // ── Events / search / analysis (Agies video_search / video_analyze) ───────
-    ToolSpec { name: "recent_events", tag: "", slash: Some("events"), cat: ToolCat::Events,
+    ToolSpec { name: "recent_events", tag: "", slash: Some("events"),
         desc: "List the most RECENT motion events (newest first).",
         params: &[ToolParam { name: "count", ty: "integer", desc: "how many (default 5, max 20)", required: false }] },
-    ToolSpec { name: "search_events", tag: "[SEARCH_EVENTS:{query}]", slash: Some("search"), cat: ToolCat::Events,
+    ToolSpec { name: "search_events", tag: "[SEARCH_EVENTS:{query}]", slash: Some("search"),
         desc: "Search past events by keyword (people, vehicles, plates, zones, summaries).",
         params: &[ToolParam { name: "query", ty: "string", desc: "what to look for", required: true }] },
-    ToolSpec { name: "daily_summary", tag: "", slash: Some("summary"), cat: ToolCat::Events,
+    ToolSpec { name: "daily_summary", tag: "", slash: Some("summary"),
         desc: "A narrative digest of the last 24 hours, newest first.", params: &[] },
-    ToolSpec { name: "get_event_analysis", tag: "", slash: None, cat: ToolCat::Events,
+    ToolSpec { name: "get_event_analysis", tag: "", slash: None,
         desc: "Get the full AI analysis of ONE specific event by its id (use after recent_events/search_events to read the details of a particular event).",
         params: &[P_EVID] },
     // These two were documented in the system prompt but never registered, so
     // they were absent from `tool_schemas()` — a model with native function
     // calling could not request them AT ALL, and only ever got them because
     // `retrieve.rs` appends the tag from Rust.
-    ToolSpec { name: "show_events", tag: "[SHOW_EVENTS:{filter}]", slash: None, cat: ToolCat::Events,
+    ToolSpec { name: "show_events", tag: "[SHOW_EVENTS:{filter}]", slash: None,
         desc: "Show matching events as tappable picture cards. Filter is free-form: 'today', 'last night', 'person today', 'critical this week'. Prefer this over describing events in words.",
         params: &[ToolParam { name: "filter", ty: "string", desc: "free-form filter, e.g. 'person last night'", required: false }] },
-    ToolSpec { name: "day_chart", tag: "[DAY_CHART]", slash: None, cat: ToolCat::Events,
+    ToolSpec { name: "day_chart", tag: "[DAY_CHART]", slash: None,
         desc: "Show a chart of today's activity by hour.", params: &[] },
 
     // ── Media share/send (Agies video_send) ──────────────────────────────────
-    ToolSpec { name: "snapshot", tag: "[SNAPSHOT:{camera}]", slash: Some("snap"), cat: ToolCat::Media,
+    ToolSpec { name: "snapshot", tag: "[SNAPSHOT:{camera}]", slash: Some("snap"),
         desc: "Send a live photo from a camera.", params: &[P_CAM] },
-    ToolSpec { name: "live_video", tag: "[LIVE_VIDEO:{camera}]", slash: None, cat: ToolCat::Media,
+    ToolSpec { name: "live_video", tag: "[LIVE_VIDEO:{camera}]", slash: None,
         desc: "Send a short live multi-frame album from a camera.", params: &[P_CAM] },
-    ToolSpec { name: "send_clip", tag: "[SEND_CLIP:{event_id}]", slash: None, cat: ToolCat::Media,
+    ToolSpec { name: "send_clip", tag: "[SEND_CLIP:{event_id}]", slash: None,
         desc: "Send the recorded clip of an event (plays inline).", params: &[P_EVID] },
-    ToolSpec { name: "share_clip", tag: "[SHARE_CLIP:{event_id}:{minutes}]", slash: None, cat: ToolCat::Media,
+    ToolSpec { name: "share_clip", tag: "[SHARE_CLIP:{event_id}:{minutes}]", slash: None,
         desc: "Create a private shareable link to an event's clip.", params: &[P_EVID, P_MINS] },
-    ToolSpec { name: "share_live", tag: "[SHARE_LIVE:{camera}:{minutes}]", slash: None, cat: ToolCat::Media,
+    ToolSpec { name: "share_live", tag: "[SHARE_LIVE:{camera}:{minutes}]", slash: None,
         desc: "Create a private shareable link to a camera's live view.", params: &[P_CAM, P_MINS] },
-    ToolSpec { name: "send_person", tag: "[SEND_PERSON:{name}]", slash: None, cat: ToolCat::Media,
+    ToolSpec { name: "send_person", tag: "[SEND_PERSON:{name}]", slash: None,
         desc: "Send the enrolled photo of a known person by name.",
         params: &[ToolParam { name: "name", ty: "string", desc: "the enrolled person's name", required: true }] },
 
     // ── Proactive alert rules (Agies event_subscribe) ─────────────────────────
-    ToolSpec { name: "subscribe_alert", tag: "[SUBSCRIBE_ALERT:{rule}]", slash: None, cat: ToolCat::Alerts,
+    ToolSpec { name: "subscribe_alert", tag: "[SUBSCRIBE_ALERT:{rule}]", slash: None,
         desc: "Add a proactive alert rule, e.g. 'person at night|type=person|hours=22-06'.",
-        params: &[ToolParam { name: "rule", ty: "string", desc: "description|type=X|hours=HH-HH|min_risk=Y", required: true }] },
-    ToolSpec { name: "unsubscribe_alert", tag: "[UNSUBSCRIBE_ALERT:{id}]", slash: None, cat: ToolCat::Alerts,
+        params: &[ToolParam { name: "rule", ty: "string", desc: "description|type=X|hours=22-06 (or 22:00-06:00)|min_risk=Y", required: true }] },
+    ToolSpec { name: "unsubscribe_alert", tag: "[UNSUBSCRIBE_ALERT:{id}]", slash: None,
         desc: "Remove an alert rule by its short id.",
         params: &[ToolParam { name: "id", ty: "string", desc: "the rule's short id", required: true }] },
-    ToolSpec { name: "list_rules", tag: "[LIST_RULES]", slash: Some("rules"), cat: ToolCat::Alerts,
+    ToolSpec { name: "list_rules", tag: "[LIST_RULES]", slash: Some("rules"),
         desc: "List all active proactive alert rules.", params: &[] },
 
     // ── Entities — the edge models' knowledge (faces / plates / sounds) exposed
     //    as agent skills, so the Guardian can ANSWER questions about who/what it
     //    knows instead of only describing raw events (the agentic-NVR pattern:
     //    edge AI produces structured entities, the LLM orchestrates them). ──────
-    ToolSpec { name: "people_overview", tag: "", slash: Some("people"), cat: ToolCat::Entities,
+    ToolSpec { name: "people_overview", tag: "", slash: Some("people"),
         desc: "Who the system knows: every enrolled person with role, last-seen time and recent sighting count, plus how many unidentified faces were seen recently.",
         params: &[] },
-    ToolSpec { name: "person_activity", tag: "", slash: None, cat: ToolCat::Entities,
+    ToolSpec { name: "person_activity", tag: "", slash: None,
         desc: "One enrolled person's recent activity: sighting count, days active, which cameras, usual hours, last seen. Use for questions like 'when was X here?'.",
         params: &[ToolParam { name: "name", ty: "string", desc: "the enrolled person's name", required: true }] },
-    ToolSpec { name: "vehicle_activity", tag: "", slash: Some("vehicles"), cat: ToolCat::Entities,
+    ToolSpec { name: "vehicle_activity", tag: "", slash: Some("vehicles"),
         desc: "Vehicles seen recently (licence plates): per-plate sighting count, friendly name if known, cameras, last seen. Optional plate filter.",
         params: &[ToolParam { name: "plate", ty: "string", desc: "filter to one plate (optional)", required: false }] },
-    ToolSpec { name: "audio_activity", tag: "", slash: Some("sounds"), cat: ToolCat::Entities,
+    ToolSpec { name: "audio_activity", tag: "", slash: Some("sounds"),
         desc: "Sounds detected recently (barking, alarms, glass, speech…): per-sound counts, last heard, and the busiest hours.",
         params: &[] },
 
@@ -128,10 +124,10 @@ pub const TOOLS: &[ToolSpec] = &[
     // the current question, so this is how the model asks for MORE on a specific
     // subject ("what do I know about the blue van?") without every fact ever
     // learned being resident in every prompt.
-    ToolSpec { name: "recall_memory", tag: "", slash: None, cat: ToolCat::Memory,
+    ToolSpec { name: "recall_memory", tag: "", slash: None,
         desc: "Search what the agent has learned (family, routines, regular visitors, vehicles) for a subject.",
         params: &[ToolParam { name: "query", ty: "string", desc: "subject to recall (blank = most relevant recent)", required: false }] },
-    ToolSpec { name: "remember", tag: "[REMEMBER:{category}:{content}]", slash: None, cat: ToolCat::Memory,
+    ToolSpec { name: "remember", tag: "[REMEMBER:{category}:{content}]", slash: None,
         desc: "Save a durable fact under a category (family|routines|visitors|vehicles|environment|pets|rules).",
         params: &[
             ToolParam { name: "category", ty: "string", desc: "one of the memory categories", required: true },
@@ -440,10 +436,13 @@ pub async fn execute(state: &Arc<AppState>, name: &str, args: &Value) -> Option<
         "subscribe_alert" => {
             let raw = args.get("rule").and_then(|v| v.as_str()).unwrap_or("").trim();
             if raw.is_empty() { return Some("No rule given.".into()); }
-            let rule = super::memory::parse_alert_rule(raw);
-            let line = super::memory::describe_alert_rule(&rule);
-            super::memory::save_alert_rule(&state.db, &rule).await;
-            Some(line)
+            Some(match super::memory::parse_alert_rule(raw) {
+                Ok(rule) => {
+                    super::memory::save_alert_rule(&state.db, &rule).await;
+                    super::memory::describe_alert_rule(&rule)
+                }
+                Err(why) => why,
+            })
         }
         "unsubscribe_alert" => {
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("").trim();

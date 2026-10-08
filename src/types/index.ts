@@ -97,8 +97,6 @@ export interface Settings {
   person_down_alerts?: boolean;      // needs the body-pose model
   climbing_alerts?: boolean;         // needs a line marked as a fence
   behaviour_alerts_unfamiliar_only?: boolean; // skip recognised faces (never person-down)
-  repeat_visitor_detection?: boolean;
-  repeat_visitor_threshold?: number; // appearances in 24h before alert (default 3)
   // assistant-parity / Cookbook fields. These exist in the Rust Settings struct;
   // we surface them so the Cookbook footer (persona) and Settings Notifications
   // section can edit them with type safety.

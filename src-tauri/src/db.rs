@@ -709,6 +709,20 @@ pub(crate) async fn load_settings_from_db(pool: &SqlitePool) -> Settings {
     // once and persisted immediately (secrets are still encrypted at this
     // point, so writing `s` back stores the same representation it came from).
     let pre_version = s.settings_version;
+    migrate_settings(&mut s);
+    if s.settings_version != pre_version {
+        tracing::info!("settings migrated v{pre_version} → v{}", s.settings_version);
+        let _ = sqlx::query("INSERT OR REPLACE INTO settings(key,value) VALUES('settings',?)")
+            .bind(serde_json::to_string(&s).unwrap_or_default())
+            .execute(pool).await;
+    }
+    s
+}
+
+/// The versioned one-time settings migrations: each runs once, when
+/// `settings_version` is below its number, then bumps it. Pure, so tests can run
+/// it (twice) without a database; the caller persists when the version changed.
+pub(crate) fn migrate_settings(s: &mut Settings) {
     if s.settings_version < 1 {
         // v1 (2026-07): audio detection ON. The whole audio pipeline (mic ring
         // buffer for clip audio + YAMNet sustained sound events) was silently
@@ -752,13 +766,6 @@ pub(crate) async fn load_settings_from_db(pool: &SqlitePool) -> Settings {
         }
         s.settings_version = 4;
     }
-    if s.settings_version != pre_version {
-        tracing::info!("settings migrated v{pre_version} → v{}", s.settings_version);
-        let _ = sqlx::query("INSERT OR REPLACE INTO settings(key,value) VALUES('settings',?)")
-            .bind(serde_json::to_string(&s).unwrap_or_default())
-            .execute(pool).await;
-    }
-    s
 }
 
 /// Probe a camera base URL to find the actual MJPEG stream endpoint.
@@ -835,3 +842,40 @@ pub(crate) async fn load_or_create_auth_token(pool: &SqlitePool) -> String {
     token
 }
 
+
+#[cfg(test)]
+mod settings_migration_tests {
+    use super::migrate_settings;
+    use crate::Settings;
+
+    #[test]
+    fn an_old_install_is_migrated_once_and_choices_after_stick() {
+        let mut s = Settings { settings_version: 0, audio_detection: false, ai_provider: "ollama".into(),
+            vision_model: "qwen3-vl:2b".into(), audio_listen: "scream,glass,alarm,gunshot,bark,yell".into(),
+            ..Settings::default() };
+        migrate_settings(&mut s);
+        assert_eq!(s.settings_version, 4);
+        assert!(s.audio_detection, "v1 turns audio detection on");
+        assert!(s.audio_listen.ends_with(",speech"), "v2 adds speech to the default list");
+        assert_eq!(s.ai_provider, "local", "v3: Ollama is gone");
+        assert_eq!(s.vision_model, "", "v4: no stale Ollama tag");
+
+        // The user then turns audio off and picks a cloud model: a second run
+        // (every boot) must not undo that.
+        s.audio_detection = false;
+        s.ai_provider = "openai".into();
+        s.vision_model = "gpt-4o-mini".into();
+        let before = (s.audio_detection, s.ai_provider.clone(), s.vision_model.clone(), s.audio_listen.clone());
+        migrate_settings(&mut s);
+        assert_eq!((s.audio_detection, s.ai_provider.clone(), s.vision_model.clone(), s.audio_listen.clone()), before);
+    }
+
+    #[test]
+    fn a_custom_listen_list_and_a_cloud_provider_are_respected() {
+        let mut s = Settings { settings_version: 0, audio_listen: "bark".into(), ai_provider: "anthropic".into(),
+            vision_model: "claude".into(), ..Settings::default() };
+        migrate_settings(&mut s);
+        assert_eq!(s.audio_listen, "bark");
+        assert_eq!((s.ai_provider.as_str(), s.vision_model.as_str()), ("anthropic", "claude"));
+    }
+}

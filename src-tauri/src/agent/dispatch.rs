@@ -36,18 +36,6 @@ pub(super) fn risk_to_emoji(risk: &str) -> &'static str {
     }
 }
 
-/// Rich alert dispatch — includes photo, detected objects, duration, time context.
-pub(super) async fn dispatch(
-    settings: &Settings,
-    alert: &AgentAlert,
-    thumbnail: Option<&str>,
-    duration_secs: Option<f64>,
-    detections_json: Option<&str>,
-    data_dir: &std::path::Path,
-) {
-    dispatch_with_clip(settings, alert, thumbnail, duration_secs, detections_json, None, data_dir).await;
-}
-
 pub(super) async fn dispatch_with_clip(
     settings: &Settings,
     alert: &AgentAlert,
@@ -306,26 +294,6 @@ pub(super) async fn send_telegram_with_keyboard(token: &str, chat_id: &str, text
         .await
     else { return false };
     resp.status().is_success()
-}
-
-/// Send photo with a markdown caption (used for rich alerts).
-pub(super) async fn send_telegram_photo_caption(bot_token: &str, chat_id: &str, jpeg: Vec<u8>, caption: &str) {
-    if bot_token.is_empty() || chat_id.is_empty() || jpeg.is_empty() { return; }
-    let url  = format!("https://api.telegram.org/bot{}/sendPhoto", bot_token);
-    let Ok(part) = reqwest::multipart::Part::bytes(jpeg)
-        .file_name("alert.jpg")
-        .mime_str("image/jpeg")
-    else { return; };
-    // No parse_mode — the caption embeds dynamic LLM/label text; unescaped
-    // Markdown would make Telegram silently reject the whole photo+caption.
-    let form = reqwest::multipart::Form::new()
-        .text("chat_id", chat_id.to_string())
-        .text("caption", caption.to_string())
-        .part("photo", part);
-    if let Err(e) = reqwest::Client::new()
-        .post(&url).timeout(Duration::from_secs(30))
-        .multipart(form).send().await
-    { tracing::warn!("Telegram: sendPhoto(caption) error: {}", e.without_url()); }
 }
 
 pub(super) async fn send_telegram_photo(bot_token: &str, chat_id: &str, jpeg: Vec<u8>, caption: &str) {
@@ -1919,15 +1887,11 @@ pub async fn run_telegram_loop(state: Arc<AppState>) {
     tokio::time::sleep(Duration::from_secs(15)).await;
 
     #[derive(Deserialize)]
-    struct TgUser { id: i64 }
-    #[derive(Deserialize)]
-    struct TgCallbackQuery { id: String, #[allow(dead_code)] from: TgUser, data: Option<String>, #[allow(dead_code)] message: Option<TgMessage> }
+    struct TgCallbackQuery { id: String, data: Option<String>, message: Option<TgMessage> }
     #[derive(Deserialize)]
     struct TgUpdate { update_id: i64, message: Option<TgMessage>, callback_query: Option<TgCallbackQuery> }
     #[derive(Deserialize)]
-    struct TgMessage { chat: TgChat, text: Option<String>, #[serde(default)] message_id: Option<i64>,
-                      /// Boxed: TgMessage would otherwise be infinitely sized.
-                      #[serde(default)] reply_to_message: Option<Box<TgMessage>> }
+    struct TgMessage { chat: TgChat, text: Option<String>, #[serde(default)] message_id: Option<i64> }
     #[derive(Deserialize)]
     struct TgChat { id: i64 }
     #[derive(Deserialize)]

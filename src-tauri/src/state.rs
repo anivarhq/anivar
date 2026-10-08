@@ -38,7 +38,6 @@ fn default_reid_threshold() -> f32 { 0.50 }
 fn default_nvr_segment_mins() -> u32 { 1 } // kept for settings UI (minutes display)
 fn default_loitering_secs()      -> u32    { 30 }
 fn default_crowd_threshold()     -> u32    { 3  }
-fn default_repeat_threshold()    -> u32    { 3  }
 fn default_agent_persona_name()  -> String { "Guardian".to_string() }
 fn default_strobe_frames()       -> u32    { 4  }
 fn default_face_model()          -> String { "off".to_string() }   // "off" | "small" | "large"
@@ -268,10 +267,6 @@ pub struct Settings {
     /// person-down — a resident on the floor is exactly who that alert is for.
     #[serde(default = "default_true")]
     pub behaviour_alerts_unfamiliar_only: bool,
-    #[serde(default = "default_true")]
-    pub repeat_visitor_detection: bool,
-    #[serde(default = "default_repeat_threshold")]
-    pub repeat_visitor_threshold: u32,
     // ── assistant-parity: Quiet hours ─────────────────────────────────────────
     #[serde(default)]
     pub quiet_hours_enabled: bool,
@@ -541,8 +536,6 @@ impl Default for Settings {
             person_down_alerts: false,
             climbing_alerts: true,
             behaviour_alerts_unfamiliar_only: true,
-            repeat_visitor_detection: true,
-            repeat_visitor_threshold: 3,
             ai_provider: "local".into(),
             openai_api_key: String::new(),
             anthropic_api_key: String::new(),

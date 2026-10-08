@@ -47,13 +47,6 @@ pub struct EventCard {
 }
 
 impl EventCard {
-    /// The one-line identity of an event: when, where, what. Used for button
-    /// labels and album captions, so a list of twelve "person" events is
-    /// actually distinguishable.
-    pub fn headline(&self, cam_name: &str) -> String {
-        let dur = self.duration.as_deref().map(|d| format!(" · {d}")).unwrap_or_default();
-        format!("{} · {}{} · {}", self.ts, cam_name, dur, self.label())
-    }
 
     /// What was seen. Prefers the AI summary, falls back to the threat type.
     pub fn label(&self) -> String {
@@ -98,7 +91,7 @@ pub enum Evidence {
     /// An enrolled person's photo.
     Person { name: String, thumbnail: Option<String> },
     /// A minted share URL that works from outside the LAN.
-    Link { kind: &'static str, url: String, expires_at: i64, label: String },
+    Link { url: String, expires_at: i64, label: String },
     /// Today's activity by hour. Rendered as a mermaid diagram in the app and
     /// as ASCII on Telegram, from the same SQL.
     Chart,
@@ -202,7 +195,6 @@ pub async fn resolve(state: &Arc<AppState>, reply: &str) -> (String, Vec<Evidenc
                 if resource.is_empty() { None } else {
                     match super::dispatch::mint_link_bounded(state, kind, &resource, mins).await {
                         Ok((url, expires_at)) => Some(Evidence::Link {
-                            kind: if kind == "clip" { "clip" } else { "live" },
                             url, expires_at,
                             label: if kind == "clip" { "Private clip link".into() }
                                    else { format!("Live view · {}", super::retrieve::cam_label(&names, cam.unwrap_or(0))) },
@@ -415,10 +407,6 @@ mod tests {
         assert_eq!(c.cam, 2);
         assert_eq!(c.duration.as_deref(), Some("12s"));
         assert_eq!(c.risk_badge(), "⚠️ suspicious");
-        assert!(c.headline("Front Door").contains("Front Door"),
-                "the camera name reaches the button label");
-        assert!(c.headline("Front Door").contains("12s"),
-                "duration reaches the button label — Telegram used to drop it");
     }
 
     /// The restore-path regression: a persisted reply carries its brackets, and

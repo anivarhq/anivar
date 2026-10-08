@@ -18,10 +18,9 @@ use uuid::Uuid;
 use tauri::Emitter;
 
 use crate::{AppState, Settings};
-use super::memory::{read_memory, write_memory};
+use super::memory::read_memory;
 use super::llm::call_llm;
 use super::analysis::risk_meets_threshold;
-use super::dispatch_intelligence_alert;
 
 // ─── assistant-parity: Semantic Alert Conditions ─────────────────────────────────
 //
@@ -248,16 +247,12 @@ pub fn is_quiet_hours(settings: &Settings) -> bool {
 
     
     let now_hhmm = chrono::Local::now().format("%H:%M").to_string();
+    hhmm_in_window(&settings.quiet_hours_start, &settings.quiet_hours_end, &now_hhmm)
+}
 
-    let start = &settings.quiet_hours_start;
-    let end   = &settings.quiet_hours_end;
-
-    // Handles overnight ranges (e.g. 22:00 → 07:00)
-    if start <= end {
-        &now_hhmm >= start && &now_hhmm < end
-    } else {
-        &now_hhmm >= start || &now_hhmm < end
-    }
+/// Is `now` ("HH:MM") inside `start`..`end`? Wraps midnight (22:00 → 07:00).
+pub(super) fn hhmm_in_window(start: &str, end: &str, now: &str) -> bool {
+    if start <= end { now >= start && now < end } else { now >= start || now < end }
 }
 
 /// Clip text search — search all historical footage by AI-generated descriptions.
@@ -595,41 +590,6 @@ IMPORTANT RULES:
     match call_llm(&s, &system, question, None, false).await {
         Ok(answer) => answer,
         Err(e) => e.to_string(),
-    }
-}
-
-/// Track repeat visitor appearances — alert when same re-ID appears > threshold times today.
-pub async fn check_repeat_visitor(state: &Arc<AppState>, person_id: &str, cam_id: u8) {
-    let s = state.settings.read().await.clone();
-    if !s.repeat_visitor_detection { return; }
-    let threshold = s.repeat_visitor_threshold as i64;
-    drop(s);
-
-    // Key on the DURABLE identity when this body is face-anchored — otherwise the
-    // same person's many appearance-fragments each start their own counter and the
-    // threshold never trips (the fragmentation that breaks recurring-visitor learning).
-    let resolved: Option<String> = sqlx::query_scalar::<_, String>(
-        "SELECT k.name FROM body_embeddings b JOIN known_persons k ON k.id = b.known_person_id \
-         WHERE b.person_id = ? AND b.known_person_id IS NOT NULL LIMIT 1"
-    ).bind(person_id).fetch_optional(&state.db).await.ok().flatten();
-    let id_key = resolved.clone().unwrap_or_else(|| person_id.to_string());
-    let key = format!("repeat_visitor_{}_{}", cam_id, id_key);
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let count_key = format!("{key}_{today}");
-
-    let current: i64 = read_memory(&state.db, &count_key).await
-        .and_then(|v| v.parse().ok()).unwrap_or(0);
-    let new_count = current + 1;
-    write_memory(&state.db, &count_key, &new_count.to_string()).await;
-
-    if new_count == threshold {
-        let who = resolved.unwrap_or_else(|| format!("ID {}", person_id.chars().take(6).collect::<String>()));
-        let summary = format!(
-            "Same person ({}) has appeared {} times today on cam{}. Possible loitering or surveillance.",
-            who, new_count, cam_id + 1
-        );
-        tracing::warn!("[on-device assistants] Repeat visitor: {}", summary);
-        dispatch_intelligence_alert(state, "repeat_visitor", &summary, cam_id, None).await;
     }
 }
 
