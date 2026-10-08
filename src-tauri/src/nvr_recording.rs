@@ -602,26 +602,12 @@ async fn encode_query(data_dir: &std::path::Path, model: &str, query: &str) -> O
     }).await.ok().flatten().flatten()
 }
 
-/// Enforce footage retention — mature NVRs' two-tier retain model, applied at PRUNE
-/// time (recording stays continuous, so pre/post-event context is never lost):
-///
-///   * `nvr_record_mode = "always"`      — everything lives the continuous window;
-///     event-overlapping footage lives the (usually longer) event window.
-///   * `"motion_only"`  — footage NOT overlapping a motion event is dropped after a
-///     1-hour grace; motion footage lives the continuous window; event footage the
-///     event window. (mature NVRs `retain.mode: motion` semantics.)
-///   * `"events_only"`  — only footage overlapping a review event survives the
-///     grace; it lives the event window.
-///
-/// `retention_days` (the general Storage knob) stays the ABSOLUTE ceiling folded
-/// into both windows, so existing setups behave exactly as before until the user
-/// picks a mode. **Video only** — never touches face data, events, or embeddings
-/// (hard rule). Overlap tests pad events ±15 s for pre/post context.
-pub(crate) async fn prune_old_footage(state: &Arc<AppState>) {
-    let (mode, cont_days, event_days, final_days) = {
-        let s = state.settings.read().await;
-        (s.nvr_record_mode.clone(), s.nvr_retain_days, s.nvr_retain_event_days, s.retention_days)
-    };
+/// Which footage retention deletes: `(label, WHERE clause over nvr_segments s)`
+/// rules, plus the backstop window in days (0 = none). Pure, so every mode is
+/// tested against a real database (`retention_tests`).
+fn retention_rules(mode: &str, cont_days: u32, event_days: u32, final_days: u32)
+    -> (Vec<(&'static str, String)>, u32)
+{
     // Fold the absolute ceiling into each window (0 = forever on either side).
     let eff = |d: u32| -> u32 {
         if final_days == 0 { d } else if d == 0 { final_days } else { d.min(final_days) }
@@ -652,8 +638,8 @@ pub(crate) async fn prune_old_footage(state: &Arc<AppState>) {
            AND COALESCE(r.end_time, r.start_time) >= strftime('%Y-%m-%dT%H:%M:%S', s.started_at, '-15 seconds'))";
 
     // Each rule contributes (label, WHERE clause over `nvr_segments s`).
-    let mut rules: Vec<(&str, String)> = Vec::new();
-    match mode.as_str() {
+    let mut rules: Vec<(&'static str, String)> = Vec::new();
+    match mode {
         "motion_only" => rules.push(("non-motion footage", format!(
             "s.started_at < {} AND NOT {MOTION_OVERLAP}", cutoff("-1 hours")))),
         "events_only" => rules.push(("non-event footage", format!(
@@ -664,15 +650,43 @@ pub(crate) async fn prune_old_footage(state: &Arc<AppState>) {
         rules.push(("continuous window", format!(
             "s.started_at < {} AND NOT {EVENT_OVERLAP}", cutoff(&format!("-{cont} days")))));
     }
-    // Final backstop: nothing outlives the longest enabled window.
-    let backstop = match (cont, evw) {
-        (0, _) | (_, 0) => 0,
-        (c, e) => c.max(e),
+    // Final backstop: nothing outlives the longest window that applies. In
+    // events_only that is the event window alone: the continuous window keeps
+    // nothing there, and folding it in let event footage live forever whenever
+    // the continuous window was set to "forever".
+    let backstop = match (mode, cont, evw) {
+        ("events_only", _, e) => e,
+        (_, 0, _) | (_, _, 0) => 0,
+        (_, c, e) => c.max(e),
     };
     if backstop > 0 {
         rules.push(("retention window", format!(
             "s.started_at < {}", cutoff(&format!("-{backstop} days")))));
     }
+    (rules, backstop)
+}
+
+/// Enforce footage retention — mature NVRs' two-tier retain model, applied at PRUNE
+/// time (recording stays continuous, so pre/post-event context is never lost):
+///
+///   * `nvr_record_mode = "always"`      — everything lives the continuous window;
+///     event-overlapping footage lives the (usually longer) event window.
+///   * `"motion_only"`  — footage NOT overlapping a motion event is dropped after a
+///     1-hour grace; motion footage lives the continuous window; event footage the
+///     event window. (mature NVRs `retain.mode: motion` semantics.)
+///   * `"events_only"`  — only footage overlapping a review event survives the
+///     grace; it lives the event window.
+///
+/// `retention_days` (the general Storage knob) stays the ABSOLUTE ceiling folded
+/// into both windows, so existing setups behave exactly as before until the user
+/// picks a mode. **Video only** — never touches face data, events, or embeddings
+/// (hard rule). Overlap tests pad events ±15 s for pre/post context.
+pub(crate) async fn prune_old_footage(state: &Arc<AppState>) {
+    let (mode, cont_days, event_days, final_days) = {
+        let s = state.settings.read().await;
+        (s.nvr_record_mode.clone(), s.nvr_retain_days, s.nvr_retain_event_days, s.retention_days)
+    };
+    let (rules, backstop) = retention_rules(&mode, cont_days, event_days, final_days);
 
     // Keep-event-clips (opt-in): before the raw footage covering an event ages
     // out, export the event's bounded standalone clip — the clip file is a
@@ -1137,5 +1151,78 @@ mod tests {
             "no `from` bound means no filtering");
         assert!(segment_ends_after("not-a-timestamp", Some(10.0), Some(day_start)),
             "an unparseable row is the indexer's problem; do not silently drop it");
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::retention_rules;
+
+    /// Six segments, each 10 s long, at a known age, against real SQLite.
+    async fn archive() -> sqlx::SqlitePool {
+        let db = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE nvr_segments (id TEXT, path TEXT, started_at TEXT, ended_at TEXT)").execute(&db).await.unwrap();
+        sqlx::query("CREATE TABLE motion_events (id TEXT, started_at TEXT, ended_at TEXT)").execute(&db).await.unwrap();
+        sqlx::query("CREATE TABLE review_segments (start_time TEXT, end_time TEXT)").execute(&db).await.unwrap();
+        // (id, age, motion event?, review event?)
+        for (id, age, motion, review) in [
+            ("plain_2h",    "-2 hours",  false, false),
+            ("motion_3h",   "-3 hours",  true,  false),
+            ("plain_2d",    "-2 days",   false, false),
+            ("plain_13d",   "-13 days",  false, false),
+            ("event_12d",   "-12 days",  true,  true),
+            ("event_40d",   "-40 days",  true,  true),
+        ] {
+            let at = format!("strftime('%Y-%m-%dT%H:%M:%S','now','{age}')");
+            let end = format!("strftime('%Y-%m-%dT%H:%M:%S','now','{age}','+10 seconds')");
+            sqlx::query(&format!("INSERT INTO nvr_segments VALUES ('{id}','{id}.mp4',{at},{end})")).execute(&db).await.unwrap();
+            if motion { sqlx::query(&format!("INSERT INTO motion_events VALUES ('{id}',{at},{end})")).execute(&db).await.unwrap(); }
+            if review { sqlx::query(&format!("INSERT INTO review_segments VALUES ({at},{end})")).execute(&db).await.unwrap(); }
+        }
+        db
+    }
+
+    /// What survives a prune with these settings, sorted.
+    async fn kept(mode: &str, cont: u32, event: u32, ceiling: u32) -> Vec<String> {
+        let db = archive().await;
+        for (_, where_clause) in retention_rules(mode, cont, event, ceiling).0 {
+            sqlx::query(&format!("DELETE FROM nvr_segments AS s WHERE {where_clause}")).execute(&db).await.unwrap();
+        }
+        let mut left: Vec<String> = sqlx::query_scalar("SELECT id FROM nvr_segments").fetch_all(&db).await.unwrap();
+        left.sort();
+        left
+    }
+
+    #[tokio::test]
+    async fn each_mode_keeps_what_it_promises() {
+        // Continuous: plain footage lives 7 days, event footage 30.
+        assert_eq!(kept("always", 7, 30, 0).await, ["event_12d", "motion_3h", "plain_2d", "plain_2h"]);
+        // Motion only: footage with no motion is gone after the 1-hour grace.
+        assert_eq!(kept("motion_only", 7, 30, 0).await, ["event_12d", "motion_3h"]);
+        // Events only: only footage under a review event survives the grace.
+        assert_eq!(kept("events_only", 7, 30, 0).await, ["event_12d"]);
+    }
+
+    #[tokio::test]
+    async fn keep_forever_keeps_everything() {
+        assert_eq!(kept("always", 0, 0, 0).await.len(), 6);
+        assert_eq!(kept("always", 0, 30, 0).await.len(), 6, "continuous forever outlasts any event window");
+    }
+
+    #[tokio::test]
+    async fn event_footage_lives_its_event_window_in_events_only() {
+        // Continuous "forever" has no meaning here; it used to disable the
+        // backstop, so event footage was never deleted at all.
+        assert_eq!(kept("events_only", 0, 10, 0).await, Vec::<String>::new());
+        assert_eq!(kept("events_only", 0, 30, 0).await, ["event_12d"]);
+    }
+
+    #[tokio::test]
+    async fn the_overall_limit_caps_every_window() {
+        // Both windows "forever", overall limit 7 days.
+        assert_eq!(kept("always", 0, 0, 7).await, ["motion_3h", "plain_2d", "plain_2h"]);
+        // A longer window is cut down to the limit; event footage is never
+        // deleted before its event window otherwise.
+        assert_eq!(kept("always", 7, 30, 14).await, ["event_12d", "motion_3h", "plain_2d", "plain_2h"]);
     }
 }
