@@ -1759,11 +1759,7 @@ async fn build_vehicles_menu(state: &Arc<AppState>, page: u32) -> (String, serde
           GROUP BY recognized_plate ORDER BY 2 DESC, 3 DESC"
     ).fetch_all(&state.db).await.unwrap_or_default();
     let known = state.settings.read().await.known_plates.clone();
-    let name_of = |plate: &str| -> Option<String> {
-        known.lines().find_map(|l| l.split_once('=')
-            .filter(|(p, _)| p.trim().eq_ignore_ascii_case(plate.trim()))
-            .map(|(_, n)| n.trim().to_string()).filter(|n| !n.is_empty()))
-    };
+    let name_of = |plate: &str| crate::alpr::match_known_plate(plate, &known);
     let pages = rows_db.len().div_ceil(PER_PAGE).max(1);
     let page = (page as usize).min(pages - 1);
 
@@ -1820,9 +1816,7 @@ async fn send_vehicle_detail(state: &Arc<AppState>, token: &str, chat_id: &str, 
         "SELECT MIN(started_at) FROM motion_events WHERE recognized_plate=?"
     ).bind(&plate).fetch_optional(&state.db).await.ok().flatten();
     let known = state.settings.read().await.known_plates.clone();
-    let name = known.lines().find_map(|l| l.split_once('=')
-        .filter(|(p, _)| p.trim().eq_ignore_ascii_case(plate.trim()))
-        .map(|(_, n)| n.trim().to_string()).filter(|n| !n.is_empty()));
+    let name = crate::alpr::match_known_plate(&plate, &known);
 
     let title = match &name { Some(n) => format!("🚗 {plate} — {n}"), None => format!("🚗 {plate}") };
     let first_seen = first.as_deref().map(rel_time).unwrap_or_else(|| "?".into());

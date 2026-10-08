@@ -36,6 +36,54 @@ const CLASSES: usize = 37;
 /// vehicle so we don't pay the load cost unless we have to.
 static ALPR_MODEL: OnceLock<Mutex<Option<OrtSession>>> = OnceLock::new();
 
+/// The friendly name for a plate, from the user's `known_plates` setting
+/// ("PLATE=Name" per line). THE matcher: event naming, the assistant, Telegram
+/// and Vehicles all use it, so a plate is named the same everywhere.
+///
+/// Both sides compare as uppercase letters and digits only, so "KA-01 AB 1234"
+/// matches "KA01AB1234". An exact match wins. Otherwise one OCR misread (edit
+/// distance 1) is tolerated for plates of 4+ characters, and only when exactly
+/// one known plate is that close. The first line within one character used to
+/// win, before exact matches were checked: with ABC123=Mum above ABC124=Dad, a
+/// read of ABC124 was labelled Mum.
+pub(crate) fn match_known_plate(plate: &str, known_plates: &str) -> Option<String> {
+    let norm = |s: &str| s.chars().filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_uppercase()).collect::<String>();
+    let target = norm(plate);
+    if target.is_empty() { return None; }
+    let known: Vec<(String, &str)> = known_plates.lines().filter_map(|line| {
+        let (pat, name) = line.split_once('=')?;
+        let (pat, name) = (norm(pat), name.trim());
+        (!pat.is_empty() && !name.is_empty()).then_some((pat, name))
+    }).collect();
+    if let Some((_, name)) = known.iter().find(|(pat, _)| *pat == target) {
+        return Some(name.to_string());
+    }
+    if target.len() < 4 { return None; }
+    let mut near = known.iter().filter(|(pat, _)| pat.len() >= 4 && levenshtein(pat, &target) == 1);
+    match (near.next(), near.next()) {
+        (Some((_, name)), None) => Some(name.to_string()),
+        _ => None, // none close, or two equally close: don't guess an owner
+    }
+}
+
+/// Levenshtein edit distance (plates are short, so the O(n·m) DP is trivial).
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for (i, ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
 /// Locate the ALPR model file, region-aware (v7).
 /// Lookup order:
 ///   1. `skills/alpr_{region}/model.onnx` for the requested region
@@ -339,5 +387,32 @@ mod color_tests {
     #[test]
     fn tiny_crop_abstains() {
         assert!(classify_vehicle_color(&jpeg_of([200, 25, 25]), [0.0, 0.0, 12.0, 12.0]).is_none());
+    }
+}
+
+#[cfg(test)]
+mod known_plate_tests {
+    use super::match_known_plate;
+
+    #[test]
+    fn an_exact_match_names_the_right_owner() {
+        let known = "ABC123=Mum\nABC124=Dad";
+        assert_eq!(match_known_plate("ABC124", known).as_deref(), Some("Dad"), "not Mum, one line up");
+        assert_eq!(match_known_plate("ABC123", known).as_deref(), Some("Mum"));
+        assert_eq!(match_known_plate("ABC125", known), None, "one off from both: don't guess");
+        assert_eq!(match_known_plate("ABD123", "ABC123=Mum").as_deref(), Some("Mum"), "one misread tolerated");
+    }
+
+    #[test]
+    fn dashes_spaces_and_case_dont_matter() {
+        let known = "KA-01 AB 1234 = Ranjith";
+        assert_eq!(match_known_plate("KA01AB1234", known).as_deref(), Some("Ranjith"));
+        assert_eq!(match_known_plate("ka 01 ab-1234", known).as_deref(), Some("Ranjith"));
+    }
+
+    #[test]
+    fn a_short_plate_must_match_exactly() {
+        assert_eq!(match_known_plate("AB1", "AB1=Van").as_deref(), Some("Van"));
+        assert_eq!(match_known_plate("AB2", "AB1=Van"), None, "3 characters: no fuzzy match");
     }
 }

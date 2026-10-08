@@ -1340,17 +1340,7 @@ pub async fn list_vehicles(
     ).bind(format!("-{days} days")).fetch_all(&state.db).await.map_err(|e| e.to_string())?;
 
     let known = state.settings.read().await.known_plates.clone();
-    let name_of = |plate: &str| -> Option<String> {
-        for line in known.lines() {
-            if let Some((p, n)) = line.split_once('=') {
-                if p.trim().eq_ignore_ascii_case(plate.trim()) {
-                    let n = n.trim();
-                    if !n.is_empty() { return Some(n.to_string()); }
-                }
-            }
-        }
-        None
-    };
+    let name_of = |plate: &str| crate::alpr::match_known_plate(plate, &known);
 
     let mut map: std::collections::HashMap<String, Vehicle> = std::collections::HashMap::new();
     for (plate, cam, started, thumb, eid) in rows {
