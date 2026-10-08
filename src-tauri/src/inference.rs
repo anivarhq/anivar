@@ -929,7 +929,7 @@ pub async fn run_inference_loop(state: Arc<AppState>) {
                     let kp_pid = format!("kp_{}", lf.person_id);
                     if let Some((cached, _)) = track_body_id_get(cam_id, track_id) {
                         if cached != kp_pid {
-                            tracing::info!(
+                            tracing::debug!(
                                 "cam{cam_id}: face '{}' (score {:.2}) contradicts track {track_id}'s body identity {cached} — face wins",
                                 lf.name, lf.score
                             );

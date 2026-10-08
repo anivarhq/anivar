@@ -694,7 +694,7 @@ pub async fn analyze_event_clip(state: Arc<AppState>, event_id: String) {
                             let _ = sqlx::query("UPDATE motion_events SET recognized_plate=?, plate_score=? WHERE id=?")
                                 .bind(&p).bind(score).bind(&event_id)
                                 .execute(&state.db).await;
-                            tracing::info!("ALPR: event {} → plate '{}' ({:.2})", &event_id[..8.min(event_id.len())], p, score);
+                            tracing::debug!("ALPR: event {} → plate '{}' ({:.2})", &event_id[..8.min(event_id.len())], p, score);
                             recognised_plate = Some(p);
                             recognised_plate_score = Some(score);
                         }

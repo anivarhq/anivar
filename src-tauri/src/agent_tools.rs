@@ -111,7 +111,7 @@ pub async fn telegram_connect(bot_token: String) -> Result<TelegramConnect, Stri
     let me: serde_json::Value = client
         .get(format!("https://api.telegram.org/bot{token}/getMe"))
         .timeout(std::time::Duration::from_secs(10))
-        .send().await.map_err(|e| format!("Network error: {e}"))?
+        .send().await.map_err(|e| format!("Network error: {}", e.without_url()))?
         .json().await.unwrap_or_default();
     if !me.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
         let desc = me.get("description").and_then(|v| v.as_str()).unwrap_or("Unauthorized");
@@ -125,7 +125,7 @@ pub async fn telegram_connect(bot_token: String) -> Result<TelegramConnect, Stri
     let updates: serde_json::Value = client
         .get(format!("https://api.telegram.org/bot{token}/getUpdates"))
         .timeout(std::time::Duration::from_secs(10))
-        .send().await.map_err(|e| format!("Network error: {e}"))?
+        .send().await.map_err(|e| format!("Network error: {}", e.without_url()))?
         .json().await.unwrap_or_default();
     let mut chat_id = String::new();
     let mut chat_name = String::new();
@@ -161,7 +161,7 @@ pub async fn send_telegram_test(bot_token: String, chat_id: String) -> Result<St
         .json(&serde_json::json!({ "chat_id": &chat_id, "text": "Anivar Guardian connected! This is a test message." }))
         .send()
         .await
-        .map_err(|e| format!("Network error: {e}"))?;
+        .map_err(|e| format!("Network error: {}", e.without_url()))?;
     let status = resp.status();
     let body: serde_json::Value = resp.json().await.unwrap_or_default();
     if body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {

@@ -618,7 +618,7 @@ pub async fn recognize_faces(
         .collect();
     for i in duplicate_identity_indices(&named) {
         if let Some(fm) = frame_faces[i].m.as_mut() {
-            tracing::info!("cam{cam_id}: '{}' matched two faces in one frame — demoting the weaker match to unknown", fm.name);
+            tracing::debug!("cam{cam_id}: '{}' matched two faces in one frame — demoting the weaker match to unknown", fm.name);
             fm.person_id = String::new();
             fm.name = "unknown".into();
         }

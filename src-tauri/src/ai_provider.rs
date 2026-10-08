@@ -34,7 +34,7 @@ pub async fn list_provider_models(
 ///   • OpenAI    — `https://api.openai.com/v1/models`            (Bearer)
 ///   • Anthropic — `https://api.anthropic.com/v1/models`         (x-api-key)
 ///   • Groq      — `https://api.groq.com/openai/v1/models`       (Bearer)
-///   • Gemini    — `…/v1beta/models?key=…`                       (query param)
+///   • Gemini    — `…/v1beta/models`                             (x-goog-api-key)
 #[tauri::command]
 pub async fn test_ai_provider(
     provider: Option<String>,
@@ -118,11 +118,8 @@ pub async fn test_ai_provider(
             if settings.gemini_api_key.is_empty() {
                 return Ok(serde_json::json!({ "ok": false, "error": "Missing Gemini API key" }));
             }
-            let url = format!(
-                "https://generativelanguage.googleapis.com/v1beta/models?key={}",
-                urlencoding::encode(&settings.gemini_api_key),
-            );
-            let req = client.get(&url);
+            let req = client.get("https://generativelanguage.googleapis.com/v1beta/models")
+                .header("x-goog-api-key", settings.gemini_api_key.as_str());
             match send(req).await {
                 Ok(data) => {
                     // Gemini returns `models[].name` like "models/gemini-1.5-flash"; strip prefix.

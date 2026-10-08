@@ -211,7 +211,7 @@ pub(super) async fn send_telegram_html(bot_token: &str, chat_id: &str, html: &st
         .send()
         .await;
     if let Err(e) = result {
-        tracing::warn!("Telegram: sendMessage(HTML) error: {e}");
+        tracing::warn!("Telegram: sendMessage(HTML) error: {}", e.without_url());
     }
 }
 
@@ -236,7 +236,7 @@ pub(super) async fn send_telegram_html_kb(
         .send()
         .await;
     if let Err(e) = result {
-        tracing::warn!("Telegram: sendMessage(HTML+kb) error: {e}");
+        tracing::warn!("Telegram: sendMessage(HTML+kb) error: {}", e.without_url());
     }
 }
 
@@ -259,7 +259,7 @@ pub async fn send_telegram(bot_token: &str, chat_id: &str, text: &str) {
         .send()
         .await;
     if let Err(e) = result {
-        tracing::warn!("Telegram: sendMessage error: {e}");
+        tracing::warn!("Telegram: sendMessage error: {}", e.without_url());
     }
 }
 
@@ -325,7 +325,7 @@ pub(super) async fn send_telegram_photo_caption(bot_token: &str, chat_id: &str, 
     if let Err(e) = reqwest::Client::new()
         .post(&url).timeout(Duration::from_secs(30))
         .multipart(form).send().await
-    { tracing::warn!("Telegram: sendPhoto(caption) error: {e}"); }
+    { tracing::warn!("Telegram: sendPhoto(caption) error: {}", e.without_url()); }
 }
 
 pub(super) async fn send_telegram_photo(bot_token: &str, chat_id: &str, jpeg: Vec<u8>, caption: &str) {
@@ -347,7 +347,7 @@ pub(super) async fn send_telegram_photo(bot_token: &str, chat_id: &str, jpeg: Ve
         .multipart(form)
         .send().await
     {
-        tracing::warn!("Telegram: sendPhoto error: {e}");
+        tracing::warn!("Telegram: sendPhoto error: {}", e.without_url());
     }
 }
 
@@ -425,7 +425,7 @@ pub(super) async fn send_telegram_video(
         .send().await
     {
         Ok(r) => r.status().is_success(),
-        Err(e) => { tracing::warn!("Telegram: sendVideo error: {e}"); false }
+        Err(e) => { tracing::warn!("Telegram: sendVideo error: {}", e.without_url()); false }
     }
 }
 
@@ -466,7 +466,7 @@ pub(super) async fn send_telegram_media_group(
         .multipart(form).send().await
     {
         Ok(r) => r.status().is_success(),
-        Err(e) => { tracing::warn!("Telegram: sendMediaGroup error: {e}"); false }
+        Err(e) => { tracing::warn!("Telegram: sendMediaGroup error: {}", e.without_url()); false }
     }
 }
 
@@ -1963,7 +1963,7 @@ pub async fn run_telegram_loop(state: Arc<AppState>) {
         let resp = match resp {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!("Telegram: poll error: {e}");
+                tracing::warn!("Telegram: poll error: {}", e.without_url());
                 tokio::time::sleep(Duration::from_secs(10)).await;
                 continue;
             }
@@ -1972,7 +1972,7 @@ pub async fn run_telegram_loop(state: Arc<AppState>) {
         let tg: TgResp = match resp.json().await {
             Ok(v) => v,
             Err(e) => {
-                tracing::warn!("Telegram: parse error: {e}");
+                tracing::warn!("Telegram: parse error: {}", e.without_url());
                 tokio::time::sleep(Duration::from_secs(10)).await;
                 continue;
             }
@@ -2255,7 +2255,10 @@ pub async fn run_telegram_loop(state: Arc<AppState>) {
             let Some(ref user_text) = msg.text else { return; };
             let from_chat = msg.chat.id.to_string();
 
-            tracing::warn!("Telegram: message from chat_id={from_chat}: {user_text}");
+            // What people write stays out of the log by default (it gets pasted
+            // into public bug reports); who wrote is enough to diagnose with.
+            tracing::info!("Telegram: message from chat_id={from_chat}");
+            tracing::debug!("Telegram: message text: {user_text}");
 
             // Anyone who finds the bot can message it. Until a numeric Chat ID is
             // configured, every chat gets only its own ID back — never a snapshot,
