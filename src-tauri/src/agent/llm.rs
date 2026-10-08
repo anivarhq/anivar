@@ -31,6 +31,38 @@ fn http() -> reqwest::Client {
     C.get_or_init(|| reqwest::Client::builder().build().unwrap_or_default()).clone()
 }
 
+/// Only a request whose SHAPE was refused says "this endpoint doesn't do tools".
+/// Any 4xx used to: a bad key (401/403), a wrong model (404) or a rate limit
+/// (429) downgraded the provider to the tag path until the app restarted, so a
+/// user who fixed their key kept the weaker assistant.
+fn rejects_tool_schema(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 400 | 422)
+}
+
+/// One plain sentence for a failed provider call, for whoever reads it next: the
+/// app's chat, a Telegram reply, the log. Raw provider JSON used to reach them
+/// verbatim. The provider's own `message` is kept for other errors (truncated):
+/// it names the problem, and `clip.rs` recognises "does not support image" in it.
+fn provider_error(status: reqwest::StatusCode, body: &str) -> anyhow::Error {
+    tracing::debug!("AI provider HTTP {status}: {body}");
+    let code = status.as_u16();
+    let msg = match code {
+        401 | 403 => "The AI service rejected the API key. Check it in Settings.".to_string(),
+        429 => "The AI service is rate-limiting requests. Wait a minute and try again.".to_string(),
+        500..=599 => format!("The AI service is having trouble (HTTP {code}). Try again shortly."),
+        _ => {
+            let v: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+            let said = v["error"]["message"].as_str().or(v["error"].as_str()).or(v["message"].as_str())
+                .map(|m| m.chars().take(200).collect::<String>());
+            match said {
+                Some(m) => format!("The AI service refused the request (HTTP {code}): {m}"),
+                None => format!("The AI service refused the request (HTTP {code})."),
+            }
+        }
+    };
+    anyhow::anyhow!(msg)
+}
+
 /// POST `body` as JSON with retry on 429 / 5xx / transient network errors, using
 /// exponential backoff (0.4s → 0.8s → 1.6s). `build` adds provider-specific auth/headers
 /// to each fresh attempt (a RequestBuilder is consumed by `send`). This is the
@@ -39,7 +71,7 @@ pub(super) async fn post_json_retry<B: serde::Serialize>(
     url: &str,
     body: &B,
     build: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
-) -> reqwest::Result<reqwest::Response> {
+) -> anyhow::Result<reqwest::Response> {
     const MAX: u32 = 3;
     let mut attempt = 0u32;
     loop {
@@ -49,12 +81,16 @@ pub(super) async fn post_json_retry<B: serde::Serialize>(
                 tokio::time::sleep(Duration::from_millis(400 * 2u64.pow(attempt))).await;
                 attempt += 1;
             }
-            Ok(r) => return Ok(r),
+            Ok(r) if r.status().is_success() => return Ok(r),
+            Ok(r) => {
+                let status = r.status();
+                return Err(provider_error(status, &r.text().await.unwrap_or_default()));
+            }
             Err(e) if (e.is_timeout() || e.is_connect()) && attempt + 1 < MAX => {
                 tokio::time::sleep(Duration::from_millis(400 * 2u64.pow(attempt))).await;
                 attempt += 1;
             }
-            Err(e) => return Err(e),
+            Err(e) => anyhow::bail!("Couldn't reach the AI service: {}", e.without_url()),
         }
     }
 }
@@ -532,11 +568,11 @@ pub(super) async fn call_llm_tools(
         .send().await?;
     let status = resp.status();
     if !status.is_success() {
-        // A 4xx on a tool-carrying request is the endpoint telling us it does
-        // not do tools (or does not do THIS schema). Remember it and let the
-        // caller drop to tags rather than failing every turn identically.
-        if status.is_client_error() { remember_no_native_tools(settings); }
-        anyhow::bail!("tools HTTP {status}");
+        // A refused request SHAPE is the endpoint telling us it does not do
+        // tools (or not THIS schema). Remember it and let the caller drop to
+        // tags rather than failing every turn identically.
+        if rejects_tool_schema(status) { remember_no_native_tools(settings); }
+        return Err(provider_error(status, &resp.text().await.unwrap_or_default()));
     }
     let v: serde_json::Value = resp.json().await?;
     let msg = &v["choices"][0]["message"];
@@ -605,8 +641,8 @@ async fn call_anthropic_tools(
         .json(&body).send().await?;
     let status = resp.status();
     if !status.is_success() {
-        if status.is_client_error() { remember_no_native_tools(settings); }
-        anyhow::bail!("anthropic tools HTTP {status}");
+        if rejects_tool_schema(status) { remember_no_native_tools(settings); }
+        return Err(provider_error(status, &resp.text().await.unwrap_or_default()));
     }
     let v: serde_json::Value = resp.json().await?;
     let mut content = String::new();
@@ -689,8 +725,8 @@ async fn call_gemini_tools(
         .timeout(Duration::from_secs(120)).json(&body).send().await?;
     let status = resp.status();
     if !status.is_success() {
-        if status.is_client_error() { remember_no_native_tools(settings); }
-        anyhow::bail!("gemini tools HTTP {status}");
+        if rejects_tool_schema(status) { remember_no_native_tools(settings); }
+        return Err(provider_error(status, &resp.text().await.unwrap_or_default()));
     }
     let v: serde_json::Value = resp.json().await?;
     let mut content = String::new();
@@ -783,7 +819,7 @@ pub(super) async fn call_openai_compat(
     resp["choices"][0]["message"]["content"]
         .as_str()
         .map(|s| s.to_string())
-        .ok_or_else(|| anyhow::anyhow!("OpenAI response missing content: {:?}", resp))
+        .ok_or_else(|| empty_answer(&resp))
 }
 
 /// Anthropic Messages API (Claude models)
@@ -825,7 +861,7 @@ pub(super) async fn call_anthropic(
     resp["content"][0]["text"]
         .as_str()
         .map(|s| s.to_string())
-        .ok_or_else(|| anyhow::anyhow!("Anthropic response missing text: {:?}", resp))
+        .ok_or_else(|| empty_answer(&resp))
 }
 
 /// Google Gemini API (now VISION-capable — base64 frames go in as `inline_data`, so
@@ -860,7 +896,14 @@ pub(super) async fn call_gemini(
     resp["candidates"][0]["content"]["parts"][0]["text"]
         .as_str()
         .map(|s| s.to_string())
-        .ok_or_else(|| anyhow::anyhow!("Gemini response missing text: {:?}", resp))
+        .ok_or_else(|| empty_answer(&resp))
+}
+
+/// A 200 with no text in it (a safety block, a truncated stream). The JSON goes to
+/// the debug log; people get a sentence.
+fn empty_answer(resp: &serde_json::Value) -> anyhow::Error {
+    tracing::debug!("AI provider returned no text: {resp}");
+    anyhow::anyhow!("The AI service sent back an empty answer. Try asking again.")
 }
 
 /// Curated default models for the UI picker, per provider. These are sensible,
@@ -977,6 +1020,30 @@ mod tool_wire_tests {
         // The on-device engine never claims a tool channel.
         s.ai_provider = "local".into();
         assert_eq!(tool_mode(&s), ToolMode::Tags);
+    }
+
+    #[test]
+    fn a_bad_key_or_a_rate_limit_never_costs_the_tool_channel() {
+        use reqwest::StatusCode as S;
+        for refused_shape in [S::BAD_REQUEST, S::UNPROCESSABLE_ENTITY] {
+            assert!(rejects_tool_schema(refused_shape));
+        }
+        for transient in [S::UNAUTHORIZED, S::FORBIDDEN, S::NOT_FOUND, S::TOO_MANY_REQUESTS, S::INTERNAL_SERVER_ERROR] {
+            assert!(!rejects_tool_schema(transient), "{transient} must not downgrade the provider");
+        }
+    }
+
+    #[test]
+    fn provider_errors_reach_people_as_one_sentence() {
+        use reqwest::StatusCode as S;
+        let openai_401 = r#"{"error":{"message":"Incorrect API key provided: sk-abc***","type":"invalid_request_error"}}"#;
+        assert_eq!(provider_error(S::UNAUTHORIZED, openai_401).to_string(),
+            "The AI service rejected the API key. Check it in Settings.");
+        assert!(provider_error(S::TOO_MANY_REQUESTS, "{}").to_string().contains("rate-limiting"));
+        let lmstudio = r#"{"error":"Model does not support images. Please use a model that does."}"#;
+        let e = provider_error(S::BAD_REQUEST, lmstudio).to_string();
+        assert!(e.contains("does not support image") && !e.contains('{'), "{e}");
+        assert_eq!(provider_error(S::NOT_FOUND, "<html>").to_string(), "The AI service refused the request (HTTP 404).");
     }
 
     /// Anthropic and Gemini were denied tools they support by a hardcoded

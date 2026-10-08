@@ -365,8 +365,7 @@ async fn tag_tool_loop(
         small_model_prompt(settings, camera_name, situation_ctx)
     };
 
-    let first = call_llm(settings, &sys, user, None, false).await
-        .map_err(|e| anyhow::anyhow!("Guardian AI error: {e}"))?;
+    let first = call_llm(settings, &sys, user, None, false).await?;
 
     // Which DATA tags did it ask for? (Media/action tags are evidence for the
     // surface to render, not information the model needs read back to it.)

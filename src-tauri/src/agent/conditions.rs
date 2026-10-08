@@ -594,7 +594,7 @@ IMPORTANT RULES:
 
     match call_llm(&s, &system, question, None, false).await {
         Ok(answer) => answer,
-        Err(e) => format!("Guardian AI error: {e}. Check AI provider settings."),
+        Err(e) => e.to_string(),
     }
 }
 

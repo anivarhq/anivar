@@ -801,7 +801,7 @@ async fn run_agent_turn(
     send_telegram_action(token, chat_id, "typing").await;
     let reply = match chat_with_agent(state, Vec::new(), question.to_string(), mode).await {
         Ok(r) => r,
-        Err(e) => { send_telegram(token, chat_id, &format!("Guardian is unavailable right now.\nError: {e}")).await; return; }
+        Err(e) => { send_telegram(token, chat_id, &format!("Guardian is unavailable right now. {e}")).await; return; }
     };
     let (clean, evidence) = super::evidence::resolve(state, &reply).await;
     if !clean.is_empty() { send_telegram(token, chat_id, &clean).await; }
@@ -2312,7 +2312,7 @@ pub async fn run_telegram_loop(state: Arc<AppState>) {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!("Telegram: agent error: {e}");
-                    format!("Guardian is unavailable right now.\nError: {e}")
+                    format!("Guardian is unavailable right now. {e}")
                 }
             };
             typing_active.store(false, std::sync::atomic::Ordering::Relaxed);
