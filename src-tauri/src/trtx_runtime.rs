@@ -108,6 +108,16 @@ fn dll_names(dir: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Written once a wheel is FULLY extracted, holding the sha256 it was extracted
+/// from. A crash mid-extract leaves no marker, so that wheel is extracted again
+/// on the next install instead of leaving the pack half-installed for good; a
+/// changed pin re-extracts too.
+fn done_marker(dir: &Path, marker: &str) -> PathBuf { dir.join(format!(".done-{marker}")) }
+
+fn wheel_done(dir: &Path, marker: &str, sha: &str) -> bool {
+    std::fs::read_to_string(done_marker(dir, marker)).is_ok_and(|s| s.trim() == sha)
+}
+
 /// Classic-TRT pack provisioned = **every** wheel's marker DLL is on disk.
 ///
 /// Testing only for nvinfer (the FIRST wheel) meant a download that died after
@@ -116,10 +126,17 @@ fn dll_names(dir: &Path) -> Vec<String> {
 /// cuDNN/cuBLAS/cuFFT — a permanently half-installed pack with no way back to
 /// DirectML-or-repair from the UI. Presence-of-all also means an ALREADY
 /// complete legacy install still reads as provisioned (no forced re-download).
+///
+/// And every wheel's done-marker: a marker DLL lands early in its wheel, so a
+/// crash later in the same wheel left it "present" but short. A pack from before
+/// markers existed (none at all) is trusted as it was, rather than re-downloaded.
 pub(crate) fn is_trt_provisioned(data_dir: &Path) -> bool {
-    let names = dll_names(&trt_pack_dir(data_dir));
+    let dir = trt_pack_dir(data_dir);
+    let names = dll_names(&dir);
+    let legacy = !names.iter().any(|n| n.starts_with(".done-"));
     !names.is_empty()
-        && TRT_PACK_WHEELS.iter().all(|(_, _, _, marker)| names.iter().any(|n| n.starts_with(marker)))
+        && TRT_PACK_WHEELS.iter().all(|(_, _, sha, marker)|
+            names.iter().any(|n| n.starts_with(marker)) && (legacy || wheel_done(&dir, marker, sha)))
 }
 
 /// Disk the extracted pack needs. The wheels are ~1.85 GB compressed but expand
@@ -193,15 +210,12 @@ pub(crate) async fn ensure_trt_pack(data_dir: &Path, app: &tauri::AppHandle) -> 
     };
     emit(0, "Starting…", 0);
 
-    let present = dll_names(&dir);
     for (i, (label, url, sha, marker)) in TRT_PACK_WHEELS.iter().enumerate() {
         let step = (i as u32) + 1;
-        // Resume: a wheel already extracted by a previous (failed) attempt is not
+        // Resume: a wheel a previous (failed) attempt FINISHED extracting is not
         // re-downloaded, so retrying a pack that died on wheel 4 costs one wheel,
-        // not 1.85 GB again.
-        // ponytail: marker-DLL granularity — a crash mid-extract of one wheel can
-        // leave that wheel short; delete the trt/ folder to force a clean pull.
-        if present.iter().any(|n| n.starts_with(marker)) {
+        // not 1.85 GB again. One it was killed in the middle of has no marker.
+        if wheel_done(&dir, marker, sha) {
             tracing::info!("TensorRT pack: {label} already present — skipping");
             cumulative += TRT_PACK_TOTAL_BYTES / steps as u64;
             emit(cumulative.min(TRT_PACK_TOTAL_BYTES), label, step);
@@ -225,6 +239,7 @@ pub(crate) async fn ensure_trt_pack(data_dir: &Path, app: &tauri::AppHandle) -> 
         cumulative = base + buf.len() as u64;
         crate::provision::verify_sha256(&buf, sha, label)?;
         let n = crate::provision::unpack_zip(&buf, &dir, is_pack_dll)?;
+        std::fs::write(done_marker(&dir, marker), sha)?;
         tracing::info!("TensorRT pack: {label} — extracted {n} dll(s)");
         emit(cumulative, label, step);
     }
@@ -583,7 +598,18 @@ mod pack_tests {
         for m in markers {
             std::fs::write(pack.join(format!("{m}64_1.dll")), b"stub").unwrap();
         }
-        assert!(is_trt_provisioned(&data), "all markers present = provisioned");
+        assert!(is_trt_provisioned(&data), "all markers present, no done-markers: a legacy pack, trusted");
+
+        // A pack installed with done-markers: one wheel killed mid-extract has
+        // its DLL marker but no done-marker, so the pack isn't provisioned.
+        let all: Vec<_> = TRT_PACK_WHEELS.iter().collect();
+        for (_, _, sha, m) in &all[1..] { std::fs::write(done_marker(&pack, m), sha).unwrap(); }
+        assert!(!is_trt_provisioned(&data), "a wheel with no done-marker is not finished");
+        let (_, _, sha, m) = all[0];
+        std::fs::write(done_marker(&pack, m), sha).unwrap();
+        assert!(is_trt_provisioned(&data), "every wheel finished");
+        std::fs::write(done_marker(&pack, m), "an older pin").unwrap();
+        assert!(!is_trt_provisioned(&data), "extracted from a different file: redo it");
 
         std::fs::remove_dir_all(&data).ok();
     }
