@@ -677,14 +677,15 @@ async fn call_gemini_tools(
         .map(gemini_turn).collect();
 
     let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}");
+        "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
     let body = serde_json::json!({
         "system_instruction": { "parts": [{ "text": system }] },
         "contents": contents,
         "tools": [{ "functionDeclarations": decls }],
         "generationConfig": { "temperature": 0.2, "maxOutputTokens": 2048 },
     });
-    let resp = reqwest::Client::new().post(&url)
+    // The key goes in a header: in the URL it rode along into every error message.
+    let resp = reqwest::Client::new().post(&url).header("x-goog-api-key", key)
         .timeout(Duration::from_secs(120)).json(&body).send().await?;
     let status = resp.status();
     if !status.is_success() {
@@ -839,9 +840,7 @@ pub(super) async fn call_gemini(
     if api_key.is_empty() { anyhow::bail!("Gemini API key not configured."); }
     let model_id = if model.is_empty() { "gemini-1.5-flash" } else { model };
     let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-        model_id, api_key
-    );
+        "https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent");
     // Gemini parts: the text first, then one inline_data block per image.
     let mut parts = vec![serde_json::json!({ "text": user })];
     if let Some(imgs) = images {
@@ -856,7 +855,7 @@ pub(super) async fn call_gemini(
         "contents": [{ "role": "user", "parts": parts }],
         "generationConfig": { "temperature": 0.2, "maxOutputTokens": 1024 },
     });
-    let resp = post_json_retry(&url, &body, |r| r).await?
+    let resp = post_json_retry(&url, &body, |r| r.header("x-goog-api-key", api_key)).await?
         .json::<serde_json::Value>().await?;
     resp["candidates"][0]["content"]["parts"][0]["text"]
         .as_str()
