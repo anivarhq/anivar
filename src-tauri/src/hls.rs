@@ -26,6 +26,7 @@ pub(crate) async fn hls_serve(
     };
     let ct = if file.ends_with(".m3u8") { "application/vnd.apple.mpegurl" }
              else if file.ends_with(".ts") { "video/MP2T" }
+             else if file.ends_with(".m4s") || file.ends_with(".mp4") { "video/mp4" }
              else { "application/octet-stream" };
     let mut headers = HeaderMap::new();
     headers.insert("Content-Type",  HeaderValue::from_str(ct).unwrap());

@@ -239,17 +239,28 @@ pub async fn start_rtsp_relay(
             // follows the camera's keyframe cadence (copy can only cut on
             // keyframes); hls.js falls back to the MJPEG stream for codecs the
             // WebView can't decode (e.g. some H.265 cams) — existing behavior.
+            //
+            // fMP4 segments, not MPEG-TS. A camera that sends B-frames delivers its
+            // first packet without a DTS; the TS muxer refuses it ("first pts and
+            // dts value must be set"), which ended this whole process, recording
+            // included, and the watchdog respawn kept about 1 s of every 30. The
+            // MP4 muxer accepts that packet, as the segment output above always did.
             let m3u8 = hls_dir.join(format!("cam{cam}.m3u8"));
-            let ts   = hls_dir.join(format!("cam{cam}_%04d.ts"));
+            let seg  = hls_dir.join(format!("cam{cam}_%04d.m4s"));
             rargs.extend(["-map".into(), "0:v:0".into(), "-c:v".into(), "copy".into(), "-an".into(),
-                "-f".into(), "hls".into(), "-hls_time".into(), "2".into(),
+                "-f".into(), "hls".into(), "-hls_segment_type".into(), "fmp4".into(),
+                "-hls_fmp4_init_filename".into(), format!("cam{cam}_init.mp4"),
+                "-hls_time".into(), "2".into(),
                 "-hls_list_size".into(), "10".into(),
                 "-hls_flags".into(), "delete_segments+append_list+discont_start".into(),
-                "-hls_segment_filename".into(), ts.to_string_lossy().into_owned(),
+                "-hls_segment_filename".into(), seg.to_string_lossy().into_owned(),
                 m3u8.to_string_lossy().into_owned()]);
         }
         let rec = crate::proc::tokio_cmd(&ffmpeg_bin)
             .args(&rargs)
+            // The fMP4 init segment is written relative to the working directory,
+            // and must sit beside the playlist that names it.
+            .current_dir(&hls_dir)
             .stdin(std::process::Stdio::piped()) // `q` on stop finishes the segment
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
