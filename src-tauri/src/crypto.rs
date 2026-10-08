@@ -168,6 +168,10 @@ pub(crate) fn decrypt_settings_secrets(key: &[u8; 32], s: &mut Settings) {
 mod tests {
     use super::*;
 
+    /// The settings walk shares the process-wide UNREADABLE list: tests that go
+    /// through it run one at a time, or one clears the list mid-way through another.
+    static SETTINGS_WALK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn round_trip_and_no_double_encryption() {
         let key = [7u8; 32];
@@ -187,6 +191,7 @@ mod tests {
 
     #[test]
     fn the_mqtt_broker_password_is_stored_encrypted() {
+        let _walk = SETTINGS_WALK.lock().unwrap_or_else(|e| e.into_inner());
         let key = [3u8; 32];
         let mut s = Settings { mqtt_password: "broker-pass".into(), ..Settings::default() };
         encrypt_settings_secrets(&key, &mut s);
@@ -203,6 +208,7 @@ mod tests {
 
     #[test]
     fn an_unreadable_secret_survives_an_unrelated_save() {
+        let _walk = SETTINGS_WALK.lock().unwrap_or_else(|e| e.into_inner());
         let (old, new) = ([1u8; 32], [2u8; 32]);
         let mut s = Settings::default();
         s.openai_api_key = encrypt_secret(&old, "sk-openai");
