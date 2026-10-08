@@ -63,12 +63,12 @@ const REUSE_MIN_REMAINING_SECS: i64 = 120;
 /// HMAC token bound to the current generation, registers the active share, and
 /// returns the `/redeem` URL.
 ///
-/// IDEMPOTENT per (kind, resource): a repeat request while the previous link is
-/// still healthy returns the SAME url — tapping 📡 Live twice must not hand the
-/// user two different both-valid links and duplicate tracker rows. When a fresh
-/// link IS minted, the old entry for that resource is REPLACED (one truthful
-/// row per resource; the old token stays cryptographically valid until its own
-/// expiry — stateless HMAC by design, `revoke_all_shares` is the kill switch).
+/// IDEMPOTENT per (kind, resource, lifetime): a repeat request while the previous
+/// link is still healthy and lives about as long as the one asked for returns
+/// the SAME url — tapping 📡 Live twice must not hand the user two different
+/// links. A request for a different lifetime gets its own link. Older links stay
+/// listed: each is valid until its own expiry (stateless HMAC by design, and the
+/// cookie check accepts any listed link), and `revoke_all_shares` ends them all.
 // `app` is consumed only by the platform-gated branches below, so it reads as
 // unused on whichever target those are compiled out of. Renaming it `_app` is
 // NOT the fix — that breaks the targets that do use it.
@@ -91,10 +91,17 @@ pub(crate) async fn mint_share_link(
 
     let now = chrono::Utc::now().timestamp();
 
+    // 1b. What this link's expiry would be.
+    let expires_at = if expiry_mins == 0 {
+        0 // never (until app restart)
+    } else {
+        now + (expiry_mins as i64) * 60
+    };
+
     // 2. Prune expired entries, then REUSE an outstanding healthy link for this
     //    (kind, resource): same base (guards against a re-minted public
     //    hostname — the old URL would be dead), non-empty url (pre-field rows),
-    //    and either never-expiring or ≥2 min of life left.
+    //    and a lifetime that fits the request (`reusable`).
     {
         let mut shares = state.active_shares.write().await;
         shares.retain(|s| s.expires_at == 0 || s.expires_at > now);
@@ -102,7 +109,7 @@ pub(crate) async fn mint_share_link(
             s.kind == kind && s.resource_id == resource_id
             && !s.url.is_empty()
             && s.url.starts_with(&base)
-            && (s.expires_at == 0 || s.expires_at - now >= REUSE_MIN_REMAINING_SECS))
+            && reusable(s.expires_at, expires_at, now))
         {
             return Ok(ShareLinkResult {
                 url:         existing.url.clone(),
@@ -113,12 +120,7 @@ pub(crate) async fn mint_share_link(
         }
     }
 
-    // 3. Mint fresh: compute expiry, sign the token.
-    let expires_at = if expiry_mins == 0 {
-        0 // never (until app restart)
-    } else {
-        now + (expiry_mins as i64) * 60
-    };
+    // 3. Mint fresh: sign the token.
     let payload = SharePayload {
         kind:        kind.clone(),
         resource_id: resource_id.clone(),
@@ -128,10 +130,9 @@ pub(crate) async fn mint_share_link(
     let token = sign_share_token(&state.master_key, generation, &payload);
     let url = format!("{}/redeem?t={}", base, token);
 
-    // 4. REPLACE any older entry for this resource, then register + persist.
+    // 4. Register + persist. Older links for this resource stay: they still open.
     {
         let mut shares = state.active_shares.write().await;
-        shares.retain(|s| !(s.kind == kind && s.resource_id == resource_id));
         shares.push(ShareEntry {
             kind:        kind.clone(),
             resource_id: resource_id.clone(),
@@ -148,6 +149,20 @@ pub(crate) async fn mint_share_link(
         resource_id,
         expires_at,
     })
+}
+
+/// May an outstanding link (expiring at `have`, 0 = never) be handed out for a
+/// request that would expire at `want`? Only if it lives about as long: both
+/// never-expiring, or expiring in the 5 minutes before `want` with at least
+/// `REUSE_MIN_REMAINING_SECS` left. It used to be reused whatever was asked, so
+/// asking for 24 h could return a link with 3 minutes left, and asking for
+/// 15 minutes could return one that never expires.
+fn reusable(have: i64, want: i64, now: i64) -> bool {
+    match (have, want) {
+        (0, 0) => true,
+        (0, _) | (_, 0) => false,
+        _ => have <= want && have >= want - 300 && have - now >= REUSE_MIN_REMAINING_SECS,
+    }
 }
 
 // ─── Restart persistence ─────────────────────────────────────────────────────
@@ -244,4 +259,20 @@ pub async fn list_active_shares(state: State<'_, Arc<AppState>>) -> Result<Vec<S
         shares.retain(|s| s.expires_at == 0 || s.expires_at > now);
     }
     Ok(state.active_shares.read().await.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reusable;
+
+    #[test]
+    fn a_link_is_reused_only_for_a_matching_lifetime() {
+        let now = 1_000_000;
+        assert!(reusable(0, 0, now), "never-expiring, asked again");
+        assert!(reusable(now + 1790, now + 1800, now), "the same 30 min link, tapped twice");
+        assert!(!reusable(now + 180, now + 86_400, now), "24 h asked, 3 min left: mint fresh");
+        assert!(!reusable(0, now + 900, now), "15 min asked: not the never-expiring one");
+        assert!(!reusable(now + 900, 0, now), "never-expiring asked: not a timed one");
+        assert!(!reusable(now + 100, now + 120, now), "under 2 min left: mint fresh");
+    }
 }

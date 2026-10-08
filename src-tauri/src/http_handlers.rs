@@ -405,10 +405,15 @@ pub(crate) async fn redeem(
     // top-level GET navigations (this redirect), while blocking cross-site
     // subresource/POST abuse. Secure (HTTPS tunnel) + HttpOnly + the HMAC token
     // (generation + expiry) keep it safe.
-    let max_age = (payload.expires_at - chrono::Utc::now().timestamp()).max(60);
+    // Scoped to this link's resource, so a second link (another clip or camera)
+    // sets its own cookie instead of replacing this one. A link that never
+    // expires gets a session cookie: it used to get Max-Age=60, and seeking or
+    // reloading after a minute failed.
+    let lifetime = if payload.expires_at == 0 { String::new() } else {
+        format!(" Max-Age={};", (payload.expires_at - chrono::Utc::now().timestamp()).max(60))
+    };
     let cookie = format!(
-        "sc_share={value}; Path=/; Max-Age={max_age}; HttpOnly; Secure; SameSite=Lax",
-        value = cookie_value,
+        "sc_share={cookie_value}; Path={target};{lifetime} HttpOnly; Secure; SameSite=Lax"
     );
 
     axum::response::Response::builder()
@@ -421,33 +426,30 @@ pub(crate) async fn redeem(
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-/// Check the sc_share cookie against the requested resource. Returns the
-/// share-token's derived cookie value the request CLAIMS to have, plus
-/// whether it matched the one we'd derive for this `(kind, resource_id)`.
-fn check_share_cookie(headers: &HeaderMap, expected: &str) -> bool {
+/// Does any `sc_share` cookie the request carries match one of the live links
+/// for this resource? Any of them: there can be several `sc_share` cookies
+/// (one per path, plus a `Path=/` one set before cookies were scoped).
+fn check_share_cookie(headers: &HeaderMap, expected: &[String]) -> bool {
     let cookies = headers.get("cookie").and_then(|v| v.to_str().ok()).unwrap_or("");
-    for part in cookies.split(';') {
-        let part = part.trim();
-        if let Some(value) = part.strip_prefix("sc_share=") {
-            return crate::constant_time_eq(value.as_bytes(), expected.as_bytes());
-        }
-    }
-    false
+    cookies.split(';')
+        .filter_map(|part| part.trim().strip_prefix("sc_share="))
+        .any(|value| expected.iter().any(|e| crate::constant_time_eq(value.as_bytes(), e.as_bytes())))
 }
 
-/// Helper: re-derive the expected cookie for a `(kind, resource_id)` pair by
-/// scanning the active-share list for a matching outstanding share. We don't
-/// know which exact share_token the cookie came from, but any valid token
-/// against the current generation yields the same cookie when fed into
-/// `cookie_for`, so we re-mint each candidate's expected cookie and compare.
-async fn expected_cookie_for(
+/// The cookie each live link for `(kind, resource_id)` sets, re-derived from the
+/// active-share list (tokens are deterministic for a payload and generation).
+/// EVERY live link counts: this used to stop at the first match, so after a
+/// fresh link was minted for the same clip, an older one that was still valid
+/// opened and then failed. Empty = no live link, i.e. expired or revoked.
+async fn expected_cookies_for(
     app_state: &Arc<AppState>,
     kind: &str,
     resource_id: &str,
-) -> Option<String> {
+) -> Vec<String> {
     let generation = *app_state.share_generation.read().await;
     let shares = app_state.active_shares.read().await.clone();
     let now = chrono::Utc::now().timestamp();
+    let mut cookies = Vec::new();
     for entry in shares {
         if entry.kind != kind || entry.resource_id != resource_id { continue; }
         if entry.expires_at != 0 && entry.expires_at <= now { continue; }
@@ -460,10 +462,9 @@ async fn expected_cookie_for(
             expires_at: entry.expires_at,
         };
         let token = crate::share_security::sign_share_token(&app_state.master_key, generation, &payload);
-        let cookie = cookie_for(&app_state.master_key, &token, &payload.kind, &payload.resource_id);
-        return Some(cookie);
+        cookies.push(cookie_for(&app_state.master_key, &token, &payload.kind, &payload.resource_id));
     }
-    None
+    cookies
 }
 
 /// GET /clips/:event_id.mp4 (cookie-gated)
@@ -490,10 +491,8 @@ pub(crate) async fn share_clip(
             "Something went wrong", "The camera app hit an internal error — try the link again in a moment."),
     };
 
-    let expected = match expected_cookie_for(&app_state, "clip", &event_id).await {
-        Some(c) => c,
-        None => return expired_link_page(),
-    };
+    let expected = expected_cookies_for(&app_state, "clip", &event_id).await;
+    if expected.is_empty() { return expired_link_page(); }
     if !check_share_cookie(&headers, &expected) {
         return share_error_page(StatusCode::UNAUTHORIZED,
             "Couldn't verify this link",
@@ -550,10 +549,8 @@ pub(crate) async fn share_live(
             "Something went wrong", "The camera app hit an internal error — try the link again in a moment."),
     };
 
-    let expected = match expected_cookie_for(&app_state, "live", &cam_str).await {
-        Some(c) => c,
-        None => return expired_link_page(),
-    };
+    let expected = expected_cookies_for(&app_state, "live", &cam_str).await;
+    if expected.is_empty() { return expired_link_page(); }
     if !check_share_cookie(&headers, &expected) {
         return share_error_page(StatusCode::UNAUTHORIZED,
             "Couldn't verify this link",
@@ -675,6 +672,16 @@ pub(crate) async fn share_live(
 #[cfg(test)]
 mod ssrf_tests {
     use super::*;
+
+    #[test]
+    fn any_live_link_for_the_resource_opens_it() {
+        let mut h = HeaderMap::new();
+        h.insert("cookie", "theme=dark; sc_share=from-the-older-link; sc_share=from-another-clip".parse().unwrap());
+        let live = vec!["from-a-newer-link".to_string(), "from-the-older-link".to_string()];
+        assert!(check_share_cookie(&h, &live), "the older link is still live, so it still opens");
+        assert!(!check_share_cookie(&h, &["from-a-newer-link".to_string()]));
+        assert!(!check_share_cookie(&HeaderMap::new(), &live));
+    }
 
     /// A share link redeemed before the sha2 upgrade keeps its cookie valid.
     #[test]
