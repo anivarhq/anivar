@@ -105,6 +105,18 @@ pub(crate) const MAX_SENT_CLIP_SECS: f64 = 120.0;
 /// failed/empty generation (footage not recorded yet) — never cache or serve it.
 pub(crate) const MIN_CLIP_BYTES: u64 = 4096;
 
+/// How long a clip of a still-growing window is reused before it's rebuilt.
+const OPEN_CLIP_REUSE: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Is there a real clip at `path` written less than `window` ago?
+async fn made_within(path: &std::path::Path, window: std::time::Duration) -> bool {
+    tokio::fs::metadata(path).await.ok()
+        .filter(|m| m.len() > MIN_CLIP_BYTES)
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age < window)
+}
+
 /// Delete an event's exported clip file(s). Holds the per-event generation gate,
 /// so a delete can never race an in-flight export that would re-publish the file
 /// microseconds later. Removes BOTH the path the row pointed at and the
@@ -230,6 +242,13 @@ pub(crate) async fn ensure_event_clip(state: &Arc<AppState>, event_id: &str) -> 
     // Export to a deterministic per-event file (removed when the event is deleted,
     // see agent_data_cmds — it deletes the file referenced by clip_path).
     let out = state.data_dir.join(format!("clip_{}.mp4", event_id));
+    // A clip whose footage is still growing isn't cached, but it isn't rebuilt
+    // on every request either: a browser playing a share link makes several range
+    // requests, and rebuilding between two of them changed the file under it.
+    // One made in the last few seconds is served as it is.
+    if growing && made_within(&out, OPEN_CLIP_REUSE).await {
+        return Some(out.to_string_lossy().into_owned());
+    }
     let ok = crate::nvr_stream::concat_window_to_file(
         &state.db, &state.data_dir, cam_id, start_secs, end_secs, &out,
     ).await;
@@ -268,4 +287,29 @@ pub(crate) async fn ensure_event_clip(state: &Arc<AppState>, event_id: &str) -> 
         mark_audio_settled(&out_str);
     }
     Some(out_str)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{made_within, MIN_CLIP_BYTES};
+    use std::time::{Duration, SystemTime};
+
+    #[tokio::test]
+    async fn only_a_recent_real_clip_is_reused() {
+        let dir = std::env::temp_dir().join(format!("anivar-clip-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let clip = dir.join("clip_e.mp4");
+        std::fs::write(&clip, vec![0u8; MIN_CLIP_BYTES as usize + 1]).unwrap();
+        let window = Duration::from_secs(15);
+        assert!(made_within(&clip, window).await, "just written: reuse it");
+
+        let old = SystemTime::now() - Duration::from_secs(60);
+        std::fs::File::options().write(true).open(&clip).unwrap().set_modified(old).unwrap();
+        assert!(!made_within(&clip, window).await, "a minute old: rebuild");
+
+        std::fs::write(&clip, b"tiny").unwrap();
+        assert!(!made_within(&clip, window).await, "a failed, empty export is never reused");
+        assert!(!made_within(&dir.join("missing.mp4"), window).await);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
