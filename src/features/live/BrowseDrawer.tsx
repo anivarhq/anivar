@@ -3,6 +3,7 @@
 // `panels` prop says which sections are active.
 
 import { MotionEvent } from "../../types";
+import type { Segment } from "../nvr/NVRPanel";
 import type { PanelState } from "./FocusHeader";
 
 import { EventsListPanel } from "./EventsListPanel";
@@ -17,6 +18,7 @@ interface Props {
   selectedEventId: string | null;
   positionMs: number | null;
   events: MotionEvent[];
+  segments: Segment[];
   onSelectEvent: (ev: MotionEvent) => void;
   onSeek: (ms: number) => void;
   viewStart?: number;
@@ -26,7 +28,7 @@ interface Props {
 }
 
 export function BrowseDrawer({
-  camId, panels, selectedDate, selectedEventId, positionMs, events,
+  camId, panels, selectedDate, selectedEventId, positionMs, events, segments,
   onSelectEvent, onSeek,
   viewStart, viewEnd, onSetView, use12h,
 }: Props) {
@@ -51,6 +53,7 @@ export function BrowseDrawer({
             selectedDate={selectedDate}
             positionMs={positionMs}
             events={events}
+            segments={segments}
             onSeek={onSeek}
             onSelectEvent={onSelectEvent}
             selectedEventId={selectedEventId ?? undefined}

@@ -6,7 +6,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { api } from "../../api";
 import type { MotionEvent } from "../../types";
 import { HorizontalTimeline, type Segment } from "../nvr/NVRPanel";
 import { dayStartMs, dayEndMs } from "../../lib/time";
@@ -25,6 +24,10 @@ interface Props {
   /** v29: event opened from Review — auto-center the view on it + mark it on the
    *  timeline. LivePanel focus mode passes nothing → unchanged. */
   selectedEventId?: string;
+  /** The day's recorded segments. The parent owns this list and keeps it
+   *  fresh: the player's coverage is built from the same one, so footage the
+   *  timeline draws is footage a click can play. */
+  segments: Segment[];
   onSeek: (ms: number) => void;
   onSelectEvent: (ev: MotionEvent) => void;
   /** v21: controlled view window. If provided, HistoryDrawer ignores its
@@ -52,12 +55,11 @@ function passes(ev: MotionEvent, sev: Severity): boolean {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function HistoryDrawer({
-  camId, selectedDate, positionMs, events, selectedEventId,
+  camId, selectedDate, positionMs, events, selectedEventId, segments,
   onSeek, onSelectEvent,
   viewStart: viewStartProp, viewEnd: viewEndProp, onSetView, use12h = false,
   reviewBands,
 }: Props) {
-  const [segments, setSegments] = useState<Segment[]>([]);
   const [severity, setSeverity] = useState<Severity>("all");
   const filteredEvents = useMemo(
     () => severity === "all" ? events : events.filter(ev => passes(ev, severity)),
@@ -134,26 +136,6 @@ export function HistoryDrawer({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [now, positionMs, isToday]);
-
-  useEffect(() => {
-    let alive = true;
-    // Scope to the visible day so we fetch only that day's segments, not the
-    // whole archive (40k+ rows). Use the full day end (not the ticking `now`)
-    // so the effect doesn't re-run every second on today; the 30s interval
-    // keeps today's in-progress segments fresh.
-    const fromUtc = new Date(dayStart).toISOString();
-    const toUtc   = new Date(localDayEnd).toISOString(); // DST-safe local day end
-    const load = async () => {
-      try {
-        const recs = await api.listNvrRecordings(camId, fromUtc, toUtc);
-        if (!alive) return;
-        setSegments(recs as Segment[]);
-      } catch { /* ignore */ }
-    };
-    void load();
-    const id = window.setInterval(load, 30_000);
-    return () => { alive = false; window.clearInterval(id); };
-  }, [camId, dayStart, localDayEnd]);
 
   const playingMsRef = useRef<number | null>(positionMs);
   playingMsRef.current = positionMs;
