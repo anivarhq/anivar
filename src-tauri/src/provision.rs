@@ -408,6 +408,13 @@ mod tests {
 
     /// Download checksums are compared as lowercase hex.
     #[test]
+    fn a_wrong_hash_fails_the_install() {
+        let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert!(verify_sha256(b"abc", abc, "test").is_ok());
+        assert!(verify_sha256(b"abd", abc, "test").is_err(), "different bytes must be refused");
+    }
+
+    #[test]
     fn sha256_is_lowercase_hex() {
         assert_eq!(sha256_hex(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     }

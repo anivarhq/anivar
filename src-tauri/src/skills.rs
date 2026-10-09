@@ -322,7 +322,6 @@ pub(crate) fn list_installed_skills(data_dir: &Path) -> Vec<SkillStatus> {
         ("face_large",      "Face Recognition — Large"),
         ("alpr_global",     "License Plates — Global"),
         ("alpr_european",   "License Plates — European"),
-        ("alpr_argentinian","License Plates — Argentinian"),
         ("mobileclip_s0",   "Semantic Search — MobileCLIP-S0"),
         ("clip_b32",        "Semantic Search — CLIP ViT-B/32"),
         ("jina_clip",       "Semantic Search — Jina-CLIP"),

@@ -81,7 +81,7 @@ fn default_strobe_profile()         -> String { "balanced".to_string() } // "con
 fn default_face_quality_floor()     -> f32    { 0.10 }                   // Laplacian blur floor on the ÷300 quality scale (was 0.20 on ÷1500 — too high, dropped real faces)
 fn default_yolo_conf_threshold()    -> f32    { 0.40 }                   // v27: mature NVRs min_score — discard weak detections (confirm tier is YOLO_CONFIRM_THRESHOLD)
 fn default_yolo_class_filter()      -> String { String::new() }          // empty = no filter (all 80 COCO classes pass)
-fn default_alpr_region()            -> String { "global".to_string() }   // "global" | "european" | "argentinian"
+fn default_alpr_region()            -> String { "global".to_string() }   // "global" | "european"
 fn default_nvr_max_gb() -> u32 { 50 }
 fn default_nvr_record_mode() -> String { "always".into() }
 fn default_depth_model() -> String { "balanced".into() }
@@ -357,7 +357,7 @@ pub struct Settings {
     #[serde(default = "default_yolo_class_filter")]
     pub yolo_class_filter: String,
     /// ALPR regional model. Picks which `skills/alpr_{region}/model.onnx` is used.
-    /// "global" | "european" | "argentinian". Falls back to global if the chosen
+    /// "global" | "european". Falls back to global if the chosen
     /// region isn't installed; falls back to any installed alpr_* otherwise.
     #[serde(default = "default_alpr_region")]
     pub alpr_region: String,

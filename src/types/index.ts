@@ -126,7 +126,7 @@ export interface Settings {
    *  Empty = no filter. */
   yolo_class_filter?:          string;
   /** ALPR regional model picker. Maps to `skills/alpr_{region}/model.onnx`. */
-  alpr_region?:                "global" | "european" | "argentinian";
+  alpr_region?:                "global" | "european";
   known_plates?:               string;   // "PLATE=Name" per line → names matched plates
   // Audio event detection (YAMNet) — RTSP cameras with an audio track.
   settings_version?:           number;  // backend migration marker — round-trip, never edit
