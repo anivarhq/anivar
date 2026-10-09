@@ -234,6 +234,15 @@ jobs:
         working-directory: src-tauri
         run: cargo test --lib
 
+      # End-to-end pipeline (e2e_tests.rs): a generated video recorded into
+      # segments, indexed, run through motion and the event lifecycle, and cut
+      # into the event's clip. ffmpeg runs in real time (~25 s) and may download
+      # the pinned build, so it runs once, on Windows, where the app ships.
+      - name: cargo test (end-to-end pipeline)
+        if: matrix.os == 'windows-latest'
+        working-directory: src-tauri
+        run: cargo test --lib -- --ignored e2e --nocapture
+
       # ── Execution-provider smoke test ────────────────────────────────────────
       # The ONLY automated proof that each platform's EP chain actually builds a
       # session rather than merely compiling. macOS (CoreML) and Linux (CUDA lane
