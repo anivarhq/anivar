@@ -13,8 +13,8 @@
 //!   3. ORT forward — `output[slot, class]` → max class per slot.
 //!   4. Concatenate letters, strip `_`, return `Option<String>`.
 //!
-//! Models are user-installed via `alpr_global` / `alpr_european` /
-//! `alpr_argentinian` skills (see `skillDownload.ts`). `find_alpr_model`
+//! Models are user-installed via the `alpr_global` / `alpr_european`
+//! skills (see `skillDownload.ts`). `find_alpr_model`
 //! looks for `<data>/skills/alpr_{region}/model.onnx`, falling back to
 //! global and then any installed alpr_* directory.
 

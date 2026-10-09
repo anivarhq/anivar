@@ -212,7 +212,7 @@ export function Arsenal() {
     showToast(`On-device AI set to ${tier}`, "success");
   };
 
-  const handleSwitchAlpr = async (region: "global" | "european" | "argentinian") => {
+  const handleSwitchAlpr = async (region: "global" | "european") => {
     if (!settings) return;
     const next: Settings = { ...settings, alpr_region: region };
     await api.saveSettings(next);
@@ -516,7 +516,7 @@ function RecommendationGrid({
   onInstall:         (def: SkillDef) => void;
   onSwitchFace:      (tier: "off" | "small" | "large") => void;
   onSwitchYolo:      (tier: "nano" | "small" | "medium" | "large" | "xlarge") => void;
-  onSwitchAlpr:      (region: "global" | "european" | "argentinian") => void;
+  onSwitchAlpr:      (region: "global" | "european") => void;
   onSwitchSearch:    (model: "off" | "mobileclip_s0" | "clip_b32" | "jina_clip") => void;
   onSwitchLlm:       (tier: "fast" | "balanced" | "vision") => void;
   onPatchSettings:   (patch: Partial<Settings>) => void;
@@ -706,12 +706,11 @@ function EnhancementsCard({
   );
 }
 
-// ── ALPR card — three regional tiers (mature NVRs / fast-plate-ocr pattern) ─────
+// ── ALPR card — two regional tiers (mature NVRs / fast-plate-ocr pattern) ─────
 
 const ALPR_TIERS = [
   { region: "global",       id: "alpr_global",       label: "Global",       hint: "Worldwide default" },
   { region: "european",     id: "alpr_european",     label: "European",     hint: "EU / UK plates" },
-  { region: "argentinian",  id: "alpr_argentinian",  label: "Argentinian",  hint: "Mercosur / AR" },
 ] as const;
 
 function AlprCard({
@@ -722,7 +721,7 @@ function AlprCard({
   progress:      Record<string, { pct: number; downloaded?: number; total?: number | null }>;
   currentRegion: string;
   onInstall:     (def: SkillDef) => void;
-  onSwitchAlpr:  (region: "global" | "european" | "argentinian") => void;
+  onSwitchAlpr:  (region: "global" | "european") => void;
 }) {
   const installedSet = new Set(skills.filter(s => s.installed).map(s => s.id));
   // Legacy v6 install (`skills/alpr/`) is reported as `alpr_global` by the
