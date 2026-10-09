@@ -28,8 +28,9 @@ import { fetchClipStartMs } from "../../lib/clipStart";
 import focusStyles from "./FocusHeader.module.css";
 import { listen } from "@tauri-apps/api/event";
 import {
-  AlertTriangle, ArrowLeft, Clock, LayoutGrid, Link, Loader, Monitor, Plus, RefreshCw, Wifi,
+  AlertTriangle, ArrowLeft, Clock, LayoutGrid, Link, Loader, Monitor, Plus, RefreshCw, Share2, Wifi,
 } from "lucide-react";
+import { ShareDialog } from "../../components/ui/ShareDialog";
 // `startOfLocalDay`/`endOfLocalDay` used to be redefined at the top of this
 // file. lib/time.ts already had them, is unit-tested, and every sibling in
 // this folder imports from there.
@@ -180,6 +181,7 @@ export function LivePanel() {
   const [showAddModal, setShowAddModal] = useState(false);
   // Floating per-camera settings window (opened from the focus kebab).
   const [settingsCamId, setSettingsCamId] = useState<number | null>(null);
+  const [sharing, setSharing] = useState(false);
   // 12h/24h time format for the focus timeline + clocks. Shares the NVR key so
   // the preference is consistent across the app.
   const [use12h, setUse12h] = useState(() => localStorage.getItem("nvr_12h") === "1");
@@ -617,6 +619,11 @@ export function LivePanel() {
                 title="Recordings & timeline" aria-label="History">
                 <Clock size={13} /> History
               </button>
+              <button className={focusStyles.headerBtn}
+                onClick={() => setSharing(true)}
+                title="Share a link to this camera's live view" aria-label="Share">
+                <Share2 size={13} /> Share
+              </button>
               <KebabMenu
                 onOpenSettings={() => setSettingsCamId(focusedCam)}
                 onRemoveCamera={() => removeCamera(focusedCam)}
@@ -626,6 +633,11 @@ export function LivePanel() {
               <CameraView camId={focusedCam} cornered />
             </div>
           </div>
+          {sharing && (
+            <ShareDialog kind="live" resourceId={String(focusedCam)}
+              title={`Share ${focusedConfig?.name || `Camera ${focusedCam + 1}`} live`}
+              onClose={() => setSharing(false)} />
+          )}
         </div>
       )}
 

@@ -37,6 +37,7 @@ import { ReviewHistoryView } from "./ReviewHistoryView";
 import { VehiclesView } from "./VehiclesView";
 import { AudioView } from "./AudioView";
 import { CardActions, CardInfoButton, CardInfoModal, type CardChip } from "./CardChrome";
+import { ShareDialog } from "../../components/ui/ShareDialog";
 import { usePanelCache } from "../../lib/panelCache";
 import { localDateStr, dayBoundsUtc } from "../../lib/time";
 import { tint } from "../../lib/palette";
@@ -428,6 +429,7 @@ export function ReviewFeed() {
   // "Find similar" mode — image→image semantic results for one source event.
   const [similarTo, setSimilarTo] = useState<{ id: string; label: string } | null>(null);
   const [infoItem, setInfoItem] = useState<ReviewItem | null>(null); // (i) details popover
+  const [shareItem, setShareItem] = useState<ReviewItem | null>(null);
   // Two-step delete inside that popover — a destructive action never fires on a
   // single click, and the arming resets whenever the popover changes item.
 
@@ -1056,6 +1058,7 @@ export function ReviewFeed() {
                     setQuery("");
                     setSimilarTo({ id: item.clipEventId!, label: snippet ?? "this event" });
                   } : undefined}
+                  onShare={item.clipEventId ? () => setShareItem(item) : undefined}
                   onDownload={tab === "bookmark" && item.clipEventId && streamInfo
                     ? () => void exportEventById(streamInfo, safeName(camName(item.camId)), item.clipEventId!, showToast)
                     : undefined}
@@ -1146,6 +1149,11 @@ export function ReviewFeed() {
           />
         );
       })()}
+      {shareItem?.clipEventId && (
+        <ShareDialog kind="clip" resourceId={shareItem.clipEventId}
+          title={`Share ${camName(shareItem.camId)} · ${fmtShortTime(shareItem.start, use12h)}`}
+          onClose={() => setShareItem(null)} />
+      )}
     </div>
   );
 }
