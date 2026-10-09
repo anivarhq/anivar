@@ -5,11 +5,7 @@ use std::time::Instant;
 
 use tauri::{Emitter, State};
 
-use crate::{
-    AppState, MotionEvent, Settings, StorageInfo,
-    crypto::encrypt_settings_secrets,
-    db::save_settings_to_db,
-};
+use crate::{AppState, Settings, StorageInfo, crypto::encrypt_settings_secrets, db::save_settings_to_db};
 
 
 #[tauri::command]
@@ -214,26 +210,6 @@ pub async fn save_settings(state: State<'_, Arc<AppState>>, settings: Settings) 
     Ok(())
 }
 
-#[tauri::command]
-pub async fn get_motion_events(state: State<'_, Arc<AppState>>, limit: Option<i64>) -> Result<Vec<MotionEvent>, String> {
-    let capped_limit = limit.unwrap_or(50).min(500);
-    let rows: Vec<(String, String, Option<String>, Option<f64>, f64, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)> =
-        // PAYLOAD: ship a tiny '@thumb' PRESENCE MARKER instead of the ~50KB inline
-        // base64 thumbnail — 500 events went from megabytes of JSON over the WebView2
-        // IPC bridge (re-parsed on every detection refetch) to a few KB. The frontend
-        // renders markers via GET /footage/:id/thumbnail (HTTP-cached, evictable).
-        sqlx::query_as("SELECT id, started_at, ended_at, duration_secs, peak_score, clip_path, CASE WHEN thumbnail IS NOT NULL AND thumbnail <> '' THEN '@thumb' END AS thumbnail, detections, ai_summary, event_category, recognized_plate, dominant_label, sub_label, first_object_at FROM motion_events ORDER BY started_at DESC LIMIT ?")
-            .bind(capped_limit).fetch_all(&state.db).await.map_err(|e| e.to_string())?;
-    Ok(rows.into_iter().map(|(id, started_at, ended_at, duration_secs, peak_score, clip_path, thumbnail, detections, ai_summary, event_category, recognized_plate, dominant_label, sub_label, first_object_at)| {
-        MotionEvent {
-            id, started_at, ended_at, duration_secs, peak_score: peak_score as f32,
-            clip_path, thumbnail, detections, ai_summary, cam_id: None,
-            event_category, recognized_plate, dominant_label, sub_label, first_object_at,
-            top_speed_kmh: None,
-        }
-    }).collect())
-}
-
 /// Called by the frontend whenever AI detects a person/animal in frame.
 /// Resets last_motion_at so the event and recording stay open as long as
 /// the subject is visible, even if they are completely still.
@@ -264,14 +240,3 @@ pub async fn store_detections(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn store_ai_summary(
-    state: State<'_, Arc<AppState>>,
-    event_id: String,
-    summary: String,
-) -> Result<(), String> {
-    sqlx::query("UPDATE motion_events SET ai_summary=? WHERE id=?")
-        .bind(&summary).bind(&event_id)
-        .execute(&state.db).await.map_err(|e| e.to_string())?;
-    Ok(())
-}

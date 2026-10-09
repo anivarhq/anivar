@@ -15,16 +15,16 @@ use axum::{
     routing::get,
     Router,
 };
-use tokio::sync::{broadcast, watch, Mutex, RwLock};
+use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::CorsLayer;
 
 use crate::{
-    ClientSession, SignalRoom, StreamState, constant_time_eq,
+    StreamState, constant_time_eq,
 };
 use crate::footage::{footage_clip, footage_list, footage_stream, footage_thumbnail, ping};
 use crate::hls::hls_serve;
 use crate::http_handlers::{cam_proxy, mjpeg_stream, redeem, share_clip, share_live, snapshot, webrtc_whep};
-use crate::nvr_stream::{nvr_concat_stream, nvr_export_stream, nvr_seek_stream, nvr_stream};
+use crate::nvr_stream::nvr_export_stream;
 /// Token auth middleware with per-IP rate limiting on failures.
 pub(crate) async fn require_token(
     AxumState(ss): AxumState<StreamState>,
@@ -154,29 +154,17 @@ pub fn start_http_server(
     port: u16,
     auth_token: Arc<RwLock<String>>,
     app_handle: tauri::AppHandle,
-    camera_active: Arc<RwLock<bool>>,
-    camera_state_tx: broadcast::Sender<bool>,
     db: sqlx::SqlitePool,
     data_dir: PathBuf,
-    revoke_rx: watch::Receiver<u64>,
-    client_sessions: Arc<tokio::sync::RwLock<HashMap<String, ClientSession>>>,
-    kick_txs: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
     lan_access: bool,
 ) {
     let ss = StreamState {
         frame_txs,
-        camera_state_tx,
-        camera_active,
         auth_token,
         app_handle,
-        connected_clients: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         failed_auth: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        signal_room: Arc::new(Mutex::new(SignalRoom { host: None, viewer: None })),
         db,
         data_dir,
-        revoke_rx,
-        client_sessions,
-        kick_txs,
     };
 
     // Allow the Capacitor mobile app (capacitor://localhost, https://localhost) and
@@ -230,9 +218,6 @@ pub fn start_http_server(
         .route("/stream", get(mjpeg_stream))
         .route("/footage/:id/clip", get(footage_clip))
         .route("/footage/:id/stream", get(footage_stream))
-        .route("/nvr-stream",  get(nvr_stream))
-        .route("/nvr-seek",    get(nvr_seek_stream))
-        .route("/nvr-concat",  get(nvr_concat_stream))
         // v13: bounded export endpoint — same shape as /nvr-concat but takes
         // an `end` param and tags the response Content-Disposition: attachment.
         .route("/nvr-export",  get(nvr_export_stream))
@@ -241,7 +226,6 @@ pub fn start_http_server(
         // pause/play stutter of glued copy-concat streams.
         .route("/nvr-vod/:cam/playlist.m3u8", get(crate::nvr_vod::nvr_vod_playlist))
         .route("/nvr-vod/seg/:file", get(crate::nvr_vod::nvr_vod_segment))
-        .route("/nvr-preview/:file", get(crate::nvr_preview::nvr_preview_file))
         .route("/hls/:file", get(hls_serve))
         .route("/clips/:event_id", get(share_clip))
         .route("/live/:cam_id",    get(share_live))

@@ -1,6 +1,5 @@
 //! Axum HTTP handlers for streaming the recorded NVR archive — supports HTTP Range, seek, and multi-segment concatenation.
 
-use std::collections::HashMap;
 
 use axum::{
     body::Body, extract::State as AxumState,
@@ -8,178 +7,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use crate::{StreamState, ensure_ffmpeg};
 
-
-/// Serves an NVR segment file over HTTP with Range support (for video seeking).
-/// Query params: `path` (relative filename in data_dir/nvr/) + auth token already checked by middleware.
-pub(crate) async fn nvr_stream(
-    AxumState(s): AxumState<StreamState>,
-    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
-    req_headers: HeaderMap,
-) -> Response {
-    let filename = match params.get("file") {
-        Some(f) => f.clone(),
-        None => return StatusCode::BAD_REQUEST.into_response(),
-    };
-    // Security: only allow alphanumeric, dash, underscore, dot
-    if !filename.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    let path = s.data_dir.join("nvr").join(&filename);
-    let abs = match path.canonicalize() {
-        Ok(p) => p,
-        Err(_) => return StatusCode::NOT_FOUND.into_response(),
-    };
-    let abs_nvr = match s.data_dir.join("nvr").canonicalize() {
-        Ok(p) => p,
-        Err(_) => return StatusCode::NOT_FOUND.into_response(),
-    };
-    if !abs.starts_with(&abs_nvr) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    let mut file = match tokio::fs::File::open(&abs).await {
-        Ok(f) => f,
-        Err(_) => return StatusCode::NOT_FOUND.into_response(),
-    };
-    let file_size = match file.metadata().await {
-        Ok(m) => m.len(),
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
-    let range = req_headers.get("range")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("bytes="))
-        .and_then(|s| {
-            let mut parts = s.splitn(2, '-');
-            let start: u64 = parts.next()?.parse().ok()?;
-            let end: u64 = parts.next()
-                .and_then(|e| if e.is_empty() { None } else { e.parse().ok() })
-                .unwrap_or(file_size.saturating_sub(1));
-            if start > end || end >= file_size { None } else { Some((start, end)) }
-        });
-
-    let ct = if filename.ends_with(".webm") { "video/webm" } else { "video/mp4" };
-    let mut headers = HeaderMap::new();
-    headers.insert("Content-Type", HeaderValue::from_str(ct).unwrap());
-    headers.insert("Accept-Ranges", HeaderValue::from_static("bytes"));
-    headers.insert("Cache-Control", HeaderValue::from_static("no-cache"));
-
-    match range {
-        Some((start, end)) => {
-            file.seek(std::io::SeekFrom::Start(start)).await.ok();
-            let length = end - start + 1;
-            let stream = tokio_util::io::ReaderStream::new(file.take(length));
-            headers.insert("Content-Length", HeaderValue::from_str(&length.to_string()).unwrap());
-            headers.insert("Content-Range", HeaderValue::from_str(&format!("bytes {start}-{end}/{file_size}")).unwrap());
-            (StatusCode::PARTIAL_CONTENT, headers, Body::from_stream(stream)).into_response()
-        }
-        None => {
-            let stream = tokio_util::io::ReaderStream::new(file);
-            headers.insert("Content-Length", HeaderValue::from_str(&file_size.to_string()).unwrap());
-            (StatusCode::OK, headers, Body::from_stream(stream)).into_response()
-        }
-    }
-}
-
-/// Server-side time-seek endpoint — mature NVRs' approach: instead of asking the
-/// browser to seek within an MP4 (unreliable), we run `ffmpeg -ss OFFSET` on
-/// the server and stream the result starting from second 0.
-///
-/// GET /nvr-seek?file=FILENAME&offset=SECONDS&token=TOKEN
-///
-/// The browser receives a fresh fMP4 stream starting at the requested time.
-/// No client-side currentTime manipulation is ever needed.
-pub(crate) async fn nvr_seek_stream(
-    AxumState(s): AxumState<StreamState>,
-    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Response {
-    let filename = match params.get("file") {
-        Some(f) => f.clone(),
-        None => return StatusCode::BAD_REQUEST.into_response(),
-    };
-    if !filename.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    let offset_secs: f64 = params.get("offset").and_then(|v| v.parse().ok()).unwrap_or(0.0);
-    let path = s.data_dir.join("nvr").join(&filename);
-    if !path.exists() {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-
-    // If offset is negligible, fall back to a simple file serve (faster start)
-    if offset_secs < 1.0 {
-        let file = match tokio::fs::File::open(&path).await {
-            Ok(f) => f, Err(_) => return StatusCode::NOT_FOUND.into_response(),
-        };
-        let file_size = file.metadata().await.map(|m| m.len()).unwrap_or(0);
-        let ct = if filename.ends_with(".webm") { "video/webm" } else { "video/mp4" };
-        let mut headers = HeaderMap::new();
-        headers.insert("Content-Type", HeaderValue::from_str(ct).unwrap());
-        headers.insert("Accept-Ranges", HeaderValue::from_static("bytes"));
-        headers.insert("Cache-Control", HeaderValue::from_static("no-cache"));
-        headers.insert("Content-Length", HeaderValue::from_str(&file_size.to_string()).unwrap());
-        return (StatusCode::OK, headers, Body::from_stream(tokio_util::io::ReaderStream::new(file))).into_response();
-    }
-
-    // Server-side seek via ffmpeg — streams the file starting from `offset_secs`.
-    // `-ss` before `-i` = fast seek to nearest keyframe (accurate within one GOP).
-    // `-c copy` = no re-encode, instant start.
-    // `+frag_keyframe+default_base_moof` = proper fMP4 so browser plays from byte 0.
-    let ffmpeg = match ensure_ffmpeg(&s.data_dir).await {
-        Ok(f) => f, Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
-    let offset_str = format!("{:.3}", offset_secs);
-    // Single-file seek: audio (when present) is safe here — no concat boundary —
-    // but re-encode it with async resample so the seeked stream starts clean.
-    let file_audio: bool = sqlx::query_scalar(
-        "SELECT has_audio FROM nvr_segments WHERE path=? LIMIT 1")
-        .bind(path.to_string_lossy().as_ref())
-        .fetch_optional(&s.db).await.ok().flatten().map(|v: i64| v == 1).unwrap_or(false);
-    let path_str = path.to_string_lossy().to_string();
-    let mut sargs: Vec<String> = vec![
-        "-hide_banner".into(), "-loglevel".into(), "error".into(),
-        "-ss".into(), offset_str,
-        "-i".into(), path_str,
-        "-map".into(), "0:v:0".into(),
-        "-c:v".into(), "copy".into(),
-    ];
-    if file_audio {
-        sargs.extend(["-map".into(), "0:a:0".into(),
-            "-c:a".into(), "copy".into(),
-            "-avoid_negative_ts".into(), "make_zero".into()]);
-    } else {
-        sargs.push("-an".into());
-    }
-    sargs.extend(["-movflags".into(), "+frag_keyframe+default_base_moof".into(),
-        "-f".into(), "mp4".into(), "pipe:1".into()]);
-    let child = crate::proc::tokio_cmd(&ffmpeg)
-        .args(&sargs)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn();
-
-    match child {
-        Ok(mut proc) => {
-            let stdout = match proc.stdout.take() {
-                Some(s) => s, None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            };
-            // Keep process alive by moving it into the stream
-            let stream = tokio_util::io::ReaderStream::new(stdout);
-            tokio::spawn(async move { let _ = proc.wait().await; });
-            let mut headers = HeaderMap::new();
-            headers.insert("Content-Type", HeaderValue::from_static("video/mp4"));
-            headers.insert("Cache-Control", HeaderValue::from_static("no-cache"));
-            (StatusCode::OK, headers, Body::from_stream(stream)).into_response()
-        }
-        Err(e) => {
-            tracing::warn!("nvr_seek_stream ffmpeg error: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
-}
 
 /// Seamless continuous playback — mature NVRs' concat approach.
 ///
@@ -200,23 +30,6 @@ pub(crate) async fn nvr_seek_stream(
 // continuous playback stops hitching at every window boundary. `/nvr-vod` clamps
 // the query override to 3600.
 pub(crate) const NVR_CONCAT_WINDOW_SECS: f64 = 1800.0;
-
-pub(crate) async fn nvr_concat_stream(
-    AxumState(s): AxumState<StreamState>,
-    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Response {
-    let cam_id: u8 = params.get("cam").and_then(|v| v.parse().ok()).unwrap_or(0);
-    let start_secs = params.get("start").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
-    // Bounded window. Clamp to a sane range so a malicious/huge value can't
-    // recreate the unbounded-concat failure.
-    let window = params.get("window")
-        .and_then(|v| v.parse::<f64>().ok())
-        .map(|w| w.clamp(30.0, 3600.0))
-        .unwrap_or(NVR_CONCAT_WINDOW_SECS);
-    // DEPRECATED for playback: the UI now plays recorded windows via HLS VOD
-    // (/nvr-vod, see nvr_vod.rs). Kept for downloads/tools that want one mp4.
-    stream_concat_window(&s, cam_id, start_secs, Some(start_secs + window), ConcatAudio::Copy).await
-}
 
 /// v13 export route: bounded NVR-segment concat that the browser is encouraged
 /// to save as a file. Used by the Camera History modal's "Export time range"

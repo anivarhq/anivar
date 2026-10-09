@@ -8,67 +8,6 @@ use tauri::{Manager, State};
 use crate::AppState;
 
 
-#[tauri::command]
-pub async fn search_clips(
-    state: State<'_, Arc<AppState>>,
-    query: String,
-) -> Result<Vec<serde_json::Value>, String> {
-    Ok(crate::agent::search_clips(&state, &query).await)
-}
-
-#[tauri::command]
-pub async fn list_alert_conditions(state: State<'_, Arc<AppState>>) -> Result<Vec<crate::agent::AlertCondition>, String> {
-    Ok(crate::agent::list_alert_conditions(&state.db).await)
-}
-
-#[tauri::command]
-pub async fn create_alert_condition(
-    state: State<'_, Arc<AppState>>,
-    name: String, condition: String,
-    channels: String, min_risk: String,
-) -> Result<crate::agent::AlertCondition, String> {
-    Ok(crate::agent::create_alert_condition(&state.db, &name, &condition, &channels, &min_risk).await)
-}
-
-#[tauri::command]
-pub async fn delete_alert_condition(state: State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
-    crate::agent::delete_alert_condition(&state.db, &id).await;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn toggle_alert_condition(
-    state: State<'_, Arc<AppState>>, id: String, enabled: bool,
-) -> Result<(), String> {
-    crate::agent::toggle_alert_condition(&state.db, &id, enabled).await;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn read_memory_file(
-    state: State<'_, Arc<AppState>>, category: String,
-) -> Result<String, String> {
-    Ok(crate::agent::read_memory_file(&state.db, &category).await)
-}
-
-#[tauri::command]
-pub async fn write_memory_file(
-    state: State<'_, Arc<AppState>>, category: String, content: String,
-) -> Result<(), String> {
-    crate::agent::write_memory_file(&state.db, &category, &content).await;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn read_all_memory_files(state: State<'_, Arc<AppState>>) -> Result<String, String> {
-    Ok(crate::agent::read_all_memory_files(&state.db).await)
-}
-
-
-#[tauri::command]
-pub async fn delete_motion_event(state: State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
-    delete_events(state, vec![id]).await
-}
 
 /// Delete events and everything that belongs to them: exported clip files, the
 /// row, every satellite row, the bookmark, and the review group's stale member

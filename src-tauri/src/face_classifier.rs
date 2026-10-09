@@ -19,10 +19,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tauri::State;
 use tokio::sync::RwLock;
 
-use crate::AppState;
 
 /// A person needs at least this many enrolled embeddings to become a classifier
 /// class. Fewer-shot people stay on the cosine path (the classifier would overfit).
@@ -324,25 +322,3 @@ impl ClassifierStatus {
     }
 }
 
-/// Report whether the hybrid classifier is active and who it covers, without
-/// retraining. Loads the cached/persisted model.
-#[tauri::command]
-pub async fn face_classifier_status(state: State<'_, Arc<AppState>>) -> Result<ClassifierStatus, String> {
-    match get_model(&state.db).await {
-        Some(m) => Ok(ClassifierStatus {
-            active: true,
-            trained_people: m.person_class_count(),
-            has_reject_class: m.classes.iter().any(|c| c.person_id.is_empty()),
-            trained_at: Some(m.trained_at.clone()),
-            person_ids: m.classes.iter().filter(|c| !c.person_id.is_empty())
-                .map(|c| c.person_id.clone()).collect(),
-        }),
-        None => Ok(ClassifierStatus::inactive()),
-    }
-}
-
-/// Force a retrain (Roster "Retrain" affordance) and return the new status.
-#[tauri::command]
-pub async fn retrain_face_classifier(state: State<'_, Arc<AppState>>) -> Result<ClassifierStatus, String> {
-    Ok(retrain(&state.db).await)
-}

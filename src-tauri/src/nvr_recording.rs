@@ -2,81 +2,10 @@
 
 use std::sync::Arc;
 
-use tauri::{Emitter, State};
+use tauri::State;
 
-use crate::{AppState, MotionEvent, spawn_nvr_pipe, spawn_hls_pipe};
+use crate::{AppState, MotionEvent};
 
-
-/// Start NVR recording entirely in Rust — frames piped from process_frame directly
-/// to an ffmpeg subprocess that writes H.264 MP4 segments.  Zero browser involvement.
-/// Also starts HLS output so the frontend can play back live with low bandwidth.
-#[tauri::command]
-pub async fn start_nvr(
-    state: State<'_, Arc<AppState>>,
-    cam_id: u8,
-    source_url: String,
-) -> Result<serde_json::Value, String> {
-    let settings = state.settings.read().await.clone();
-
-    // For RTSP cameras, the relay already pushes frames into process_frame_inner,
-    // so the same pipe path works. Nothing extra needed.
-    let _ = source_url; // used by RTSP relay setup upstream
-
-    // USB cams: recording is INTEGRATED into the capture ffmpeg (one clock =
-    // A/V sync). RTSP cams: the relay's copy-recorder owns recording (and the
-    // live HLS output). Spawning a pipe recorder/HLS here would double-record
-    // and corrupt the playlist with a second writer.
-    let capture_owned = state.capture_keys.lock().await.get(&cam_id)
-        .map(|k| k.starts_with("usb:") || k.starts_with("rtsp:")).unwrap_or(false);
-    if capture_owned {
-        tracing::info!("start_nvr cam{cam_id}: capture-integrated recording (no pipe recorder)");
-        return Ok(serde_json::json!({
-            "mode": "capture_integrated",
-            "segment_mins": settings.nvr_segment_mins,
-        }));
-    }
-
-    // ── NVR: pipe frames → ffmpeg → segmented H.264 MP4 ───────────────────────
-    let encoder = state.hw_encoder.read().unwrap().clone();
-    match spawn_nvr_pipe(cam_id, &state.data_dir, settings.nvr_segment_mins, &encoder, state.app_handle.clone(), state.db.clone()).await {
-        Ok((tx, child)) => {
-            state.nvr_pipe_txs.lock().await.insert(cam_id, tx);
-            state.nvr_processes.lock().await.insert(cam_id, child);
-            tracing::info!("NVR (Rust/ffmpeg pipe) started for cam{}", cam_id);
-        }
-        Err(e) => tracing::warn!("NVR ffmpeg pipe failed ({}); install ffmpeg for Rust-side NVR", e),
-    }
-
-    // ── HLS: pipe frames → ffmpeg → H.264 HLS for low-bandwidth playback ──────
-    if !state.hls_pipe_txs.lock().await.contains_key(&cam_id) {
-        match spawn_hls_pipe(cam_id, &state.data_dir, &encoder).await {
-            Ok((tx, child)) => {
-                state.hls_pipe_txs.lock().await.insert(cam_id, tx);
-                // Keep the child alive — kill_on_drop(true) would otherwise kill the
-                // HLS ffmpeg the moment this scope ends.
-                state.hls_processes.lock().await.insert(cam_id, child);
-                tracing::info!("HLS stream started for cam{}", cam_id);
-            }
-            Err(e) => tracing::warn!("HLS ffmpeg pipe failed: {}", e),
-        }
-    }
-
-    Ok(serde_json::json!({ "mode": "rust_ffmpeg", "segment_mins": settings.nvr_segment_mins }))
-}
-
-#[tauri::command]
-pub async fn stop_nvr(state: State<'_, Arc<AppState>>, cam_id: u8) -> Result<(), String> {
-    // Drop the pipe sender — ffmpeg stdin closes, process exits cleanly and finalises the segment
-    state.nvr_pipe_txs.lock().await.remove(&cam_id);
-    // ...and give it the chance to: it used to be killed right here, mid-segment.
-    if let Some(child) = state.nvr_processes.lock().await.remove(&cam_id) {
-        crate::proc::stop_ffmpeg(child).await;
-    }
-    // Also signal legacy browser MediaRecorder (harmless if not running)
-    state.app_handle.emit("nvr:stop", serde_json::json!({ "cam_id": cam_id })).ok();
-    tracing::info!("NVR stopped for cam{}", cam_id);
-    Ok(())
-}
 
 /// Before quitting or installing an update: every recorder finishes the
 /// segment it's writing, all at once (about a second for any number of
@@ -88,29 +17,6 @@ pub(crate) async fn stop_all_recorders(state: &AppState) {
     children.extend(state.nvr_processes.lock().await.drain().map(|(_, c)| c));
     tracing::info!("finishing {} recorder segment(s) before exit", children.len());
     futures::future::join_all(children.into_iter().map(crate::proc::stop_ffmpeg)).await;
-}
-
-#[tauri::command]
-pub async fn get_nvr_segments(
-    state: State<'_, Arc<AppState>>,
-    cam_id: Option<u8>,
-    limit: Option<i64>,
-) -> Result<Vec<serde_json::Value>, String> {
-    let rows: Vec<(String, i64, String, String, Option<String>, i64)> =
-        if let Some(c) = cam_id {
-            sqlx::query_as(
-                "SELECT id,cam_id,path,started_at,ended_at,size_bytes FROM nvr_segments WHERE cam_id=? ORDER BY started_at DESC LIMIT ?"
-            ).bind(c as i64).bind(limit.unwrap_or(100)).fetch_all(&state.db).await
-        } else {
-            sqlx::query_as(
-                "SELECT id,cam_id,path,started_at,ended_at,size_bytes FROM nvr_segments ORDER BY started_at DESC LIMIT ?"
-            ).bind(limit.unwrap_or(100)).fetch_all(&state.db).await
-        }.map_err(|e| e.to_string())?;
-
-    Ok(rows.into_iter().map(|(id, cam, path, started, ended, size)| serde_json::json!({
-        "id": id, "cam_id": cam, "path": path,
-        "started_at": started, "ended_at": ended, "size_bytes": size
-    })).collect())
 }
 
 /// Does this segment still contain footage at or after `from_ts` (unix secs)?
@@ -753,7 +659,9 @@ pub(crate) async fn prune_old_footage(state: &Arc<AppState>) {
     // kept clip) go with it — Review only ever shows playable things.
     prune_footageless_events(state).await;
     // Scrub previews describe footage; they age out with it, not on a timer.
-    crate::nvr_preview::prune_previews(&state.db).await;
+    // Scrub previews were never generated by any shipping path; remove what an
+    // older version left behind.
+    let _ = tokio::fs::remove_dir_all(state.data_dir.join("nvr").join("previews")).await;
 
     if total_n == 0 { return; }
     tracing::info!("retention: total {total_n} segment(s), {} MB reclaimed", total_freed / 1_048_576);

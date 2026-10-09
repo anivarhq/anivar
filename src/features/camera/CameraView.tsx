@@ -826,7 +826,7 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
         selectSource(updated as any);
       }
       setIsActive(true);
-      if (camId === 0) { setCameraActive(true); api.notifyCameraState(true).catch(() => {}); }
+      if (camId === 0) { setCameraActive(true); }
       // SERVER-SIDE capture (mature NVRs model): the relay's ffmpeg pulls the stream and
       // handles recording + detection in Rust, so the camera records 24/7 even when
       // you leave the Live view. The browser <img> below only DISPLAYS the feed.
@@ -866,7 +866,7 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
       try {
         await api.startRtspRelay(camId, url);
         setIsActive(true);
-        if (camId === 0) { setCameraActive(true); api.notifyCameraState(true).catch(() => {}); }
+        if (camId === 0) { setCameraActive(true); }
       } catch (e: any) {
         setError(e?.message ?? `RTSP relay failed. Make sure ffmpeg is installed.\nFallback: Open in VLC: ${url}`);
       }
@@ -886,12 +886,12 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
       try {
         await api.startDshowCamera(camId, chosen.label);
         setIsActive(true);
-        if (camId === 0) { setCameraActive(true); api.notifyCameraState(true).catch(() => {}); }
+        if (camId === 0) { setCameraActive(true); }
       } catch {
         try {
           await api.startNativeCamera(camId, chosen.nativeIndex);
           setIsActive(true);
-          if (camId === 0) { setCameraActive(true); api.notifyCameraState(true).catch(() => {}); }
+          if (camId === 0) { setCameraActive(true); }
         } catch (e: any) {
           setError(e?.message ?? "Camera failed to open. It may be in use by another app.");
         }
@@ -908,7 +908,6 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
     setIsActive(false);
     if (camId === 0) {
       setCameraActive(false); setFps(0);
-      api.notifyCameraState(false).catch(() => {});
     }
     clearOverlay();
   }, [camId, stopCaptureLoop, setCameraActive, setFps]);
@@ -918,25 +917,6 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
     try { localStorage.setItem(`cam_source_${camId}`, JSON.stringify(src)); } catch { }
     startCamera(src);
   };
-
-  // Remote control + Guardian camera/settings events
-  useEffect(() => {
-    if (camId !== 0) return;
-    const u1 = listen("remote:start_camera", () => { if (!isActive) startCamera(); });
-    const u2 = listen("remote:stop_camera",  () => { if (isActive)  stopCamera(); });
-
-    const u3 = listen<import("../../api").Settings>("guardian:settings-updated", (e) => {
-      useStore.getState().setSettings(e.payload);
-    });
-
-    // NOTE: the Guardian agent has NO camera control. The previous
-    // "guardian:camera-start"/"guardian:camera-stop" listeners were removed so
-    // the monitoring agent (which ingests untrusted chat) can never start/stop a
-    // camera. The "remote:*" events above are the user's own remote control.
-
-    return () => { u1.then(f => f()); u2.then(f => f()); u3.then(f => f()); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isActive, source]);
 
   // Audio-event detection is now SERVER-SIDE for every camera kind (USB via the OS
   // ffmpeg capture, IP via the RTSP relay → shared YAMNet path). The old in-browser

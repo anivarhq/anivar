@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::State;
-use uuid::Uuid;
 
 use crate::AppState;
 use crate::recommend;
@@ -35,16 +34,6 @@ pub async fn list_installed_skills(state: State<'_, Arc<AppState>>) -> Result<Ve
 pub struct GpuInfo {
     pub name: String,
     pub is_discrete: bool,
-}
-
-#[tauri::command]
-pub async fn list_gpus() -> Result<Vec<GpuInfo>, String> {
-    // In-process DXGI enumeration (was a PowerShell CIM query — subprocess, slow,
-    // and a console-window risk). DXGI is the same source D3D/Task Manager use.
-    Ok(crate::hostinfo::gpu_adapters().into_iter().map(|a| GpuInfo {
-        is_discrete: a.is_discrete() || gpu_is_discrete(&a.name),
-        name: a.name,
-    }).collect())
 }
 
 /// Live host utilization for the System Monitor — CPU (overall + per-core), RAM,
@@ -173,107 +162,6 @@ pub fn pin_webview_gpu_power_saving() {
 }
 #[cfg(not(windows))]
 pub fn pin_webview_gpu_power_saving() {}
-
-#[tauri::command]
-pub async fn set_preferred_gpu(gpu_name: String) -> Result<(), String> {
-    // WebView2 GPU preference is a Windows registry concept — no-op elsewhere
-    // (macOS/Linux compositors pick the GPU themselves).
-    #[cfg(not(windows))]
-    { let _ = gpu_name; Ok(()) }
-    #[cfg(windows)]
-    { set_preferred_gpu_windows(gpu_name).await }
-}
-
-#[cfg(windows)]
-async fn set_preferred_gpu_windows(gpu_name: String) -> Result<(), String> {
-    // Find msedgewebview2.exe (highest version)
-    let find_ps = r#"
-$dirs = Get-ChildItem 'C:\Program Files (x86)\Microsoft\EdgeWebView\Application' -Directory -ErrorAction SilentlyContinue
-$exe = $dirs | Sort-Object Name -Descending | ForEach-Object {
-    $p = Join-Path $_.FullName 'msedgewebview2.exe'
-    if (Test-Path $p) { $p; break }
-} | Select-Object -First 1
-$exe
-"#;
-    let find_out = crate::proc::tokio_cmd("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", find_ps.trim()])
-        .output()
-        .await
-        .map_err(|e| format!("PowerShell error: {e}"))?;
-
-    let webview_exe = String::from_utf8_lossy(&find_out.stdout).trim().to_string();
-    if webview_exe.is_empty() {
-        return Err("msedgewebview2.exe not found".to_string());
-    }
-
-    // GpuPreference: 0=default, 1=integrated, 2=high performance (discrete)
-    let gpu_lower = gpu_name.to_lowercase();
-    let pref_value = if gpu_name.is_empty() {
-        "GpuPreference=0;".to_string()
-    } else if gpu_lower.contains("nvidia") || gpu_lower.contains("radeon rx")
-        || gpu_lower.contains("rx 6") || gpu_lower.contains("rx 7")
-    {
-        "GpuPreference=2;".to_string()
-    } else {
-        "GpuPreference=1;".to_string()
-    };
-
-    let set_ps = format!(
-        r#"$key = 'HKCU:\Software\Microsoft\DirectX\UserGpuPreferences'
-if (-not (Test-Path $key)) {{ New-Item -Path $key -Force | Out-Null }}
-Set-ItemProperty -Path $key -Name '{webview_exe}' -Value '{pref_value}' -Type String"#,
-        webview_exe = webview_exe.replace('\'', "\\'"),
-        pref_value = pref_value,
-    );
-
-    let set_out = crate::proc::tokio_cmd("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &set_ps])
-        .output()
-        .await
-        .map_err(|e| format!("PowerShell error: {e}"))?;
-
-    if !set_out.status.success() {
-        let err = String::from_utf8_lossy(&set_out.stderr);
-        return Err(format!("Registry write failed: {err}"));
-    }
-
-    Ok(())
-}
-
-/// Revoke the current auth token and generate a new one.
-/// All existing phone sessions are disconnected instantly (watch channel notifies WS handlers).
-/// The user must re-scan the QR code from the desktop app to reconnect.
-#[tauri::command]
-pub async fn revoke_token(state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    let new_token = Uuid::new_v4().simple().to_string();
-    // Persist to DB first so the new token survives restart
-    sqlx::query("INSERT OR REPLACE INTO settings(key,value) VALUES('auth_token',?)")
-        .bind(&new_token).execute(&state.db).await.map_err(|e| e.to_string())?;
-    // Update in-memory state (shared Arc — HTTP middleware sees it instantly)
-    *state.auth_token.write().await = new_token;
-    // Signal all open WebSocket connections to close themselves
-    let gen = *state.revoke_tx.borrow() + 1;
-    state.revoke_tx.send(gen).ok();
-    Ok(())
-}
-
-/// Forcibly disconnect a single remote viewer by their session UUID.
-/// The WS handler receives the kick signal and closes the socket gracefully.
-#[tauri::command]
-pub async fn disconnect_client(id: String, state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    let sender = state.kick_txs.lock().await.remove(&id);
-    if let Some(tx) = sender {
-        tx.send(()).ok();
-        Ok(())
-    } else {
-        Err(format!("No active session: {}", id))
-    }
-}
-
-#[tauri::command]
-pub async fn get_local_ip() -> Result<String, String> {
-    local_ip_address::local_ip().map(|ip| ip.to_string()).map_err(|e| e.to_string())
-}
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone, Default)]
 pub struct DiscoveredCamera {
@@ -615,33 +503,6 @@ pub async fn import_trtx_sdk(state: State<'_, Arc<AppState>>, path: String) -> R
         let _ = (state, path);
         Err("NVIDIA Performance Pack is Windows-only".into())
     }
-}
-
-/// Live-workload benchmark: snapshots the per-model latency table, waits
-/// `seconds`, snapshots again, and returns the DELTA (only inferences that
-/// actually ran in the window). Honest numbers from the real pipeline.
-#[tauri::command]
-pub async fn benchmark_inference(seconds: Option<u64>) -> Result<Vec<crate::inference::InferStatRow>, String> {
-    let secs = seconds.unwrap_or(20).clamp(5, 120);
-    let before: std::collections::HashMap<String, (u64, f32)> =
-        crate::inference::infer_stats_snapshot().into_iter()
-            .map(|r| (r.model.clone(), (r.count, r.avg_ms))).collect();
-    tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
-    let after = crate::inference::infer_stats_snapshot();
-    Ok(after.into_iter().filter_map(|r| {
-        let (c0, a0) = before.get(&r.model).copied().unwrap_or((0, 0.0));
-        let dc = r.count.saturating_sub(c0);
-        if dc == 0 { return None; }
-        // window average from cumulative sums: (sumAfter - sumBefore) / dc
-        let sum_after = r.avg_ms as f64 * r.count as f64;
-        let sum_before = a0 as f64 * c0 as f64;
-        Some(crate::inference::InferStatRow {
-            model: r.model,
-            count: dc,
-            avg_ms: ((sum_after - sum_before) / dc as f64) as f32,
-            p95_ms: r.p95_ms,
-        })
-    }).collect())
 }
 
 // ─── NVR disk projection ─────────────────────────────────────────────────────

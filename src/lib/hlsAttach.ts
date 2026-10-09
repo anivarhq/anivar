@@ -1,5 +1,4 @@
 import Hls from "hls.js";
-import { useEffect, useRef } from "react";
 
 /**
  * One source-attach for every recorded-footage player.
@@ -211,26 +210,4 @@ export function attachSource(
       if (!destroyed) { destroyed = true; hls.destroy(); }
     },
   };
-}
-
-/**
- * Declarative wrapper for players whose `<video>` previously used a `src`
- * prop (NVRPanel). Re-attaches whenever `url` changes; cleans up on unmount.
- * Returns a ref holding the live MediaHandle (for `playingDateMs`).
- */
-export function useHlsVideo(
-  videoRef: React.RefObject<HTMLVideoElement | null>,
-  url: string | null,
-  onFatal?: (details: string) => void,
-) {
-  const handleRef = useRef<MediaHandle | null>(null);
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !url) return;
-    const handle = attachSource(video, url, { onFatal });
-    handleRef.current = handle;
-    return () => { handle.destroy(); handleRef.current = null; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url]);
-  return handleRef;
 }

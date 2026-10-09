@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use sqlx::sqlite::SqlitePoolOptions;
 use tauri::{Emitter, Manager};
-use tokio::sync::{broadcast, watch, Mutex, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
 
 use crate::{
     AppState, CameraInventory,
@@ -263,8 +263,6 @@ pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::
         (0..NUM_CAM_SLOTS).map(|_| broadcast::channel::<Arc<Vec<u8>>>(16).0).collect()
     );
     let frame_txs_for_server = Arc::clone(&frame_txs);
-    let (camera_state_tx, _) = broadcast::channel::<bool>(4);
-    let camera_state_tx_clone = camera_state_tx.clone();
 
     let pool = tauri::async_runtime::block_on(async {
         // 4 connections starved the async runtime: the frontend loads every panel at
@@ -427,13 +425,8 @@ pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::
     let auth_token: Arc<RwLock<String>> = Arc::new(RwLock::new(raw_token));
     let auth_token_for_server = Arc::clone(&auth_token);
 
-    // Revocation watch channel — sender stays in AppState, receiver in StreamState
-    let (revoke_tx, revoke_rx) = watch::channel::<u64>(0);
-
     let app_handle = app.handle().clone();
     let app_handle_for_server = app_handle.clone();
-    let camera_active = Arc::new(RwLock::new(false));
-    let camera_active_for_server = Arc::clone(&camera_active);
 
     let pool_for_server = pool.clone();
     let data_dir_for_server = data_dir.clone();
@@ -462,9 +455,6 @@ pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::
         db: pool,
         data_dir,
         auth_token,
-        revoke_tx,
-        camera_active,
-        camera_state_tx,
         app_handle,
         agent_last_run: RwLock::new(None),
         latest_frames: Arc::new(RwLock::new(HashMap::new())),
@@ -491,8 +481,6 @@ pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::
         embed_jobs,
         master_key: startup_key,
         auth: crate::auth::AuthState::default(),
-        client_sessions: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-        kick_txs: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         // v9: shared inference-loop status — populated by run_inference_loop,
         // read by get_inference_status command so CameraView can pull-correct
         // its YOLO badge on mount instead of being stuck at "loading".
@@ -1071,9 +1059,6 @@ pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::
         });
     }
 
-    let client_sessions_for_server = Arc::clone(&state.client_sessions);
-    let kick_txs_for_server = Arc::clone(&state.kick_txs);
-
     tauri::async_runtime::spawn(async move {
         // Free the stream port from any orphaned child left by a force-killed run
         // BEFORE we try to bind it (otherwise: blank camera). See fn docs above —
@@ -1089,10 +1074,8 @@ pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::
 
         start_http_server(
             frame_txs_for_server, port, auth_token_for_server,
-            app_handle_for_server, camera_active_for_server,
-            camera_state_tx_clone,
-            pool_for_server, data_dir_for_server, revoke_rx,
-            client_sessions_for_server, kick_txs_for_server,
+            app_handle_for_server,
+            pool_for_server, data_dir_for_server,
             lan_access_for_server,
         );
     });

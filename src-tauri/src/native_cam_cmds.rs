@@ -5,10 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::State;
 
-use crate::{
-    AppState, BrowserCameraInfo, CameraInventory, CaptureTask, NativeCameraDevice,
-    run_capture_loop,
-};
+use crate::{AppState, BrowserCameraInfo, CaptureTask, NativeCameraDevice, run_capture_loop};
 
 
 /// Return which camera IDs have sent a frame in the last 30 seconds (i.e. are actively streaming).
@@ -123,12 +120,6 @@ pub async fn get_camera_telemetry(
         segments_today, bytes_today,
         oldest_at, newest_at,
     })
-}
-
-/// Return everything the app knows about available cameras (native + network + browser).
-#[tauri::command]
-pub async fn get_camera_inventory(state: State<'_, Arc<AppState>>) -> Result<CameraInventory, String> {
-    Ok(state.camera_inventory.read().await.clone())
 }
 
 /// Frontend calls this to report browser-enumerated camera devices (getUserMedia list).
@@ -280,21 +271,6 @@ pub async fn stop_native_camera(
     if let Some(task) = handles.remove(&cam_id) {
         task.cancel.store(true, Ordering::Relaxed);
     }
-    if cam_id == 0 {
-        *state.camera_active.write().await = false;
-        state.camera_state_tx.send(false).ok();
-    }
     Ok(())
 }
 
-/// Stop all running native-capture tasks (called on app exit or "stop all").
-#[tauri::command]
-pub async fn stop_all_native_cameras(state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    let mut handles = state.capture_handles.lock().await;
-    for (_, task) in handles.drain() {
-        task.cancel.store(true, Ordering::Relaxed);
-    }
-    *state.camera_active.write().await = false;
-    state.camera_state_tx.send(false).ok();
-    Ok(())
-}

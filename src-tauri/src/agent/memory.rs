@@ -45,12 +45,6 @@ pub async fn write_memory(db: &SqlitePool, key: &str, value: &str) {
     .ok();
 }
 
-/// Append a timestamped entry to an existing memory key (creates if absent).
-/// Each entry is separated by a newline so the log grows chronologically.
-pub async fn append_to_memory(db: &SqlitePool, key: &str, new_entry: &str) {
-    append_memory(db, key, new_entry).await;
-}
-
 pub(super) async fn append_memory(db: &SqlitePool, key: &str, new_entry: &str) {
     let now = Utc::now().format("%Y-%m-%d %H:%M").to_string();
     let stamped = format!("[{now}] {new_entry}");
@@ -77,24 +71,6 @@ pub(super) async fn append_memory(db: &SqlitePool, key: &str, new_entry: &str) {
 //
 // Scoring: confirmations increment each time a pattern repeats.
 // Decay: read by `get_relevant_memories` which filters low-score learned memories.
-
-/// Reinforce an auto-learned memory entry (increment confirmations + score).
-/// Creates the entry if it doesn't exist.
-pub async fn reinforce_memory(db: &SqlitePool, key: &str, value: &str, memory_type: &str) {
-    let now = Utc::now().to_rfc3339();
-    sqlx::query(
-        "INSERT INTO agent_memory(key,value,updated_at,score,confirmations,created_at,memory_type)
-         VALUES(?,?,?,1.0,1,?,?)
-         ON CONFLICT(key) DO UPDATE SET
-           value      = excluded.value,
-           updated_at = excluded.updated_at,
-           confirmations = confirmations + 1,
-           score = MIN(10.0, score + 0.5),
-           memory_type = excluded.memory_type"
-    )
-    .bind(key).bind(value).bind(&now).bind(&now).bind(memory_type)
-    .execute(db).await.ok();
-}
 
 /// Decay all learned memories slightly (called periodically).
 /// Memories with score < 0.3 and confirmations < 2 are removed (ephemeral noise).
@@ -260,12 +236,16 @@ pub(super) async fn save_alert_rule(db: &SqlitePool, rule: &AlertRule) {
 /// Remove an alert rule by its short id (matches key suffix).
 pub(super) async fn delete_alert_rule(db: &SqlitePool, id: &str) -> bool {
     let key = format!("alert_rule_{}", id);
-    let exists = read_memory(db, &key).await.is_some();
-    if exists {
+    if read_memory(db, &key).await.is_some() {
         sqlx::query("DELETE FROM agent_memory WHERE key=?")
             .bind(&key).execute(db).await.ok();
+        return true;
     }
-    exists
+    // Or one of the older plain-English alert conditions: nothing else can
+    // remove those since the app stopped showing them.
+    let legacy = super::conditions::list_alert_conditions(db).await.iter().any(|c| c.id == id);
+    if legacy { super::conditions::delete_alert_condition(db, id).await; }
+    legacy
 }
 
 /// Load all active alert rules from memory.
@@ -307,7 +287,10 @@ pub(super) async fn any_subscribe_rule_matches(
 /// Format all alert rules for display in chat / Telegram.
 pub(super) async fn fmt_alert_rules(db: &SqlitePool) -> String {
     let rules = load_alert_rules(db).await;
-    if rules.is_empty() {
+    // Plain-English alert conditions from older versions still run on every
+    // analysed event; listed here so they can be seen and removed.
+    let legacy = super::conditions::list_alert_conditions(db).await;
+    if rules.is_empty() && legacy.is_empty() {
         return "No proactive alert rules set.".to_string();
     }
     rules.iter().map(|r| {
@@ -318,7 +301,9 @@ pub(super) async fn fmt_alert_rules(db: &SqlitePool) -> String {
         }
         if let Some(ref mr) = r.min_risk { parts.push(format!("min_risk={mr}")); }
         parts.join(", ")
-    }).collect::<Vec<_>>().join("\n")
+    }).chain(legacy.iter().map(|c| format!("[{}] {}: {}{}", c.id, c.name, c.condition,
+        if c.enabled { "" } else { " (off)" })))
+    .collect::<Vec<_>>().join("\n")
 }
 
 // ─── Agies analysis output helpers ──────────────────────────────────────────

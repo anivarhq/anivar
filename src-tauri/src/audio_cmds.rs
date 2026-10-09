@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
-use tauri::{Emitter, State};
+use tauri::Emitter;
 
 use crate::AppState;
 
@@ -523,42 +523,3 @@ pub(crate) async fn spawn_audio_detection(
     });
 }
 
-/// Analyse one mono 16 kHz PCM window streamed from the WebView (USB/webcam cameras,
-/// whose audio isn't available to the server-side ffmpeg tap). Runs the same YAMNet +
-/// sustained-event path as the server tap. No-ops unless audio detection is on + the
-/// skill is installed.
-#[tauri::command]
-pub async fn analyze_audio_window(
-    state: State<'_, Arc<AppState>>,
-    cam_id: u8,
-    pcm: Vec<f32>,
-) -> Result<(), String> {
-    let (enabled, listen, threshold) = {
-        let s = state.settings.read().await;
-        (s.audio_detection, s.audio_listen.clone(), s.audio_threshold)
-    };
-    if !enabled || !crate::audio::is_installed(&state.data_dir) { return Ok(()); }
-    // Reap on every window so events close even when the WebView keeps streaming silence.
-    reap_audio_events(state.inner()).await;
-    let loud = crate::audio::rms(&pcm);
-    if loud < MIN_VOLUME_RMS { return Ok(()); }
-
-    let listen_v: Vec<String> = listen.split(',')
-        .map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
-    let data_dir = state.data_dir.clone();
-    let results = tokio::task::spawn_blocking(move || {
-        crate::audio::with_detector(&data_dir, |y| y.detect(&pcm))
-    }).await.ok().flatten().unwrap_or_default();
-
-    let top3: Vec<(String, f32)> = results.iter().take(3).cloned().collect();
-    let hit = results.iter().find(|(name, score)| {
-        *score >= threshold && {
-            let n = name.to_lowercase();
-            listen_v.iter().any(|w| n.contains(w))
-        }
-    }).cloned();
-    if let Some((sound, score)) = hit {
-        note_audio_hit(state.inner(), cam_id.min(15), &sound, score, &top3, loud, threshold).await;
-    }
-    Ok(())
-}
