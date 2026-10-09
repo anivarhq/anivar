@@ -264,7 +264,7 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
   // no client work at all. The 🛡 button below toggles that real setting.
   const [anonBusy, setAnonBusy]           = useState(false);
   const svSettings = useStore(st => st.settings);
-  const anonOn = (() => {
+  const anonFlag = (() => {
     try { return JSON.parse(svSettings?.depth_anonymize || "{}")[String(camId)] === true; }
     catch { return false; }
   })();
@@ -328,6 +328,9 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
   const [isActive, setIsActive]           = useState(false);
   const [error, setError]                 = useState<string | null>(null);
   const [source, setSource]               = useState<CameraSource | null>(null);
+  // Only a USB camera can be anonymized (dshow.rs); a flag left on the slot by a
+  // removed camera must not label a network camera as protected.
+  const anonOn = source?.kind === "native" && anonFlag;
   const [setupTab, setSetupTab]           = useState<"local" | "network" | "manual">("local");
   const [browserCameras, setBrowserCameras] = useState<BrowserCamera[]>([]);
   const [discovered, setDiscovered]       = useState<DiscoveredCamera[]>([]);

@@ -152,7 +152,10 @@ pub async fn start_rtsp_relay(
             while let Some(frame) = crate::dshow::next_jpeg(&mut pending, &mut scan) {
                 let jpeg_arc = Arc::new(frame);
                 // FULL RATE (all cheap): live view + recording + HLS + inference queue.
-                let _ = state_arc.frame_txs[cam as usize].send(Arc::clone(&jpeg_arc));
+                // Never raw for an anonymized slot (network cameras can't be anonymized).
+                if !crate::depth::is_anonymized(cam) {
+                    let _ = state_arc.frame_txs[cam as usize].send(Arc::clone(&jpeg_arc));
+                }
                 crate::inference_cmds::fan_out_frame(&state_arc, cam, &jpeg_arc).await;
                 // DETECTION (expensive) runs drop-don't-queue so tasks can't pile up (OOM)
                 // or lag behind (slow-motion). Recording above is unaffected by its speed.
