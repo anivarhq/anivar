@@ -159,7 +159,7 @@ are `pub(super)`.
   bounding boxes, sends them to the configured provider — or takes the
   rule-based path when the active engine cannot see a frame or cannot be trusted
   to classify risk — parses the JSON response (`extract_json_block`
-  strips ` ```json ` fences first), and stores the `ai_summary`: the v2 fields plus `attributes`, marked v3.
+  strips ` ```json ` fences first), and stores the `ai_summary`: the v2 fields plus `attributes`, marked v3 (field by field in [SCHEMAS.md](SCHEMAS.md)).
 - **`chat_with_agent`** — the user-facing AI chat. Assembles context (standing
   rules, the live situation, recent events and alerts, retrieved memory, recent
   turns), calls the LLM, and parses embedded action tags (`[SNAPSHOT]`,
