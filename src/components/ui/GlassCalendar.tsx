@@ -122,14 +122,14 @@ export function GlassCalendar({ value, onChange, max, min, open, onClose, anchor
       {/* Month header */}
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <button type="button" onClick={() => setViewMonth(new Date(viewMonth.getFullYear(), viewMonth.getMonth() - 1, 1))}
-          style={navBtn}><ChevronLeft size={14} /></button>
+          style={navBtn} aria-label="Previous month"><ChevronLeft size={14} /></button>
         <div style={{
           flex: 1, textAlign: "center",
           fontSize: 13, fontWeight: 700, letterSpacing: -0.01,
           color: "var(--text-primary)",
         }}>{monthLabel}</div>
         <button type="button" onClick={() => setViewMonth(new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 1, 1))}
-          style={navBtn}><ChevronRight size={14} /></button>
+          style={navBtn} aria-label="Next month"><ChevronRight size={14} /></button>
       </div>
 
       {/* DoW row */}

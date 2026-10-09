@@ -12,7 +12,7 @@
  * so which dialog won was decided by DOM order.
  */
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 /** Stacking order, lowest first. Nested dialogs (an image zoom opened from
@@ -27,17 +27,28 @@ const Z = { base: 1000, nested: 1100, top: 1200 } as const;
  * way out of a mis-clicked one was to find its Cancel button with the mouse.
  */
 export function useDismiss(onClose: () => void) {
+  const close = useLatest(onClose);
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.stopPropagation(); onClose(); }
+      if (e.key === "Escape") { e.stopPropagation(); close.current(); }
     };
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
       opener?.focus?.();
     };
-  }, [onClose]);
+  }, [close]);
+}
+
+/** A ref that always holds the latest `value`. Callers pass `onClose` as an
+ *  inline arrow, a new function every render; depending on it re-ran the
+ *  open/close effect on each parent re-render, which bounced focus back to the
+ *  opener and then to the panel. The effect now runs once per open. */
+function useLatest<T>(value: T) {
+  const ref = useRef(value);
+  useLayoutEffect(() => { ref.current = value; });
+  return ref;
 }
 
 export function Modal({
@@ -56,13 +67,14 @@ export function Modal({
   closeOnBackdrop?: boolean;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const close = useLatest(onClose);
 
   useEffect(() => {
     // Whatever had focus when this opened gets it back on close — otherwise
     // focus falls to <body> and keyboard users restart from the top of the page.
     const opener = document.activeElement as HTMLElement | null;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.stopPropagation(); onClose(); }
+      if (e.key === "Escape") { e.stopPropagation(); close.current(); }
     };
     document.addEventListener("keydown", onKey);
     // Focus the panel so Escape reaches us even if nothing inside is focusable.
@@ -71,7 +83,7 @@ export function Modal({
       document.removeEventListener("keydown", onKey);
       opener?.focus?.();
     };
-  }, [onClose]);
+  }, [close]);
 
   return createPortal(
     <div
