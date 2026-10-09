@@ -144,7 +144,7 @@ pub(crate) async fn security_headers(req: axum::extract::Request, next: axum::mi
     h.insert("Referrer-Policy",         HV::from_static("strict-origin-when-cross-origin"));
     h.insert("Permissions-Policy",      HV::from_static("geolocation=()"));
     h.insert("Content-Security-Policy", HV::from_static(
-        "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss: http: https:; media-src 'self' blob:;"
+        "default-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss: http: https:; media-src 'self' blob:;"
     ));
     resp
 }
