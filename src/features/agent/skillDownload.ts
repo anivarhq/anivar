@@ -382,15 +382,13 @@ export const SKILL_REGISTRY: SkillDef[] = [
   },
   // ── Audio event detection (NVR-parity). YAMNet (AudioSet, 521 classes)
   //    classifies scream / glass-breaking / smoke+fire alarm / gunshot / dog bark
-  //    / speech from the camera's audio. Needs an RTSP camera with an audio track
-  //    (browser/USB audio is a future frontend path). NOTE: the model + class_map
-  //    URLs below are best-guess and should be VERIFIED before release (like the
-  //    Jina lesson) — the feature degrades to off if the skill isn't present.
+  //    / speech from the camera's audio: a network camera's audio track or a USB
+  //    camera's microphone. The feature degrades to off if the skill isn't present.
   {
     id:          "audio_yamnet",
     name:        "Audio Detection — YAMNet",
     slot:        "audio",
-    description: "Detects scream, glass breaking, smoke/fire alarm, gunshot, dog bark and more from camera audio (RTSP). Raises events even when nothing is visible.",
+    description: "Detects scream, glass breaking, smoke/fire alarm, gunshot, dog bark and more from camera audio (a network camera's audio track or a USB camera's microphone). Raises events even when nothing is visible.",
     sizeLabel:   "~17 MB",
     badge:       "AUDIO",
     badgeColor:  "var(--status-warn)",

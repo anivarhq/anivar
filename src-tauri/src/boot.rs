@@ -601,7 +601,7 @@ pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::
             // recorder + mic tap for a camera that doesn't exist (device light on,
             // empty segments). No configured cameras ⇒ nothing starts.
             if let Ok(ff) = crate::ensure_ffmpeg(&state2.data_dir).await {
-                if let Some(aargs) = crate::dshow::audio_input_args(&ff).await {
+                if let Some(aargs) = crate::dshow::audio_input_args(&ff, "").await {
                     for cam_id in &legacy {
                         crate::nvr_pipes::set_nvr_mic(*cam_id, Some(aargs.clone()));
                     }

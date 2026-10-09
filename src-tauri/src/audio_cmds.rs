@@ -418,6 +418,26 @@ async fn close_orphan_audio_events(state: &Arc<AppState>, cam_id: u8) {
 /// Throttle for the "hearing X" trace log (once per ~10s across all cams).
 static LAST_AUDIO_TRACE: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
+/// Which camera is detecting on each microphone (keyed by its ffmpeg input args),
+/// with a token so a stopped detector releases only its own claim, never the one
+/// a restart of the same camera has just taken.
+static MIC_CLAIMS: std::sync::Mutex<Vec<(String, u8, u64)>> = std::sync::Mutex::new(Vec::new());
+
+/// Claim `mic` for `cam`'s detector. `None` while another camera holds it.
+fn claim_mic(mic: &str, cam: u8) -> Option<u64> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let mut claims = MIC_CLAIMS.lock().unwrap_or_else(|e| e.into_inner());
+    if claims.iter().any(|(m, c, _)| m == mic && *c != cam) { return None; }
+    claims.retain(|(m, _, _)| m != mic);
+    let token = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    claims.push((mic.to_string(), cam, token));
+    Some(token)
+}
+
+fn release_mic(mic: &str, token: u64) {
+    MIC_CLAIMS.lock().unwrap_or_else(|e| e.into_inner()).retain(|(m, _, t)| !(m == mic && *t == token));
+}
+
 pub(crate) async fn spawn_audio_detection(
     state: &Arc<AppState>,
     cam: u8,
@@ -440,7 +460,15 @@ pub(crate) async fn spawn_audio_detection(
     let model_ok = crate::audio::is_installed(&state.data_dir);
     let listen: Vec<String> = listen_raw.split(',')
         .map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
-    let detect = model_ok && !listen.is_empty();
+    // One detector per physical microphone: two cameras on the same mic heard
+    // every sound twice, as two events. The second still buffers audio for its
+    // own clips; it just doesn't raise events.
+    let mic = input_args.join(" ");
+    let claim = if model_ok && !listen.is_empty() { claim_mic(&mic, cam) } else { None };
+    let detect = claim.is_some();
+    if model_ok && !listen.is_empty() && !detect {
+        tracing::info!("audio cam{cam}: another camera is already listening on this microphone — not detecting twice");
+    }
     // Nothing to do at all (no recording wanted AND can't detect) → don't open the mic.
     if !record_audio && !detect { return; }
 
@@ -455,11 +483,22 @@ pub(crate) async fn spawn_audio_detection(
     let child = crate::proc::tokio_cmd(ffmpeg)
         .args(&args)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        // Errors to the log (a mic that won't open used to fail silently).
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
         .spawn().ok();
-    let mut child = match child { Some(c) => c, None => return };
-    let stdout = match child.stdout.take() { Some(s) => s, None => return };
+    let release = move || if let Some(token) = claim { release_mic(&mic, token); };
+    let mut child = match child { Some(c) => c, None => { release(); return } };
+    let stdout = match child.stdout.take() { Some(s) => s, None => { release(); return } };
+    if let Some(stderr) = child.stderr.take() {
+        tokio::spawn(async move {
+            use tokio::io::AsyncBufReadExt;
+            let mut lines = tokio::io::BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                tracing::warn!("audio detector cam{cam}: {line}");
+            }
+        });
+    }
     state.audio_processes.lock().await.insert(cam, child);
     let st = Arc::clone(state);
     tokio::spawn(async move {
@@ -517,9 +556,27 @@ pub(crate) async fn spawn_audio_detection(
                 note_audio_hit(&st, cam, &sound, score, &top3, loud, threshold).await;
             }
         }
+        release(); // the detector stopped: another camera may listen now
         // Capture ended (camera stopped / stream dropped): close any open event.
         close_audio_for_cam(&st, cam).await;
         tracing::info!("audio detector stopped for cam{}", cam);
     });
 }
 
+
+#[cfg(test)]
+mod mic_claim_tests {
+    use super::{claim_mic, release_mic};
+
+    #[test]
+    fn one_detector_per_microphone() {
+        let mic = "-f dshow -i audio=Microphone (test-only device)";
+        let a = claim_mic(mic, 0).expect("first camera claims the mic");
+        assert!(claim_mic(mic, 1).is_none(), "a second camera on the same mic doesn't detect");
+        let a2 = claim_mic(mic, 0).expect("camera 0 restarting keeps it");
+        release_mic(mic, a); // the OLD detector stops after the restart…
+        assert!(claim_mic(mic, 1).is_none(), "…and doesn't release the restart's claim");
+        release_mic(mic, a2);
+        assert!(claim_mic(mic, 1).is_some(), "free once camera 0's detector stops");
+    }
+}

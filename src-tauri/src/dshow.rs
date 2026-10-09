@@ -101,7 +101,7 @@ pub(crate) async fn start_usb_capture(
     } else { device_name };
     // Per-OS audio device for server-side YAMNet (None if none / unsupported). The shared
     // detector itself no-ops unless audio detection is enabled + the skill is installed.
-    let audio_args = audio_input_args(&ffmpeg).await;
+    let audio_args = audio_input_args(&ffmpeg, &device_name).await;
     spawn_capture(state, cam, format!("usb:{device_name}"), audio_args, &ffmpeg, &device_name).await
 }
 
@@ -417,7 +417,7 @@ async fn spawn_capture(
 #[cfg(windows)]
 async fn camera_av_input_args(ffmpeg: &std::path::Path, device: &str)
     -> Option<(Vec<String>, Option<String>)> {
-    let mic = audio_device_name(ffmpeg).await?;
+    let mic = audio_device_name(ffmpeg, device).await?;
     Some((vec![
         "-f".into(), "dshow".into(), "-rtbufsize".into(), "50M".into(),
         "-framerate".into(), "30".into(),
@@ -457,43 +457,60 @@ async fn camera_av_input_args(_ffmpeg: &std::path::Path, _device: &str)
 
 // ─── Per-OS: ffmpeg AUDIO input args for server-side YAMNet (None = no mic) ───────
 
+/// The microphone for `camera` (dshow needs an explicit device NAME, no
+/// "default"): the camera's own, when one is listed under its name, else the
+/// first one listed. Every camera used to get the first one, which was often
+/// neither webcam's mic.
 #[cfg(windows)]
-pub(crate) async fn audio_device_name(ffmpeg: &std::path::Path) -> Option<String> {
-    // dshow needs an explicit audio device NAME (no "default"); take the first one listed.
+pub(crate) async fn audio_device_name(ffmpeg: &std::path::Path, camera: &str) -> Option<String> {
     let out = crate::proc::tokio_cmd(ffmpeg)
         .args(["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"])
         .output().await.ok()?;
     let text = String::from_utf8_lossy(&out.stderr);
-    for line in text.lines() {
-        if line.contains("(audio)") {
-            if let (Some(a), Some(b)) = (line.find('"'), line.rfind('"')) {
-                if b > a + 1 { return Some(line[a + 1..b].to_string()); }
-            }
-        }
-    }
-    None
+    let mics: Vec<String> = text.lines()
+        .filter(|line| line.contains("(audio)"))
+        .filter_map(|line| {
+            let (a, b) = (line.find('"')?, line.rfind('"')?);
+            (b > a + 1).then(|| line[a + 1..b].to_string())
+        })
+        .collect();
+    let pick = pick_mic(camera, &mics).unwrap_or(0);
+    mics.into_iter().nth(pick)
 }
 
+/// Which of `mics` belongs to `camera`: the one whose name contains the
+/// camera's. Windows lists a webcam's microphone under the webcam's name, e.g.
+/// "Microphone (2- HD Pro Webcam C920)" for "HD Pro Webcam C920".
+#[cfg(any(windows, test))]
+fn pick_mic(camera: &str, mics: &[String]) -> Option<usize> {
+    let norm = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase();
+    let cam = norm(camera);
+    if cam.len() < 3 { return None; }
+    mics.iter().position(|m| norm(m).contains(&cam))
+}
+
+/// ffmpeg input args for the microphone that goes with `camera` (a USB device
+/// name, or "" when unknown).
 #[cfg(windows)]
-pub(crate) async fn audio_input_args(ffmpeg: &std::path::Path) -> Option<Vec<String>> {
-    let mic = audio_device_name(ffmpeg).await?;
+pub(crate) async fn audio_input_args(ffmpeg: &std::path::Path, camera: &str) -> Option<Vec<String>> {
+    let mic = audio_device_name(ffmpeg, camera).await?;
     Some(vec!["-f".into(), "dshow".into(), "-i".into(), format!("audio={mic}")])
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) async fn audio_input_args(_ffmpeg: &std::path::Path) -> Option<Vec<String>> {
+pub(crate) async fn audio_input_args(_ffmpeg: &std::path::Path, _camera: &str) -> Option<Vec<String>> {
     // AVFoundation "video:audio" → "none:0" = no video, default mic (audio index 0).
     Some(vec!["-f".into(), "avfoundation".into(), "-i".into(), "none:0".into()])
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) async fn audio_input_args(_ffmpeg: &std::path::Path) -> Option<Vec<String>> {
+pub(crate) async fn audio_input_args(_ffmpeg: &std::path::Path, _camera: &str) -> Option<Vec<String>> {
     // ALSA "default" (routes through PulseAudio/PipeWire when present).
     Some(vec!["-f".into(), "alsa".into(), "-i".into(), "default".into()])
 }
 
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
-pub(crate) async fn audio_input_args(_ffmpeg: &std::path::Path) -> Option<Vec<String>> { None }
+pub(crate) async fn audio_input_args(_ffmpeg: &std::path::Path, _camera: &str) -> Option<Vec<String>> { None }
 
 // ─── Per-OS: ffmpeg input args (the ONLY OS-specific capture code) ────────────────
 
@@ -665,7 +682,17 @@ async fn list_cameras_impl(_ffmpeg: &std::path::Path) -> Result<Vec<String>, Str
 
 #[cfg(test)]
 mod device_list_tests {
-    use super::{avfoundation_cameras, v4l2_cameras};
+    use super::{avfoundation_cameras, pick_mic, v4l2_cameras};
+
+    #[test]
+    fn each_webcam_gets_its_own_microphone() {
+        let mics = ["Microphone Array (Realtek(R) Audio)", "Microphone (2- HD Pro Webcam C920)",
+                    "Headset (Logitech BRIO)"].map(String::from);
+        assert_eq!(pick_mic("HD Pro Webcam C920", &mics), Some(1));
+        assert_eq!(pick_mic("Logitech BRIO", &mics), Some(2));
+        assert_eq!(pick_mic("Integrated Camera", &mics), None, "no mic of its own: the caller falls back");
+        assert_eq!(pick_mic("", &mics), None);
+    }
 
     #[test]
     fn a_mac_lists_cameras_not_screens_and_keeps_their_index() {
