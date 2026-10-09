@@ -27,9 +27,10 @@
  * Everything descriptive goes behind the (i) in the footer, which is identical
  * on all three card types.
  */
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { Trash2, Bookmark, Sparkles, Download, Info, X, MapPin, Clock, Film } from "lucide-react";
 import styles from "./ReviewFeed.module.css";
+import { Modal } from "../../components/ui/Modal";
 
 /** One circular action button. Uniform across every card type. */
 function ActionBtn({ title, onClick, active, danger, pinned, children }: {
@@ -126,7 +127,7 @@ export function CardActions({
 export function CardInfoButton({ onOpen }: { onOpen: () => void }) {
   return (
     <span
-      role="button" tabIndex={0} title="Details"
+      role="button" tabIndex={0} title="Details" aria-label="Details"
       onClick={(e) => { e.stopPropagation(); e.preventDefault(); onOpen(); }}
       // Space too — a control announced as a button answers both.
       onKeyDown={(e) => {
@@ -169,13 +170,14 @@ export function CardInfoModal({
   summary?: string | null;
   detail?: ReactNode;
 }) {
+  // The shared Modal: Escape closes, focus returns to the (i) that opened it, and
+  // it's announced as a dialog named by the title. The hand-rolled backdrop had
+  // none of that, so keyboard users could open the sheet but not leave it.
+  const titleId = useId();
   return (
-    <div onClick={onClose} style={{
-      position: "fixed", inset: 0, zIndex: 1200, background: "var(--bg-overlay)",
-      display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
-    }}>
-      <div className="glass-strong" onClick={e => e.stopPropagation()}
-        style={{ width: "100%", maxWidth: 420, padding: 18, display: "flex", flexDirection: "column", gap: 14 }}>
+    <Modal onClose={onClose} layer="top" labelledBy={titleId}>
+      <div className="glass-strong"
+        style={{ width: 420, maxWidth: "100%", padding: 18, display: "flex", flexDirection: "column", gap: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           {thumb
             ? <img src={thumb} alt="" loading="lazy"
@@ -185,13 +187,13 @@ export function CardInfoModal({
                 {thumbFallback ?? <Film size={16} />}
               </div>}
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>{title}</div>
+            <div id={titleId} style={{ fontWeight: 700, fontSize: 14 }}>{title}</div>
             <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 3,
               display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
               <MapPin size={11} /> {camLabel} · <Clock size={11} /> {timeLabel}
             </div>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer",
+          <button onClick={onClose} aria-label="Close" style={{ background: "none", border: "none", cursor: "pointer",
             color: "var(--text-muted)", padding: 4 }}><X size={18} /></button>
         </div>
         {chips && chips.length > 0 && (
@@ -204,6 +206,6 @@ export function CardInfoModal({
         )}
         {detail}
       </div>
-    </div>
+    </Modal>
   );
 }

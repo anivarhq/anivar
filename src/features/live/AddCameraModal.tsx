@@ -240,7 +240,7 @@ export function AddCameraModal({ nextSlotId, onClose, onAdded, initialTab }: {
             <Camera size={14} style={{ display: "inline", marginRight: 6, verticalAlign: "middle" }} />
             Add Camera — Slot {nextSlotId + 1}
           </span>
-          <button className={styles.modalClose} onClick={onClose}><X size={15} /></button>
+          <button className={styles.modalClose} onClick={onClose} aria-label="Close"><X size={15} /></button>
         </div>
 
         {/* Tab bar */}
