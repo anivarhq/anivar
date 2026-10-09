@@ -430,12 +430,7 @@ async fn camera_av_input_args(ffmpeg: &std::path::Path, device: &str)
     -> Option<(Vec<String>, Option<String>)> {
     // AVFoundation combined "video_index:audio_index"; audio 0 = default mic
     // (the ":0" convention audio_input_args already relies on).
-    let index = if !device.is_empty() && device.chars().all(|c| c.is_ascii_digit()) {
-        device.to_string()
-    } else {
-        let names = list_cameras_impl(ffmpeg).await.unwrap_or_default();
-        names.iter().position(|n| n == device).map(|i| i.to_string()).unwrap_or_else(|| "0".into())
-    };
+    let index = avfoundation_index(ffmpeg, device).await;
     Some((vec![
         "-f".into(), "avfoundation".into(),
         "-framerate".into(), "30".into(),
@@ -448,7 +443,7 @@ async fn camera_av_input_args(_ffmpeg: &std::path::Path, device: &str)
     -> Option<(Vec<String>, Option<String>)> {
     // v4l2 carries no audio; a second alsa input in the SAME process still shares
     // the process wallclock base, and record-time aresample heals residual drift.
-    let path = if device.starts_with("/dev/") { device.to_string() } else { "/dev/video0".to_string() };
+    let path = v4l2_path(device);
     Some((vec![
         "-f".into(), "v4l2".into(), "-i".into(), path,
         "-f".into(), "alsa".into(), "-thread_queue_size".into(), "1024".into(),
@@ -519,12 +514,7 @@ async fn camera_input_args(ffmpeg: &std::path::Path, device: &str) -> Result<Vec
     // AVFoundation selects by INDEX. Accept a numeric index directly, else resolve the
     // device NAME → its position in the video-device list. Syntax is "video:audio";
     // ":none" = video only (audio is a separate server-side tap, like the RTSP path).
-    let index = if !device.is_empty() && device.chars().all(|c| c.is_ascii_digit()) {
-        device.to_string()
-    } else {
-        let names = list_cameras_impl(ffmpeg).await.unwrap_or_default();
-        names.iter().position(|n| n == device).map(|i| i.to_string()).unwrap_or_else(|| "0".into())
-    };
+    let index = avfoundation_index(ffmpeg, device).await;
     Ok(vec![
         "-f".into(), "avfoundation".into(),
         "-framerate".into(), "30".into(),     // default is 30000/1001; explicit 30 is widely supported
@@ -534,11 +524,10 @@ async fn camera_input_args(ffmpeg: &std::path::Path, device: &str) -> Result<Vec
 
 #[cfg(target_os = "linux")]
 async fn camera_input_args(_ffmpeg: &std::path::Path, device: &str) -> Result<Vec<String>, String> {
-    // `device` is a /dev/videoN path. We deliberately DON'T force `-input_format mjpeg`:
+    // `device` is a /dev/videoN path or a listed label. We deliberately DON'T force `-input_format mjpeg`:
     // not all cams support it and it would hard-fail; letting ffmpeg negotiate works on
     // every cam, and the scale filter normalizes whatever resolution it picks.
-    let path = if device.starts_with("/dev/") { device.to_string() } else { "/dev/video0".to_string() };
-    Ok(vec!["-f".into(), "v4l2".into(), "-i".into(), path])
+    Ok(vec!["-f".into(), "v4l2".into(), "-i".into(), v4l2_path(device)])
 }
 
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
@@ -569,55 +558,148 @@ async fn list_cameras_impl(ffmpeg: &std::path::Path) -> Result<Vec<String>, Stri
 
 #[cfg(target_os = "macos")]
 async fn list_cameras_impl(ffmpeg: &std::path::Path) -> Result<Vec<String>, String> {
+    Ok(avfoundation_list(ffmpeg).await?.into_iter().map(|(_, name)| name).collect())
+}
+
+#[cfg(target_os = "macos")]
+async fn avfoundation_list(ffmpeg: &std::path::Path) -> Result<Vec<(String, String)>, String> {
     let out = crate::proc::tokio_cmd(ffmpeg)
         .args(["-hide_banner", "-list_devices", "true", "-f", "avfoundation", "-i", "dummy"])
         .output().await.map_err(|e| e.to_string())?;
-    // Output (stderr):
-    //   [AVFoundation indev @ ..] AVFoundation video devices:
-    //   [AVFoundation indev @ ..] [0] FaceTime HD Camera
-    //   [AVFoundation indev @ ..] AVFoundation audio devices:
-    //   [AVFoundation indev @ ..] [0] Built-in Microphone
-    // Take entries in the VIDEO section, returning the name (index order == list order).
-    let text = String::from_utf8_lossy(&out.stderr);
-    let mut names = Vec::new();
+    Ok(avfoundation_cameras(&String::from_utf8_lossy(&out.stderr)))
+}
+
+/// AVFoundation's cameras as (index, name), from ffmpeg's device listing:
+///
+/// ```text
+/// [AVFoundation indev @ ..] AVFoundation video devices:
+/// [AVFoundation indev @ ..] [0] FaceTime HD Camera
+/// [AVFoundation indev @ ..] [1] Capture screen 0
+/// [AVFoundation indev @ ..] AVFoundation audio devices:
+/// ```
+///
+/// "Capture screen N" entries are left out: picking one recorded the desktop.
+/// The index is AVFoundation's own, so leaving a screen out never shifts which
+/// device a camera opens.
+#[cfg(any(target_os = "macos", test))]
+fn avfoundation_cameras(stderr: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
     let mut in_audio = false;
-    for line in text.lines() {
+    for line in stderr.lines() {
         if line.contains("audio devices") { in_audio = true; continue; }
         if line.contains("video devices") { in_audio = false; continue; }
         if in_audio { continue; }
-        // Match the "] [N] Name" tail.
-        if let Some(p) = line.find("] [") {
-            if let Some(c) = line[p + 3..].find("] ") {
-                let name = line[p + 3 + c + 2..].trim().to_string();
-                if !name.is_empty() { names.push(name); }
-            }
+        let Some(p) = line.find("] [") else { continue };
+        let rest = &line[p + 3..];
+        let Some(c) = rest.find("] ") else { continue };
+        let (index, name) = (&rest[..c], rest[c + 2..].trim());
+        if !index.is_empty() && index.chars().all(|ch| ch.is_ascii_digit())
+            && !name.is_empty() && !name.starts_with("Capture screen")
+        {
+            out.push((index.to_string(), name.to_string()));
         }
     }
-    names.dedup();
-    Ok(names)
+    out
+}
+
+/// The AVFoundation index to open for a saved device: a camera's name, or a
+/// position in the listed cameras (what older configs stored).
+#[cfg(target_os = "macos")]
+async fn avfoundation_index(ffmpeg: &std::path::Path, device: &str) -> String {
+    let cams = avfoundation_list(ffmpeg).await.unwrap_or_default();
+    device.parse::<usize>().ok().and_then(|i| cams.get(i))
+        .or_else(|| cams.iter().find(|(_, name)| name == device))
+        .map(|(index, _)| index.clone())
+        .unwrap_or_else(|| "0".into())
 }
 
 #[cfg(target_os = "linux")]
 async fn list_cameras_impl(_ffmpeg: &std::path::Path) -> Result<Vec<String>, String> {
-    // Scan /dev/video*. Many UVC cams expose several nodes (capture + metadata); we list
-    // them all (sorted) and let the user/start pick. /dev/video0 is the usual capture node.
-    let mut devs: Vec<String> = Vec::new();
-    if let Ok(mut rd) = tokio::fs::read_dir("/dev").await {
-        while let Ok(Some(e)) = rd.next_entry().await {
-            let n = e.file_name().to_string_lossy().to_string();
-            // Require a trailing number (videoN) — skips a bare "video" or odd nodes.
-            if n.starts_with("video") && n.len() > 5 && n[5..].chars().all(|c| c.is_ascii_digit()) {
-                devs.push(format!("/dev/{n}"));
-            }
-        }
+    let cams = tokio::task::spawn_blocking(|| v4l2_cameras(std::path::Path::new(V4L2_SYSFS)))
+        .await.map_err(|e| e.to_string())?;
+    Ok(cams.into_iter().map(|(_, label)| label).collect())
+}
+
+#[cfg(target_os = "linux")]
+const V4L2_SYSFS: &str = "/sys/class/video4linux";
+
+/// The V4L2 capture nodes as (/dev path, label), from sysfs. A UVC webcam also
+/// creates metadata-only nodes, which can't capture video; only a node whose
+/// `index` is 0 is the camera. The label is the device's `name`; two identical
+/// webcams share one, so each then carries its node too.
+#[cfg(any(target_os = "linux", test))]
+fn v4l2_cameras(sysfs: &std::path::Path) -> Vec<(String, String)> {
+    let mut cams: Vec<(u32, String, String)> = Vec::new();
+    for entry in std::fs::read_dir(sysfs).into_iter().flatten().flatten() {
+        let node = entry.file_name().to_string_lossy().to_string();
+        let Some(n) = node.strip_prefix("video").and_then(|d| d.parse::<u32>().ok()) else { continue };
+        let read = |f: &str| std::fs::read_to_string(entry.path().join(f)).map(|s| s.trim().to_string()).unwrap_or_default();
+        if read("index") != "0" { continue; }
+        let path = format!("/dev/{node}");
+        let name = read("name");
+        cams.push((n, path.clone(), if name.is_empty() { path } else { name }));
     }
-    devs.sort();
-    Ok(devs)
+    cams.sort_by_key(|(n, _, _)| *n);
+    let shared = |name: &str| cams.iter().filter(|(_, _, l)| l == name).count() > 1;
+    cams.iter().map(|(_, path, name)| {
+        let label = if shared(name) { format!("{name} ({path})") } else { name.clone() };
+        (path.clone(), label)
+    }).collect()
+}
+
+/// The /dev node to open for a saved device: a path as older configs stored it,
+/// or a label from the list.
+#[cfg(target_os = "linux")]
+fn v4l2_path(device: &str) -> String {
+    if device.starts_with("/dev/") { return device.to_string(); }
+    v4l2_cameras(std::path::Path::new(V4L2_SYSFS)).into_iter()
+        .find(|(_, label)| label == device)
+        .map(|(path, _)| path)
+        .unwrap_or_else(|| "/dev/video0".into())
 }
 
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 async fn list_cameras_impl(_ffmpeg: &std::path::Path) -> Result<Vec<String>, String> {
     Ok(vec![])
+}
+
+#[cfg(test)]
+mod device_list_tests {
+    use super::{avfoundation_cameras, v4l2_cameras};
+
+    #[test]
+    fn a_mac_lists_cameras_not_screens_and_keeps_their_index() {
+        let listing = "\
+[AVFoundation indev @ 0x1] AVFoundation video devices:
+[AVFoundation indev @ 0x1] [0] FaceTime HD Camera
+[AVFoundation indev @ 0x1] [1] Capture screen 0
+[AVFoundation indev @ 0x1] [2] Logitech BRIO
+[AVFoundation indev @ 0x1] AVFoundation audio devices:
+[AVFoundation indev @ 0x1] [0] MacBook Pro Microphone";
+        assert_eq!(avfoundation_cameras(listing), [
+            ("0".to_string(), "FaceTime HD Camera".to_string()),
+            ("2".to_string(), "Logitech BRIO".to_string()),   // still index 2
+        ]);
+    }
+
+    #[test]
+    fn linux_lists_capture_nodes_by_name() {
+        let sys = std::env::temp_dir().join(format!("anivar-v4l2-{}", uuid::Uuid::new_v4()));
+        for (node, index, name) in [("video0", "0", "HD Webcam C270"), ("video1", "1", "HD Webcam C270"),
+                                    ("video2", "0", "HD Webcam C270"), ("video10", "0", "BRIO 4K"),
+                                    ("video11", "1", "BRIO 4K")] {
+            let d = sys.join(node);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("index"), format!("{index}\n")).unwrap();
+            std::fs::write(d.join("name"), format!("{name}\n")).unwrap();
+        }
+        assert_eq!(v4l2_cameras(&sys), [
+            ("/dev/video0".to_string(),  "HD Webcam C270 (/dev/video0)".to_string()),
+            ("/dev/video2".to_string(),  "HD Webcam C270 (/dev/video2)".to_string()),
+            ("/dev/video10".to_string(), "BRIO 4K".to_string()),
+        ], "metadata nodes (index 1) left out; identical webcams told apart; numeric order");
+        std::fs::remove_dir_all(&sys).ok();
+    }
 }
 
 #[cfg(test)]
