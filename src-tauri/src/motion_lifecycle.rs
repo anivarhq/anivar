@@ -86,6 +86,10 @@ impl LifecycleSettings {
             let inf = state.inference_status.read().await;
             inf.state == "ready"
         };
+        Self::from_settings(&s, yolo_active)
+    }
+
+    pub(crate) fn from_settings(s: &crate::state::Settings, yolo_active: bool) -> Self {
         Self {
             sensitivity:                 s.sensitivity,
             motion_min_frames:           s.motion_min_frames.max(1),
@@ -99,28 +103,35 @@ impl LifecycleSettings {
     }
 }
 
-/// One lifecycle tick. Call once per frame from both the native capture loop
-/// and the per-frame command. `motion_score` is the raw frame-diff score
-/// (the caller computes it via `motion::compute_motion_masked`). `jpeg_bytes`
-/// is used only on the open path to seed the event's thumbnail.
-///
-/// `approx_fps` is the caller's approximate frame rate. It's used to convert
-/// `record_post_buffer_secs` into a stillness-streak target. Pass `20` for
-/// the native loop (50ms budget) and `15` for the browser path (typical).
-pub async fn tick_motion_event(
-    state: &Arc<AppState>,
-    cam_id: u8,
+/// What one frame did to a camera's event.
+pub(crate) enum Step {
+    /// No event, or an open one that isn't closing yet.
+    Idle,
+    Opened(String),
+    Sustained { id: String, peak: f32 },
+    Closed {
+        id: String,
+        /// Dropped, not kept: YOLO never confirmed it and the user asked for that.
+        drop_unconfirmed: bool,
+        detections: Option<String>,
+        /// For the MQTT bridge: the dominant object first, then the rest.
+        labels: Vec<String>,
+    },
+}
+
+/// The lifecycle's decisions for one frame: updates the camera's state and says
+/// what happened, with no I/O (so a test can drive it with real frames).
+/// `tick_motion_event` does the database work. The second value is the
+/// hysteresis-confirmed motion signal.
+pub(crate) fn step(
+    cs: &mut crate::state::PerCamState,
     motion_score: f32,
-    jpeg_bytes: &[u8],
     settings: &LifecycleSettings,
     approx_fps: f32,
-) -> EventLifecycleResult {
+) -> (Step, bool) {
     // Stillness-streak target. Floor at 1 to avoid divide-by-zero / instant
     // close on a misconfigured host.
     let still_frames_to_close = ((settings.record_post_buffer_secs * approx_fps).round() as i64).max(1) as u32;
-
-    let mut cs_map = state.cam_states.lock().await;
-    let cs = cs_map.entry(cam_id).or_default();
 
     // ── Temporal hysteresis ─────────────────────────────────────────────
     // Symmetric this time (v9 fix): the stillness-streak is reset on the
@@ -143,11 +154,6 @@ pub async fn tick_motion_event(
     // sensitivity sustains the streak.
     let open_now = sustained && motion_score >= settings.sensitivity * settings.motion_open_score_mult;
 
-    let event_id: Option<String>;
-    let mut just_closed: Option<String> = None;
-    let mut just_opened: Option<String> = None;
-    let mut just_dropped: bool = false;
-
     // Hard max-duration cap (monotonic clock — immune to wall-clock skew). When an
     // open event exceeds the cap we DON'T let it keep sustaining; it falls through to
     // the close path and force-closes, then the next moving frame reopens a fresh
@@ -165,8 +171,101 @@ pub async fn tick_motion_event(
         cs.last_motion_at = Some(Instant::now());
         if motion_score > cs.motion_peak { cs.motion_peak = motion_score; }
 
-        if cs.motion_active.is_none() {
-            let id  = Uuid::new_v4().to_string();
+        if let Some(id) = cs.motion_active.clone() {
+            return (Step::Sustained { id, peak: cs.motion_peak }, sustained);
+        }
+        let id = Uuid::new_v4().to_string();
+        cs.motion_active = Some(id.clone());
+        cs.detection_buffer.clear();
+        cs.event_opened_at = Some(Instant::now());
+        cs.event_object_confirmed = false;
+        cs.last_object_seen_at = None;
+        cs.object_absence_frames = 0;
+        cs.last_analysis_at = None;
+        cs.last_burst_at = None;
+        cs.classes_seen.clear();
+        cs.last_dominant = None;
+        return (Step::Opened(id), sustained);
+    }
+
+    // ── Close path ─────────────────────────────────────────────────
+    // FRIGATE MODEL: when YOLO is active, require BOTH object-absence
+    // AND stillness. A parked car / sitting person keeps the event
+    // alive because YOLO keeps writing `last_object_seen_at` in the
+    // inference loop, holding `object_absence_frames` at 0.
+    //
+    // When YOLO is off, fall back to v8 hysteresis-only behaviour:
+    // stillness alone closes.
+    // `over_max` (computed above) force-closes through this SAME path — so the
+    // clip + review segment + state reset all fire — guaranteeing no runaway.
+    let close_signal = over_max || if settings.yolo_active {
+        cs.object_absence_frames >= settings.detect_max_disappeared_frames
+            && cs.stillness_streak >= still_frames_to_close
+    } else {
+        cs.stillness_streak >= still_frames_to_close
+    };
+    if !close_signal { return (Step::Idle, sustained); }
+    let Some(id) = cs.motion_active.take() else { return (Step::Idle, sustained) };
+
+    // Only DROP an unconfirmed event if the user EXPLICITLY opted into
+    // `require_object_to_open_event`. Previously a YOLO-active event
+    // with no confirmed class was always deleted — which silently lost
+    // most real motion when YOLO was slow/missed/mid-load. Default now:
+    // KEEP it as a plain motion event (category stays "other").
+    let drop_unconfirmed = settings.require_object_to_open_event && !cs.event_object_confirmed;
+    let detections = if !cs.detection_buffer.is_empty() {
+        let j = serde_json::to_string(&cs.detection_buffer).unwrap_or_default();
+        cs.detection_buffer.clear();
+        Some(j)
+    } else { None };
+    let labels: Vec<String> = {
+        let mut rest: Vec<String> = cs.classes_seen.iter()
+            .filter(|c| Some(*c) != cs.last_dominant.as_ref()).cloned().collect();
+        rest.sort();
+        cs.last_dominant.iter().cloned().chain(rest).collect()
+    };
+
+    cs.motion_peak = 0.0;
+    cs.last_motion_at = None;
+    cs.event_opened_at = None;
+    cs.event_object_confirmed = false;
+    cs.last_object_seen_at = None;
+    cs.object_absence_frames = 0;
+    cs.last_analysis_at = None;
+    cs.last_burst_at = None;
+    cs.classes_seen.clear();
+    (Step::Closed { id, drop_unconfirmed, detections, labels }, sustained)
+}
+
+/// One lifecycle tick. Call once per frame from both the native capture loop
+/// and the per-frame command. `motion_score` is the raw frame-diff score
+/// (the caller computes it via `motion::compute_motion_masked`). `jpeg_bytes`
+/// is used only on the open path to seed the event's thumbnail.
+///
+/// `approx_fps` is the caller's approximate frame rate. It's used to convert
+/// `record_post_buffer_secs` into a stillness-streak target. Pass `20` for
+/// the native loop (50ms budget) and `15` for the browser path (typical).
+pub async fn tick_motion_event(
+    state: &Arc<AppState>,
+    cam_id: u8,
+    motion_score: f32,
+    jpeg_bytes: &[u8],
+    settings: &LifecycleSettings,
+    approx_fps: f32,
+) -> EventLifecycleResult {
+    let mut cs_map = state.cam_states.lock().await;
+    let cs = cs_map.entry(cam_id).or_default();
+    let (step, sustained) = step(cs, motion_score, settings, approx_fps);
+    let event_id = cs.motion_active.clone();
+    drop(cs_map);
+
+    let mut just_closed: Option<String> = None;
+    let mut just_opened: Option<String> = None;
+    let mut just_dropped: bool = false;
+
+    match step {
+        Step::Idle => {}
+        Step::Opened(id) => {
             let now = Utc::now().to_rfc3339();
             let thumb = B64.encode(jpeg_bytes);
             let id_for_insert = id.clone();
@@ -187,155 +286,85 @@ pub async fn tick_motion_event(
                     .execute(&st.db).await.ok();
                 crate::mqtt::event_started(cam_id, &id_for_insert, ms);
             });
-
-            cs.motion_active = Some(id.clone());
-            cs.detection_buffer.clear();
-            cs.event_opened_at = Some(Instant::now());
-            cs.event_object_confirmed = false;
-            cs.last_object_seen_at = None;
-            cs.object_absence_frames = 0;
-            cs.last_analysis_at = None;
-            cs.last_burst_at = None;
-            cs.classes_seen.clear();
-            cs.last_dominant = None;
-            just_opened = Some(id.clone());
-            event_id = Some(id);
-        } else {
-            let id  = cs.motion_active.clone().unwrap();
-            let pk  = cs.motion_peak;
-            let db  = state.db.clone();
-            let id_for_update = id.clone();
+            just_opened = Some(id);
+        }
+        Step::Sustained { id, peak } => {
+            let db = state.db.clone();
             tokio::spawn(async move {
                 sqlx::query("UPDATE motion_events SET peak_score=? WHERE id=?")
-                    .bind(pk).bind(&id_for_update).execute(&db).await.ok();
+                    .bind(peak).bind(&id).execute(&db).await.ok();
             });
-            event_id = Some(id);
         }
-    } else {
-        // ── Close path ─────────────────────────────────────────────────
-        // FRIGATE MODEL: when YOLO is active, require BOTH object-absence
-        // AND stillness. A parked car / sitting person keeps the event
-        // alive because YOLO keeps writing `last_object_seen_at` in the
-        // inference loop, holding `object_absence_frames` at 0.
-        //
-        // When YOLO is off, fall back to v8 hysteresis-only behaviour:
-        // stillness alone closes.
-        // `over_max` (computed above) force-closes through this SAME path — so the
-        // clip + review segment + state reset all fire — guaranteeing no runaway.
-        let close_signal = over_max || if settings.yolo_active {
-            cs.object_absence_frames >= settings.detect_max_disappeared_frames
-                && cs.stillness_streak >= still_frames_to_close
-        } else {
-            cs.stillness_streak >= still_frames_to_close
-        };
-
-        if close_signal {
-            if let Some(id) = cs.motion_active.take() {
-                // Only DROP an unconfirmed event if the user EXPLICITLY opted into
-                // `require_object_to_open_event`. Previously a YOLO-active event
-                // with no confirmed class was always deleted — which silently lost
-                // most real motion when YOLO was slow/missed/mid-load. Default now:
-                // KEEP it as a plain motion event (category stays "other").
-                let drop_unconfirmed =
-                    settings.require_object_to_open_event && !cs.event_object_confirmed;
-
-                let det_json = if !cs.detection_buffer.is_empty() {
-                    let j = serde_json::to_string(&cs.detection_buffer).unwrap_or_default();
-                    cs.detection_buffer.clear();
-                    Some(j)
-                } else { None };
-
-                let id_for_spawn = id.clone();
-                let db = state.db.clone();
-                if drop_unconfirmed {
-                    tracing::info!(
-                        "Motion event {} dropped — YOLO never confirmed a tracked class.",
-                        &id_for_spawn[..8.min(id_for_spawn.len())]
-                    );
-                    let id_for_delete = id_for_spawn.clone();
-                    tokio::spawn(async move {
-                        let _ = sqlx::query("DELETE FROM motion_events WHERE id=?")
-                            .bind(&id_for_delete).execute(&db).await;
-                    });
-                    just_dropped = true;
-                } else {
-                    let now = Utc::now().to_rfc3339();
+        Step::Closed { id, drop_unconfirmed, detections, labels } => {
+            let id_for_spawn = id.clone();
+            let db = state.db.clone();
+            if drop_unconfirmed {
+                tracing::info!(
+                    "Motion event {} dropped — YOLO never confirmed a tracked class.",
+                    &id_for_spawn[..8.min(id_for_spawn.len())]
+                );
+                tokio::spawn(async move {
+                    let _ = sqlx::query("DELETE FROM motion_events WHERE id=?")
+                        .bind(&id_for_spawn).execute(&db).await;
+                });
+                just_dropped = true;
+            } else {
+                let now = Utc::now().to_rfc3339();
+                let state_for_clip = state.clone();
+                let post_buffer = settings.record_post_buffer_secs;
+                tokio::spawn(async move {
                     // v26: belt-and-suspenders. If a row's wall-clock duration
                     // turns out to be < 1 s for any reason (timing race, slow
                     // SQLite, system clock jump), DELETE it instead of UPDATE.
                     // The motion_min_frames debounce should already prevent
                     // this, but if it ever slips through we don't want junk
                     // empty rows showing up in the events strip.
-                    // For the MQTT bridge: the dominant object first, then the rest.
-                    let mqtt_labels: Vec<String> = {
-                        let mut rest: Vec<String> = cs.classes_seen.iter()
-                            .filter(|c| Some(*c) != cs.last_dominant.as_ref()).cloned().collect();
-                        rest.sort();
-                        cs.last_dominant.iter().cloned().chain(rest).collect()
-                    };
-                    let state_for_clip = state.clone();
-                    let post_buffer = settings.record_post_buffer_secs;
+                    let row: Option<(f64,)> = sqlx::query_as(
+                        "SELECT (julianday(?) - julianday(started_at)) * 86400 \
+                         FROM motion_events WHERE id=?",
+                    )
+                    .bind(&now).bind(&id_for_spawn)
+                    .fetch_optional(&db).await.unwrap_or(None);
+                    let dur = row.map(|r| r.0).unwrap_or(0.0);
+                    if dur < 0.4 {
+                        let _ = sqlx::query("DELETE FROM motion_events WHERE id=?")
+                            .bind(&id_for_spawn).execute(&db).await;
+                        tracing::info!(
+                            "Motion event {} dropped — duration {:.2}s < 0.4s threshold.",
+                            &id_for_spawn[..8.min(id_for_spawn.len())], dur,
+                        );
+                        return;
+                    }
+                    sqlx::query("UPDATE motion_events SET ended_at=?, duration_secs=? WHERE id=?")
+                        .bind(&now).bind(dur).bind(&id_for_spawn)
+                        .execute(&db).await.ok();
+                    crate::mqtt::event_ended(cam_id, &id_for_spawn, dur, &labels);
+                    if let Some(dj) = detections {
+                        sqlx::query("UPDATE motion_events SET detections=? WHERE id=?")
+                            .bind(dj).bind(&id_for_spawn).execute(&db).await.ok();
+                    }
+                    // Group this closed event into its server-side review segment
+                    // (mature NVRs review-item parity) — the canonical grouping the Review
+                    // feed + NVR timeline read. Idempotent; re-runs after AI analysis
+                    // to refine severity/labels once classification lands. Footage-
+                    // independent, so do it immediately.
+                    crate::review_segments::upsert_review_segment(&state_for_clip.db, &id_for_spawn).await;
+                    // Pre-warm the bounded H.264 clip — but ONLY AFTER the post-buffer
+                    // footage (ended_at + post) has been recorded AND the covering
+                    // segment finalized/indexed. The old eager gen ran here at close,
+                    // BEFORE that footage existed → ffmpeg wrote a 0-byte clip that got
+                    // cached + served forever as "no footage". On-demand opens regenerate
+                    // regardless, so this is just a best-effort warm-up for the play badge.
+                    let st = state_for_clip.clone();
+                    let eid = id_for_spawn.clone();
+                    let delay = (post_buffer as u64).saturating_add(12);
                     tokio::spawn(async move {
-                        let row: Option<(f64,)> = sqlx::query_as(
-                            "SELECT (julianday(?) - julianday(started_at)) * 86400 \
-                             FROM motion_events WHERE id=?",
-                        )
-                        .bind(&now).bind(&id_for_spawn)
-                        .fetch_optional(&db).await.unwrap_or(None);
-                        let dur = row.map(|r| r.0).unwrap_or(0.0);
-                        if dur < 0.4 {
-                            let _ = sqlx::query("DELETE FROM motion_events WHERE id=?")
-                                .bind(&id_for_spawn).execute(&db).await;
-                            tracing::info!(
-                                "Motion event {} dropped — duration {:.2}s < 0.4s threshold.",
-                                &id_for_spawn[..8.min(id_for_spawn.len())], dur,
-                            );
-                            return;
-                        }
-                        sqlx::query("UPDATE motion_events SET ended_at=?, duration_secs=? WHERE id=?")
-                            .bind(&now).bind(dur).bind(&id_for_spawn)
-                            .execute(&db).await.ok();
-                        crate::mqtt::event_ended(cam_id, &id_for_spawn, dur, &mqtt_labels);
-                        if let Some(dj) = det_json {
-                            sqlx::query("UPDATE motion_events SET detections=? WHERE id=?")
-                                .bind(dj).bind(&id_for_spawn).execute(&db).await.ok();
-                        }
-                        // Group this closed event into its server-side review segment
-                        // (mature NVRs review-item parity) — the canonical grouping the Review
-                        // feed + NVR timeline read. Idempotent; re-runs after AI analysis
-                        // to refine severity/labels once classification lands. Footage-
-                        // independent, so do it immediately.
-                        crate::review_segments::upsert_review_segment(&state_for_clip.db, &id_for_spawn).await;
-                        // Pre-warm the bounded H.264 clip — but ONLY AFTER the post-buffer
-                        // footage (ended_at + post) has been recorded AND the covering
-                        // segment finalized/indexed. The old eager gen ran here at close,
-                        // BEFORE that footage existed → ffmpeg wrote a 0-byte clip that got
-                        // cached + served forever as "no footage". On-demand opens regenerate
-                        // regardless, so this is just a best-effort warm-up for the play badge.
-                        let st = state_for_clip.clone();
-                        let eid = id_for_spawn.clone();
-                        let delay = (post_buffer as u64).saturating_add(12);
-                        tokio::spawn(async move {
-                            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
-                            crate::agent::clip_export::ensure_event_clip(&st, &eid).await;
-                        });
+                        tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                        crate::agent::clip_export::ensure_event_clip(&st, &eid).await;
                     });
-                }
-                just_closed = Some(id);
-
-                cs.motion_peak = 0.0;
-                cs.last_motion_at = None;
-                cs.event_opened_at = None;
-                cs.event_object_confirmed = false;
-                cs.last_object_seen_at = None;
-                cs.object_absence_frames = 0;
-                cs.last_analysis_at = None;
-                cs.last_burst_at = None;
-                cs.classes_seen.clear();
+                });
             }
-            event_id = None;
-        } else {
-            event_id = cs.motion_active.clone();
+            just_closed = Some(id);
         }
     }
 

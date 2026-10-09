@@ -95,6 +95,8 @@ mod cuda_runtime;
 
 mod motion;
 mod motion_lifecycle;
+#[cfg(test)]
+mod e2e_tests;
 
 mod face;
 pub use face::{embed_face, recognize_frame, face_debug};
