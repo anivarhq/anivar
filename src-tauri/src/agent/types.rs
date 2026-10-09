@@ -177,3 +177,34 @@ pub(super) fn agent_identity(settings: &Settings, camera_name: &str) -> String {
         "You are {name}, an AI security analyst watching \"{camera_name}\".{persona}"
     )
 }
+
+#[cfg(test)]
+mod schema_doc_tests {
+    use super::make_summary_json;
+
+    /// docs/SCHEMAS.md documents the stored `ai_summary` format. Its example must
+    /// have exactly the fields the writer produces (v2 + `attributes` for v3), so
+    /// a format change can't leave the doc behind.
+    #[test]
+    fn the_documented_ai_summary_matches_what_is_written() {
+        let doc = include_str!("../../../docs/SCHEMAS.md");
+        let start = doc.find("```json\n").or_else(|| doc.find("```json\r\n")).expect("an example");
+        let body = &doc[start..];
+        let body = &body[body.find('\n').unwrap() + 1..];
+        let example: serde_json::Value = serde_json::from_str(&body[..body.find("```").unwrap()]).expect("valid JSON");
+
+        let written: serde_json::Value = serde_json::from_str(
+            &make_summary_json("t", "monitor", "person", "x", "d", &["parcel".into()], 0.5, false, 1)).unwrap();
+        let mut want: Vec<&str> = written.as_object().unwrap().keys().map(String::as_str).collect();
+        want.push("attributes");
+        want.sort_unstable();
+        let mut have: Vec<&str> = example.as_object().unwrap().keys().map(String::as_str).collect();
+        have.sort_unstable();
+        assert_eq!(have, want, "docs/SCHEMAS.md's example has drifted from make_summary_json");
+        assert_eq!(example["v"], 3);
+        for a in example["attributes"].as_array().unwrap() {
+            assert!(["face", "plate", "color", "outfit", "object"].contains(&a["type"].as_str().unwrap()));
+        }
+        assert!(!super::super::memory::extract_summary_text(&example.to_string()).is_empty());
+    }
+}
