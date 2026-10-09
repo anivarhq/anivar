@@ -206,6 +206,14 @@ async fn reapply_audio(state: &Arc<AppState>, audio_on: bool) {
 
 #[tauri::command]
 pub async fn save_settings(state: State<'_, Arc<AppState>>, settings: Settings) -> Result<(), String> {
+    // Turning on "Relaunch after crash" registers a Windows scheduled task. Do it
+    // before saving, and refuse the save if it fails: the failure used to be only
+    // logged, so the toggle stayed on and the user believed they were covered.
+    let enabling = settings.relaunch_after_crash && !state.settings.read().await.relaunch_after_crash;
+    if enabling {
+        crate::system_cmds::set_keepalive_task(true).await
+            .map_err(|e| format!("Relaunch after crash couldn't be turned on: {e}"))?;
+    }
     apply_settings_update(state.inner(), settings).await;
     Ok(())
 }

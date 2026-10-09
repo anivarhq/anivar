@@ -16,6 +16,8 @@ import type { AuthStatus } from "../../api";
 import { UpdateStatus } from "./UpdateStatus";
 import { openExternal } from "../../lib/openExternal";
 
+const IS_WINDOWS = navigator.userAgent.includes("Windows");
+
 
 /* ── Remote-access first-time setup guide ────────────────────────────────────── */
 // Reactive 4-step walkthrough for Tailscale Funnel, opened from the info icon on
@@ -748,7 +750,8 @@ export function SettingsPanel() {
       setSettings(next);
       showToast("Settings saved", "success");
     } catch (e: any) {
-      showToast(e.message ?? "Save failed", "error");
+      // A command's error arrives as a plain string; show it, not "Save failed".
+      showToast(typeof e === "string" ? e : (e?.message ?? "Save failed"), "error");
     } finally { setSaving(false); }
   };
 
@@ -1239,10 +1242,14 @@ export function SettingsPanel() {
                 onChange={v => patch("auto_update_install", v)} />
             </Field>
           )}
-          <Field label="Relaunch after crash" hint="Comes back after you quit, too">
-            <Toggle checked={form.relaunch_after_crash ?? false}
-              onChange={v => patch("relaunch_after_crash", v)} />
-          </Field>
+          {/* A Windows scheduled task; there's no macOS or Linux equivalent yet,
+              so the toggle isn't offered there (it used to do nothing). */}
+          {IS_WINDOWS && (
+            <Field label="Relaunch after crash" hint="Comes back after you quit, too">
+              <Toggle checked={form.relaunch_after_crash ?? false}
+                onChange={v => patch("relaunch_after_crash", v)} />
+            </Field>
+          )}
         </div>
 
         {/* Storage */}
