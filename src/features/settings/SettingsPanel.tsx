@@ -1575,7 +1575,7 @@ export function SettingsPanel() {
               className={styles.numInput}
               style={{ width: 240, fontFamily: "var(--font-mono)", fontSize: 11, resize: "vertical" }} />
           </Field>
-          <Field label="Audio detection" hint="Needs the YAMNet skill and RTSP audio" more="Detect scream / glass / alarm / gunshot / bark from camera audio. Requires the YAMNet audio skill (Arsenal) + an RTSP camera with an audio track (browser/USB cameras don't carry audio yet).">
+          <Field label="Audio detection" hint="Needs the YAMNet skill" more="Detect scream / glass / alarm / gunshot / bark from camera audio: a network camera's audio track, or a USB camera's microphone. Requires the YAMNet audio skill (Arsenal).">
             <Toggle checked={!!form.audio_detection} onChange={v => patch("audio_detection", v)} />
           </Field>
           {form.audio_detection && (<>

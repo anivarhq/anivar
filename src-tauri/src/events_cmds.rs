@@ -187,7 +187,8 @@ async fn reapply_audio(state: &Arc<AppState>, audio_on: bool) {
             // Detector only (ring buffer + YAMNet). Recording audio is CAPTURE-OWNED
             // (muxed in-process) and independent of the detection toggle.
             if audio_on {
-                if let Some(mic) = crate::dshow::audio_input_args(&ffmpeg).await {
+                let camera = key.strip_prefix("usb:").unwrap_or("");
+                if let Some(mic) = crate::dshow::audio_input_args(&ffmpeg, camera).await {
                     crate::audio_cmds::spawn_audio_detection(state, cam, &ffmpeg, mic, true).await;
                 }
             }
