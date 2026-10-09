@@ -541,10 +541,6 @@ export const ClipOverlay = forwardRef<ClipOverlayHandle, Props>(function ClipOve
           if (!v) return;
           v.playbackRate = rate; // src swaps reset the rate — re-apply
         }}
-        onDurationChange={() => {
-          const v = videoRef.current;
-          if (!v) return;
-        }}
         onCanPlay={onCanPlay}
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}

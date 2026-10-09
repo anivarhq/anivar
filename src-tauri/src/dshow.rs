@@ -59,14 +59,6 @@ pub(crate) fn next_jpeg(pending: &mut Vec<u8>, scan: &mut usize) -> Option<Vec<u
     }
 }
 
-/// List connected cameras as device identifiers — these are BOTH shown to the user and
-/// passed back verbatim to `start_dshow_camera`.
-#[tauri::command]
-pub async fn list_dshow_cameras(state: State<'_, Arc<AppState>>) -> Result<Vec<String>, String> {
-    let ffmpeg = crate::ensure_ffmpeg(&state.data_dir).await.map_err(|e| e.to_string())?;
-    list_cameras_impl(&ffmpeg).await
-}
-
 /// Start a USB/integrated camera capture. `device_name` is the identifier from
 /// `list_dshow_cameras` (Windows: device name · macOS: name or index · Linux: /dev path).
 #[tauri::command]

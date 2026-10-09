@@ -9,8 +9,6 @@
 //!   * Frame / clip / event records (`FrameResult`, `MotionEvent`, `StreamInfo`).
 //!   * Per-camera mutable state (`PerCamState`, `SceneObject`, `BehaviorEvent`,
 //!     `CameraInventory`, …).
-//!   * SignalRoom (WebRTC SDP/ICE relay).
-//!   * Client session bookkeeping (`ClientSession`).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -20,7 +18,7 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tokio::sync::{broadcast, mpsc, watch, Mutex, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
 
 use crate::DiscoveredCamera;
 
@@ -661,11 +659,6 @@ pub struct StreamInfo {
 // Scaffolding for the planned WebRTC SDP/ICE relay: wired into StreamState but the
 // signaling path isn't active yet (host/viewer are never populated). Kept intact rather
 // than removed so the relay can be completed without re-threading StreamState.
-#[allow(dead_code)]
-pub(crate) struct SignalRoom {
-    pub(crate) host:   Option<mpsc::UnboundedSender<String>>,
-    pub(crate) viewer: Option<mpsc::UnboundedSender<String>>,
-}
 
 // ─── Per-camera motion state ──────────────────────────────────────────────────
 
@@ -790,15 +783,6 @@ pub struct StorageInfo {
 
 // ─── App State ───────────────────────────────────────────────────────────────
 
-/// Info about one active remote WebSocket viewer (for the "Connected Devices" panel).
-#[derive(Debug, Clone, Serialize)]
-pub struct ClientSession {
-    pub id: String,
-    pub ip: String,
-    pub connected_at: u64,   // unix secs
-    pub cam_id: usize,
-}
-
 pub struct AppState {
     /// One broadcast channel per camera slot (index 0-3).
     pub frame_txs: Arc<Vec<broadcast::Sender<Arc<Vec<u8>>>>>,
@@ -812,12 +796,6 @@ pub struct AppState {
     pub data_dir: PathBuf,
     /// Shared with StreamState so `revoke_token` takes effect immediately in the HTTP middleware.
     pub auth_token: Arc<RwLock<String>>,
-    /// Incrementing generation counter — WebSocket handlers watch this and
-    /// close themselves as soon as the token is revoked.
-    pub revoke_tx: watch::Sender<u64>,
-    // Shared with StreamState for camera ↔ phone sync
-    pub camera_active: Arc<RwLock<bool>>,
-    pub camera_state_tx: broadcast::Sender<bool>,
     pub app_handle: tauri::AppHandle,
     /// Timestamp of the last agent analysis cycle, used by the status endpoint.
     pub agent_last_run: RwLock<Option<String>>,
@@ -897,10 +875,6 @@ pub struct AppState {
     pub master_key: [u8; 32],
     /// Desktop login gate runtime state (unlocked flag, OTP challenges, lockout).
     pub auth: crate::auth::AuthState,
-    /// Active remote viewer sessions — keyed by session UUID.
-    pub client_sessions: Arc<tokio::sync::RwLock<HashMap<String, ClientSession>>>,
-    /// Per-session kick channels — send () to forcibly disconnect that session.
-    pub kick_txs: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
     // ── v9 pull-state for the YOLO badge ───────────────────────────────
     /// Current inference-loop status, mirrored from the `inference:status`
     /// event stream so the frontend can ask for it via `get_inference_status`
@@ -962,30 +936,17 @@ impl Default for InferenceStatusSnapshot {
 // features (WebRTC `signal_room`) or mirror AppState handles used only on some paths;
 // allow(dead_code) keeps the server wiring intact without per-field warnings.
 #[derive(Clone)]
-#[allow(dead_code)]
 pub(crate) struct StreamState {
     pub(crate) frame_txs: Arc<Vec<broadcast::Sender<Arc<Vec<u8>>>>>,
-    pub(crate) camera_state_tx: broadcast::Sender<bool>,
-    pub(crate) camera_active: Arc<RwLock<bool>>,
     /// Shared Arc with AppState — revocation takes effect instantly for all requests.
     pub(crate) auth_token: Arc<RwLock<String>>,
     pub(crate) app_handle: tauri::AppHandle,
-    /// Number of currently connected WebSocket viewers (atomic for lock-free increment/decrement).
-    pub(crate) connected_clients: Arc<std::sync::atomic::AtomicUsize>,
     // Per-IP failed-auth tracking for rate limiting: IP → list of attempt timestamps
     pub(crate) failed_auth: Arc<tokio::sync::Mutex<HashMap<String, Vec<Instant>>>>,
-    // WebRTC signaling: relays SDP offer/answer and ICE candidates
-    pub(crate) signal_room: Arc<Mutex<SignalRoom>>,
     /// SQLite pool — used by footage API endpoints.
     pub(crate) db: sqlx::SqlitePool,
     /// App data directory — used for path-traversal guard on clip files.
     pub(crate) data_dir: PathBuf,
-    /// Watch receiver: open WS connections break their loop when generation changes.
-    pub(crate) revoke_rx: watch::Receiver<u64>,
-    /// Shared with AppState — active remote viewer sessions.
-    pub(crate) client_sessions: Arc<tokio::sync::RwLock<HashMap<String, ClientSession>>>,
-    /// Shared with AppState — per-session kick oneshot senders.
-    pub(crate) kick_txs: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
 }
 
 // ─── Fair inference intake ────────────────────────────────────────────────────

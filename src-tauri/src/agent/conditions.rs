@@ -10,15 +10,12 @@
 
 use std::sync::Arc;
 
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use uuid::Uuid;
 
 use tauri::Emitter;
 
 use crate::{AppState, Settings};
-use super::memory::read_memory;
 use super::llm::call_llm;
 use super::analysis::risk_meets_threshold;
 
@@ -44,18 +41,6 @@ pub struct AlertCondition {
     pub created_at:    String,
 }
 
-pub async fn create_alert_condition(db: &SqlitePool, name: &str, condition: &str, channels: &str, min_risk: &str) -> AlertCondition {
-    let id  = Uuid::new_v4().to_string();
-    let now = Utc::now().to_rfc3339();
-    sqlx::query(
-        "INSERT INTO alert_conditions(id,name,condition,channels,min_risk,enabled,trigger_count,created_at)
-         VALUES(?,?,?,?,?,1,0,?)"
-    ).bind(&id).bind(name).bind(condition).bind(channels).bind(min_risk).bind(&now)
-    .execute(db).await.ok();
-    AlertCondition { id, name: name.into(), condition: condition.into(), channels: channels.into(),
-        min_risk: min_risk.into(), enabled: true, trigger_count: 0, created_at: now }
-}
-
 pub async fn list_alert_conditions(db: &SqlitePool) -> Vec<AlertCondition> {
     sqlx::query_as::<_, (String,String,String,String,String,bool,u32,String)>(
         "SELECT id,name,condition,channels,min_risk,enabled,trigger_count,created_at
@@ -68,11 +53,6 @@ pub async fn list_alert_conditions(db: &SqlitePool) -> Vec<AlertCondition> {
 
 pub async fn delete_alert_condition(db: &SqlitePool, id: &str) {
     sqlx::query("DELETE FROM alert_conditions WHERE id=?").bind(id).execute(db).await.ok();
-}
-
-pub async fn toggle_alert_condition(db: &SqlitePool, id: &str, enabled: bool) {
-    sqlx::query("UPDATE alert_conditions SET enabled=? WHERE id=?")
-        .bind(enabled as i32).bind(id).execute(db).await.ok();
 }
 
 /// Which of these rules match this event? Returns indices into `rules`.
@@ -253,56 +233,6 @@ pub fn is_quiet_hours(settings: &Settings) -> bool {
 /// Is `now` ("HH:MM") inside `start`..`end`? Wraps midnight (22:00 → 07:00).
 pub(super) fn hhmm_in_window(start: &str, end: &str, now: &str) -> bool {
     if start <= end { now >= start && now < end } else { now >= start || now < end }
-}
-
-/// Clip text search — search all historical footage by AI-generated descriptions.
-/// Query is matched against ai_summary using LIKE (fast, no LLM needed).
-/// Falls back to semantic matching via LLM for natural language queries.
-pub async fn search_clips(state: &Arc<AppState>, query: &str) -> Vec<serde_json::Value> {
-    let q = query.trim();
-    if q.is_empty() { return vec![]; }
-
-    // Extract keywords for SQL LIKE search
-    let keywords: Vec<String> = q.split_whitespace()
-        .filter(|w| w.len() > 2)
-        .map(|w| w.to_lowercase())
-        .collect();
-
-    if keywords.is_empty() { return vec![]; }
-
-    // BOUND, not interpolated.
-    //
-    // These keywords came straight off the user's query and were being formatted
-    // into the SQL inside quotes: a term like `a'||1=1--` closed the string and
-    // continued as code. Reachable from the frontend (`api.searchClips`) and, via
-    // the agent, from Telegram — which is untrusted input by definition.
-    //
-    // The placeholder count is derived from the keyword COUNT, so the shape of the
-    // statement can never be influenced by its content.
-    let per_kw = "(LOWER(COALESCE(me.ai_summary,'')) LIKE ? \
-                  OR LOWER(COALESCE(aa.threat_type,'')) LIKE ?)";
-    let where_clause = vec![per_kw; keywords.len()].join(" OR ");
-
-    // Same columns, same `card()`, as every other card query — this branch used
-    // to hand-roll its own JSON and omit the thumbnail entirely, so a searched
-    // event rendered as a blank tile while the identical event reached from the
-    // events filter rendered with its picture.
-    let sql = format!(
-        "SELECT {CARD_COLS}
-         FROM motion_events me
-         LEFT JOIN agent_alerts aa ON aa.event_id = me.id
-         WHERE me.ai_summary IS NOT NULL AND ({where_clause})
-         ORDER BY me.started_at DESC LIMIT 20"
-    );
-
-    let mut qy = sqlx::query_as::<_, CardRow>(&sql);
-    for k in &keywords {
-        let like = format!("%{k}%");
-        qy = qy.bind(like.clone()).bind(like);
-    }
-    let rows = qy.fetch_all(&state.db).await.unwrap_or_default();
-
-    rows.into_iter().map(|r| card(&state.data_dir, r)).collect()
 }
 
 /// Structured event explorer — returns matching events as JSON for the frontend to render as cards.
@@ -503,94 +433,6 @@ pub async fn day_chart_text(db: &sqlx::SqlitePool) -> String {
     for (b, n) in rows { if (0..4).contains(&b) { buckets[b as usize] = n; } }
     format!("Activity today — night 00-06: {} · morning 06-12: {} · afternoon 12-18: {} · evening 18-24: {}",
         buckets[0], buckets[1], buckets[2], buckets[3])
-}
-
-/// Natural-language event query — passes full conversation history so "show me those"
-/// and other contextual references work correctly.
-pub async fn query_events_nl(state: &Arc<AppState>, question: &str) -> String {
-    // Redirect to the full chat_with_agent which has all memory, person profiles, and history
-    // This way the user gets the same smart agent rather than a stripped-down query engine
-    let s = state.settings.read().await.clone();
-
-    // Fetch events with risk levels for richer context
-    let events: Vec<(String, String, Option<f64>, Option<String>, Option<String>)> =
-        sqlx::query_as(
-            "SELECT me.id, me.started_at, me.duration_secs, me.ai_summary, aa.risk_level
-             FROM motion_events me
-             LEFT JOIN agent_alerts aa ON aa.event_id = me.id
-             ORDER BY me.started_at DESC LIMIT 50"
-        )
-        .fetch_all(&state.db).await.unwrap_or_default();
-
-    if events.is_empty() {
-        return "No events recorded yet. Start the camera to begin monitoring.".to_string();
-    }
-
-    // Load ALL person profiles from memory (not just recent)
-    let person_profiles: Vec<(String, String)> = sqlx::query_as(
-        "SELECT key, value FROM agent_memory
-         WHERE key LIKE 'person_%' OR key LIKE 'appearance_cam%'
-         ORDER BY updated_at DESC LIMIT 50"
-    ).fetch_all(&state.db).await.unwrap_or_default();
-
-    // Load camera profile and environment context
-    let camera_profile = read_memory(&state.db, "camera_profile").await.unwrap_or_default();
-    let camera_name    = if s.camera_name.is_empty() { "Security Camera" } else { &s.camera_name };
-
-    // Build event list — include risk level and event ID for context
-    let now = chrono::Local::now();
-    let mut event_list = String::new();
-    for (id, started_at, duration, summary, risk) in &events {
-        let ts = chrono::DateTime::parse_from_rfc3339(started_at)
-            .map(|t| t.with_timezone(&chrono::Local).format("%b %d %H:%M").to_string())
-            .unwrap_or_else(|_| started_at[..16].to_string());
-        let dur_str  = duration.map(|d| format!("{:.0}s", d)).unwrap_or_default();
-        let sum_str  = summary.as_deref().unwrap_or("Motion detected");
-        let risk_str = risk.as_deref().unwrap_or("?");
-        event_list.push_str(&format!(
-            "[{ts}] [{risk_str}] {sum_str}{} (id: {})\n",
-            if dur_str.is_empty() { String::new() } else { format!(" · {dur_str}") },
-            &id[..8.min(id.len())]
-        ));
-    }
-
-    // Build person profile section — this is how the agent remembers who it has seen
-    let person_ctx = if person_profiles.is_empty() {
-        "No person descriptions recorded yet.".to_string()
-    } else {
-        person_profiles.iter()
-            .map(|(k, v)| format!("• [{}] {}", k.replace('_', " "), v))
-            .collect::<Vec<_>>().join("\n")
-    };
-
-    let system = format!(
-        r#"You are Guardian, an expert AI security analyst watching "{camera_name}".
-You have full memory of every person and event you have ever observed.
-Current time: {}
-
-## Camera Environment
-{camera_profile}
-
-## Person Profiles (everyone you have observed, with descriptions)
-{person_ctx}
-
-## All Events (newest first)
-{event_list}
-
-IMPORTANT RULES:
-- When the user says "show me those", "those events", "that person" — use the CONVERSATION HISTORY to understand what they're referring to.
-- When the user describes a person by appearance ("the man at the desk", "the person in blue"), search the person profiles above to find who matches.
-- NEVER make up environment details (lounge, sofa, etc.) that aren't in the camera environment section.
-- If you don't have information, say so clearly and ask for clarification.
-- When showing events, use the event ID and timestamp so the user can locate them.
-- Differentiate between multiple people when they appear in the same event."#,
-        now.format("%Y-%m-%d %H:%M %Z")
-    );
-
-    match call_llm(&s, &system, question, None, false).await {
-        Ok(answer) => answer,
-        Err(e) => e.to_string(),
-    }
 }
 
 #[cfg(test)]

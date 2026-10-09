@@ -901,25 +901,6 @@ pub async fn recognize_frame(
     Ok(out)
 }
 
-/// Diagnostic: can the face pipeline actually RUN right now? Resolves the active
-/// tier and tries to load both ONNX models. Returns `"ready: face_small|face_large"`
-/// or a clear error (no model installed / load failure) so the UI can surface it
-/// instead of capture silently doing nothing. The heavy ORT load runs off-thread.
-#[tauri::command]
-pub async fn face_pipeline_status(state: State<'_, Arc<AppState>>) -> Result<String, String> {
-    let face_model = state.settings.read().await.face_model.clone();
-    let Some(tier) = active_face_tier(&face_model, &state.data_dir) else {
-        return Err("No face model installed — install it in the Cookbook or via the Enroll tab.".into());
-    };
-    let data_dir = state.data_dir.clone();
-    let loaded = tokio::task::spawn_blocking(move || with_face_models(&data_dir, tier, |_| ()))
-        .await.map_err(|e| e.to_string())?;
-    match loaded {
-        Ok(_)  => Ok(format!("ready: {}", tier.skill_id())),
-        Err(e) => Err(format!("Face model failed to load ({}): {e}", tier.skill_id())),
-    }
-}
-
 /// Per-stage face-pipeline diagnostic surfaced in the Enroll tab so the user can
 /// SEE what's installed/loaded and exactly why detection fails (not installed vs
 /// 0 faces vs low confidence vs embedder can't run).

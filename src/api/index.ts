@@ -5,15 +5,12 @@ import { listen } from "@tauri-apps/api/event";
 // working (`import type { MotionEvent } from "../../api"`).
 export * from "../types";
 import type {
-  AgentAlert,
   AgentStatus,
   BrowserCameraInfo,
   CameraConfig,
-  CameraInventory,
   DiscoveredCamera,
   EventCard,
   FrameResult,
-  GpuInfo,
   InferenceStatus,
   KnownPerson,
   ShareEntry,
@@ -26,7 +23,6 @@ import type {
   StreamProbe,
   CameraTelemetry,
   SystemMetrics,
-  InferStatRow,
   TrtxStatus,
   AccelRow,
   TailscaleStatus,
@@ -67,17 +63,6 @@ export const api = {
   getSettings: () => invoke<Settings>("get_settings"),
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
 
-  getMotionEvents: (limit?: number) =>
-    invoke<MotionEvent[]>("get_motion_events", { limit: limit ?? 50 }),
-  readClipFrames: (eventId: string) =>
-    invoke<string[]>("read_clip_frames", { eventId }),
-  saveClipBlob: (eventId: string, blobB64: string, mimeType: string) =>
-    invoke<void>("save_clip_blob", { eventId, blobB64, mimeType }),
-  startNvr: (camId: number, sourceUrl?: string) =>
-    invoke<{ mode: string; segment_mins: number }>("start_nvr", { camId, sourceUrl: sourceUrl ?? "" }),
-  stopNvr: (camId: number) => invoke<void>("stop_nvr", { camId }),
-  getNvrSegments: (camId?: number, limit?: number) =>
-    invoke<{ id: string; cam_id: number; path: string; started_at: string; ended_at: string | null; size_bytes: number }[]>("get_nvr_segments", { camId: camId ?? null, limit: limit ?? 100 }),
   startRtspRelay: (camId: number, url: string) =>
     invoke<void>("start_rtsp_relay", { camId, url }),
   stopRtspRelay: (camId: number) => invoke<void>("stop_rtsp_relay", { camId }),
@@ -109,17 +94,11 @@ export const api = {
     invoke<MotionEvent[]>("find_similar_events", { eventId, limit: limit ?? null }),
   // Backfill embeddings for the active search model (after install / model switch).
   reindexSemanticSearch: () => invoke<number>("reindex_semantic_search"),
-  // Stream a 16 kHz mono PCM window from a USB/webcam mic for YAMNet audio detection.
-  analyzeAudioWindow: (camId: number, pcm: number[]) =>
-    invoke<void>("analyze_audio_window", { camId, pcm }),
   // standard event lifecycle: ordered "what happened" entries for one event.
   getEventTimeline: (eventId: string) =>
     invoke<TimelineEntry[]>("get_event_timeline", { eventId }),
 
   // ── Review segments (server-side review items, NVR parity) ──
-  /** Low-res scrub previews covering a range (one per camera per hour). */
-  listPreviews: (camId: number, rangeStart: string, rangeEnd: string) =>
-    invoke<Preview[]>("list_previews", { camId, rangeStart, rangeEnd }),
   getReviewSegments: (rangeStart: string, rangeEnd: string) =>
     invoke<ReviewSegment[]>("get_review_segments", { rangeStart, rangeEnd }),
   setReviewSegmentReviewed: (id: string, reviewed: boolean) =>
@@ -130,7 +109,6 @@ export const api = {
   removeBookmark: (eventId: string) => invoke<void>("remove_bookmark", { eventId }),
   listBookmarkIds: () => invoke<string[]>("list_bookmark_ids"),
   listBookmarkedEvents: () => invoke<MotionEvent[]>("list_bookmarked_events"),
-  deleteMotionEvent: (id: string) => invoke<void>("delete_motion_event", { id }),
   /** Delete events + their clip files. A Review card is a GROUP, so pass every
    *  member id in ONE call — deleting one at a time re-aggregates the group in
    *  between and the card reappears until the last member goes. */
@@ -142,37 +120,9 @@ export const api = {
   keepAliveEvent: (camId = 0) =>
     invoke<void>("keep_alive_event", { camId }),
 
-  // Structured memory files (OpenClaw-style)
   // Guardian agent
-  getAgentAlerts: (limit?: number) =>
-    invoke<AgentAlert[]>("get_agent_alerts", { limit: limit ?? 50 }),
-  deleteAgentAlert: (id: string) => invoke<void>("delete_agent_alert", { id }),
-  clearAllAgentAlerts: () => invoke<void>("clear_all_agent_alerts"),
-  getAgentMemory: (key: string) =>
-    invoke<string>("get_agent_memory", { key }),
-  setAgentMemory: (key: string, value: string) =>
-    invoke<void>("set_agent_memory", { key, value }),
-  listAgentMemory: () =>
-    invoke<[string, string, string][]>("list_agent_memory"),
-  deleteAgentMemory: (key: string) =>
-    invoke<void>("delete_agent_memory", { key }),
-  exploreEvents: (filter: string) =>
-    invoke<Array<{id:string;ts:string;started_at:string;duration?:string;summary?:string;risk_level:string;threat_type:string;has_clip:boolean;thumbnail?:string|null}>>("explore_events", { filter }),
-  searchClips: (query: string) =>
-    invoke<Array<{id:string;ts:string;started_at:string;duration?:string;summary?:string;risk_level:string;threat_type:string;has_clip:boolean;thumbnail?:string|null}>>("search_clips", { query }),
-  listAlertConditions: () =>
-    invoke<Array<{id:string;name:string;condition:string;channels:string;min_risk:string;enabled:boolean;trigger_count:number;created_at:string}>>("list_alert_conditions"),
-  createAlertCondition: (name:string, condition:string, channels:string, min_risk:string) =>
-    invoke<{id:string;name:string;condition:string;channels:string;min_risk:string;enabled:boolean;trigger_count:number;created_at:string}>("create_alert_condition", {name,condition,channels,minRisk:min_risk}),
-  deleteAlertCondition: (id: string) => invoke<void>("delete_alert_condition", { id }),
-  toggleAlertCondition: (id: string, enabled: boolean) => invoke<void>("toggle_alert_condition", { id, enabled }),
-  readMemoryFile: (category: string) => invoke<string>("read_memory_file", { category }),
-  writeMemoryFile: (category: string, content: string) => invoke<void>("write_memory_file", { category, content }),
-  readAllMemoryFiles: () => invoke<string>("read_all_memory_files"),
   getAgentStatus: () =>
     invoke<AgentStatus>("get_agent_status"),
-  triggerAgentNow: () =>
-    invoke<void>("trigger_agent_now"),
   /** In-app Guardian chat: THE surface. Same brain and same resolved evidence
    *  as Telegram — event cards, snapshots, people, share links. */
   chatApp: (history: { role: string; content: string }[], message: string, mode?: string) =>
@@ -182,15 +132,8 @@ export const api = {
     invoke<{ role: string; content: string; created_at: string; events?: EventCard[] }[]>("get_chat_log", { limit: limit ?? null }),
   /** Erase the durable conversation. Memory, events and footage are untouched. */
   clearChatLog: () => invoke<void>("clear_chat_log"),
-  // on-device assistants-inspired intelligence
-  queryEvents: (question: string, history?: { role: string; content: string }[]) =>
-    invoke<string>("query_events", { question, history: history ?? null }),
-  analyzeSnapshot: (imageB64: string, detections: { label: string; score: number }[], sceneContext?: string) =>
-    invoke<string>("analyze_snapshot", { imageB64, detections, sceneContext: sceneContext ?? null }),
 
   // Known persons / face recognition
-  enrollPerson: (name: string, role: string, embedding: number[], thumbnail: string | null) =>
-    invoke<KnownPerson>("enroll_person", { name, role, embedding, thumbnail }),
   // Guided multi-angle enrollment (ArcFace). `embedFace` returns one captured
   // angle's 512-d embedding + quality/area/crop; `enrollPersonMulti` saves them all.
   embedFace: (jpegB64: string) =>
@@ -200,10 +143,6 @@ export const api = {
   // Live face recognition via the unified ArcFace model (replaces face-api).
   recognizeFrame: (jpegB64: string) =>
     invoke<RecognizedFace[]>("recognize_frame", { jpegB64 }),
-  // Diagnostic: does the face pipeline actually load? Resolves + try-loads the
-  // active tier. Rejects with a clear reason (no model / load error).
-  facePipelineStatus: () =>
-    invoke<string>("face_pipeline_status"),
   // Per-stage face diagnostic (installed/loaded per model + detect/embed counts
   // on an optional frame). Drives the Enroll status line + bundled-models dots.
   faceDebug: (jpegB64?: string) =>
@@ -270,8 +209,6 @@ export const api = {
     }),
   getPersonStats: () =>
     invoke<PersonStats[]>("get_person_stats"),
-  getAudioStats: () =>
-    invoke<AudioStats[]>("get_audio_stats"),
   assignFacesToPerson: (faceIds: string[], personId: string) =>
     invoke<void>("assign_faces_to_person", { faceIds, personId }),
   createPersonFromFace: (faceId: string, name: string, role: string) =>
@@ -293,22 +230,6 @@ export const api = {
   assignTrackedToKnown: (bodyPersonIds: string[], knownId: string) =>
     invoke<void>("assign_tracked_to_known", { bodyPersonIds, knownId }),
 
-  getLocalIp: () => invoke<string>("get_local_ip"),
-
-  // Camera remote control
-  // v11: no-op shim. Pre-v11 this notified the libp2p / WebRTC viewers
-  // when the desktop's camera state changed; with remote viewing gone the
-  // backend command is deleted, but call sites still fire it.
-  notifyCameraState: (_active: boolean) => Promise.resolve(),
-
-  // Revoke current token and generate a new one (disconnects all phone sessions)
-  revokeToken: () => invoke<void>("revoke_token"),
-
-  // Disconnect a single remote viewer by session ID
-  disconnectClient: (id: string) => invoke<void>("disconnect_client", { id }),
-
-  // Camera inventory
-  getCameraInventory: () => invoke<CameraInventory>("get_camera_inventory"),
   reportBrowserCameras: (cameras: BrowserCameraInfo[]) =>
     invoke<void>("report_browser_cameras", { cameras }),
 
@@ -320,20 +241,15 @@ export const api = {
   reportBehaviorEvents: (camId: number, events: { track_id: number; name: string | null; flags: string[]; duration_secs: number }[]) =>
     invoke<void>("report_behavior_events", { camId, events }),
 
-  // Alert feedback
-  setAlertFeedback: (id: string, feedback: string) => invoke<void>("set_alert_feedback", { id, feedback }),
-
   // Native Rust camera capture
   listNativeCameras: () => invoke<NativeCameraDevice[]>("list_native_cameras"),
   startNativeCamera: (camId: number, deviceIndex: number) =>
     invoke<void>("start_native_camera", { camId, deviceIndex }),
   // ffmpeg DirectShow USB capture (reliable Windows backend — records 24/7 server-side).
-  listDshowCameras: () => invoke<string[]>("list_dshow_cameras"),
   startDshowCamera: (camId: number, deviceName: string) =>
     invoke<void>("start_dshow_camera", { camId, deviceName }),
   stopNativeCamera: (camId: number) =>
     invoke<void>("stop_native_camera", { camId }),
-  stopAllNativeCameras: () => invoke<void>("stop_all_native_cameras"),
 
   // Notification channel tests
   sendTelegramTest:  (botToken: string, chatId: string) =>
@@ -354,9 +270,6 @@ export const api = {
   tailscaleEnable:   () => invoke<TailscaleStatus>("tailscale_enable"),
   tailscaleDisable:  () => invoke<TailscaleStatus>("tailscale_disable"),
 
-  // GPU picker
-  listGpus: () => invoke<GpuInfo[]>("list_gpus"),
-  setPreferredGpu: (gpuName: string) => invoke<void>("set_preferred_gpu", { gpuName }),
   /** Live host utilization (CPU/RAM/GPU) for the System Monitor. */
   getSystemMetrics: () => invoke<SystemMetrics>("get_system_metrics"),
   trtxStatus: () => invoke<TrtxStatus>("trtx_status"),
@@ -367,14 +280,8 @@ export const api = {
   installTrtxPack: () => invoke<TrtxStatus>("install_trtx_pack"),
   /** Import a user-downloaded TensorRT-for-RTX SDK (zip/folder path). */
   importTrtxSdk: (path: string) => invoke<TrtxStatus>("import_trtx_sdk", { path }),
-  benchmarkInference: (seconds?: number) => invoke<InferStatRow[]>("benchmark_inference", { seconds }),
   /** Measured GB/day vs the disk cap — projected real retention for Storage settings. */
   nvrDiskProjection: () => invoke<DiskProjection>("nvr_disk_projection"),
-
-  // Agent tools
-  searchSimilarEvents: (threatType: string, timeOfDay?: string, limit?: number) =>
-    invoke<{ event_id: string; started_at: string; ai_summary: string | null; peak_score: number }[]>("search_similar_events", { threatType, timeOfDay: timeOfDay ?? null, limit: limit ?? 10 }),
-  triggerAlarm: () => invoke<void>("trigger_alarm"),
 
   // Multi-camera + anomaly
   recordFaceSighting: (personName: string, cameraId: number, eventId: string | null, confidence: number) =>
@@ -412,38 +319,17 @@ export const api = {
    *  (Windows) or restarts (macOS/Linux), so a resolved promise is rare. */
   updateInstall: () => invoke<void>("update_install"),
 
-  stopDirectP2P:  () => invoke<void>("stop_direct_p2p"),
-  getDirectP2PStatus: () => invoke<any>("get_direct_p2p_status"),
-
-
   // AI Provider
   // `provider` (optional) lists/tests a provider the user is BROWSING without
   // committing it as the active engine; omit to use the saved provider.
   listProviderModels: (provider?: string) => invoke<Array<{id:string;name:string;category:string}>>("list_provider_models", { provider }),
   testAiProvider: (provider?: string) => invoke<{ok:boolean;models?:string[];count?:number;error?:string}>("test_ai_provider", { provider }),
 
-  // Hardware encoder
-  getHwEncoder: () => invoke<string>("get_hw_encoder"),
-
-  // Windows Firewall — opens port 8880 via UAC-elevated PowerShell
-  fixFirewall: () => invoke<string>("fix_firewall"),
-
-  // ONVIF camera management
-  discoverOnvif: (timeoutMs?: number) =>
-    invoke<Array<{ device_url: string; xaddrs: string; source_ip: string }>>("discover_onvif", { timeoutMs: timeoutMs ?? null }),
-  getOnvifStreams: (deviceUrl: string, username?: string, password?: string) =>
-    invoke<Array<{ profile_token: string; rtsp_url: string; device_url: string }>>("get_onvif_streams", { deviceUrl, username: username ?? null, password: password ?? null }),
   getOnvifDeviceInfo: (deviceUrl: string, username?: string, password?: string) =>
     invoke<{ manufacturer: string; model: string; firmware_version: string; serial_number: string }>("get_onvif_device_info", { deviceUrl, username: username ?? null, password: password ?? null }),
   discoverAndConfigureOnvif: (username?: string, password?: string, timeoutMs?: number) =>
     invoke<Array<{ profile_token: string; rtsp_url: string; manufacturer: string; model: string; source_ip: string }>>("discover_and_configure_onvif", { username: username ?? null, password: password ?? null, timeoutMs: timeoutMs ?? null }),
 
-  // Skills — user-downloadable AI plugins
-  /** `minBytes` demands a size floor — pass a skill's `minBytes` so a model
-   *  superseded by a larger one at the same path reads as needing an update
-   *  rather than as installed. */
-  checkSkillInstalled: (skillId: string, minBytes?: number) =>
-    invoke<boolean>("check_skill_installed", { skillId, minBytes }),
   /**
    * Stream a skill download with live progress. Subscribes to the backend's
    * `skill:progress` Tauri events (filtered by `skill_id`), forwards each
@@ -526,13 +412,6 @@ export interface EventMarker {
 
 // Server-side review item (mature NVRs `ReviewSegment` parity) — groups overlapping
 // motion_events into ONE reviewable unit. Columns + flattened ReviewSegmentData.
-/** One scrub-preview file. Media time maps as `(t - start_time) / 1000`. */
-export interface Preview {
-  id:         string;
-  cam_id:     number;
-  start_time: string;
-  end_time:   string;
-}
 
 export interface ReviewSegment {
   id:            string;
@@ -556,7 +435,6 @@ export interface ReviewSegment {
   summary:       string | null;
   clip_event_id: string | null;
 }
-
 
 export interface UnknownFace {
   id:             string;

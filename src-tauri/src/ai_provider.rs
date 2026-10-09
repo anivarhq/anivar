@@ -7,24 +7,6 @@ use tauri::State;
 use crate::AppState;
 
 
-/// List models for the currently configured AI provider.
-/// For the on-device provider: the single installed GGUF.
-/// For cloud providers: a hardcoded curated list.
-/// `provider` (optional) lets the UI list models for a provider the user is just
-/// BROWSING, without committing it as the active engine. When omitted, falls back
-/// to the saved `ai_provider`.
-#[tauri::command]
-pub async fn list_provider_models(
-    provider: Option<String>,
-    state: State<'_, Arc<AppState>>,
-) -> Result<Vec<serde_json::Value>, String> {
-    let mut settings = state.settings.read().await.clone();
-    if let Some(p) = provider {
-        if !p.is_empty() { settings.ai_provider = p; }
-    }
-    Ok(crate::agent::list_provider_models(&settings).await)
-}
-
 /// Validate the active provider's connection / API key by hitting its cheapest
 /// "list models" endpoint. Returns `{ ok, models, count, error? }` consistently
 /// across providers. Short 5 s timeout — wrong keys should fail fast, not hang.

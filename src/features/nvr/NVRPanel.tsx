@@ -7,25 +7,12 @@
  * No explicit mode toggle — state is implicit (live stream vs recorded clip).
  */
 import { eventThumbSrc } from "../../lib/eventThumb";
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { useStore } from "../../store";
-import { useShallow } from "zustand/react/shallow";
-import { api, MotionEvent } from "../../api";
+import { MotionEvent } from "../../api";
 import styles from "./NVRPanel.module.css";
-import { GlassCalendar } from "../../components/ui/GlassCalendar";
-import {
-  RotateCcw, Play, Pause, SkipBack, SkipForward,
-  Calendar, ChevronRight, Loader, ZoomIn, ZoomOut,
-  Download, ChevronLeft, Film, AlertTriangle,
-  Volume2, VolumeX,
-} from "lucide-react";
-import { attachSource, type MediaHandle } from "../../lib/hlsAttach";
-import { MAX_RETRIES, retryDelayMs, bustUrl } from "../live/clipRetry";
-import { loadSavedVolume, saveVolume } from "../../lib/volume";
-import { localDateStr, dayBoundsUtc, dayStartMs, dayEndMs, shiftDay } from "../../lib/time";
-import { SEVERITY_FG, severityOfRisk, tint } from "../../lib/palette";
-import { CATEGORY_ICON, CATEGORY_CHIP } from "../../lib/palette";
+import { Film } from "lucide-react";
+import { tint } from "../../lib/palette";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

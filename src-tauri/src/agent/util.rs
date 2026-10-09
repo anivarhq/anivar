@@ -19,10 +19,7 @@ use tauri::Emitter;
 
 use crate::AppState;
 use super::types::*;
-use super::memory::{
-    read_memory, write_memory, read_core_memory,
-};
-use super::llm::call_llm;
+use super::memory::{write_memory, read_core_memory};
 
 // ─── Status helper ────────────────────────────────────────────────────────────
 
@@ -61,116 +58,6 @@ pub async fn get_status(state: &Arc<AppState>) -> AgentStatus {
 }
 
 // ─── Snapshot analysis (Test button) ─────────────────────────────────────────
-
-pub async fn analyze_snapshot(
-    state: &Arc<AppState>,
-    image_data_url: String,
-    live_detections: Vec<String>,
-) -> anyhow::Result<String> {
-    let settings = state.settings.read().await.clone();
-    let camera_name = if settings.camera_name.is_empty() { "Security Camera" } else { &settings.camera_name };
-
-    // Always send the image — a non-vision model just ignores it.
-    // Model selection (vision_model) is handled inside call_llm via settings.
-    // On-device needs no model NAME (the engine is compiled in), so only remote
-    // providers are required to have one.
-    if settings.vision_model.is_empty()
-        && !matches!(settings.ai_provider.as_str(), "local" | "")
-    {
-        anyhow::bail!("No model configured — go to Guardian > Arsenal and select a model");
-    }
-
-    // Strip data-URL prefix; send raw base64 in the images array
-    let b64 = image_data_url
-        .trim_start_matches("data:image/jpeg;base64,")
-        .trim_start_matches("data:image/png;base64,")
-        .to_string();
-    // Only attach image if we actually have frame data
-    let images = if b64.len() > 100 { Some(vec![b64]) } else { None };
-
-    // This request is "describe THIS image" — there is no useful text-only answer,
-    // only an invented one. Say so instead of returning a confident fabrication.
-    if images.is_some() && !super::llm::provider_supports_vision(&settings) {
-        anyhow::bail!(
-            "The on-device model is text-only — it can't look at snapshots. \
-             Pick a cloud or self-hosted vision model in Guardian > Arsenal to analyse images."
-        );
-    }
-
-    let camera_profile = read_memory(&state.db, "camera_profile").await
-        .unwrap_or_else(|| "General-purpose security camera.".to_string());
-    let threat_rules   = read_memory(&state.db, "threat_rules").await
-        .unwrap_or_else(|| "Alert on unknown persons especially at night.".to_string());
-    let known_fp       = read_memory(&state.db, "known_false_positives").await
-        .unwrap_or_else(|| "No known false positives.".to_string());
-
-    let recent: Vec<(String, f32, Option<String>)> = sqlx::query_as(
-        "SELECT started_at, peak_score, ai_summary FROM motion_events ORDER BY started_at DESC LIMIT 5"
-    ).fetch_all(&state.db).await.unwrap_or_default();
-
-    let events_ctx = if recent.is_empty() {
-        "No recent motion events on record.".to_string()
-    } else {
-        recent.iter().map(|(t, s, _)| format!("• {} — score {:.0}%", t, s * 100.0))
-            .collect::<Vec<_>>().join("\n")
-    };
-
-    let system = format!(
-        r#"You are Guardian, an AI security analyst for "{camera_name}".
-You will be shown a live camera image. Describe exactly what you see with precision:
-- How many people, where are they, what are they doing?
-- Vehicles, animals, packages or other objects?
-- Lighting conditions and environment?
-- Is anything suspicious or threatening based on the threat rules?
-Be specific and direct. Plain text only, 3-6 sentences.
-
-## Camera Profile
-{camera_profile}
-
-## Threat Rules
-{threat_rules}
-
-## Known False Positives
-{known_fp}
-
-## Recent Motion History
-{events_ctx}"#
-    );
-
-    // Load known persons for context
-    let known_persons: Vec<(String, String, Option<String>)> = sqlx::query_as(
-        "SELECT name, role, last_seen_at FROM known_persons ORDER BY name ASC"
-    ).fetch_all(&state.db).await.unwrap_or_default();
-
-    let persons_ctx = if known_persons.is_empty() {
-        "No enrolled persons.".to_string()
-    } else {
-        known_persons.iter().map(|(name, role, last_seen)| {
-            let seen = last_seen.as_deref().unwrap_or("never");
-            format!("• {} ({}), last seen: {}", name, role, seen)
-        }).collect::<Vec<_>>().join("\n")
-    };
-
-    let scene_ctx = if live_detections.is_empty() {
-        "No AI detection data available.".to_string()
-    } else {
-        live_detections.join("\n")
-    };
-
-    let user_msg = format!(
-        "Analyse this camera snapshot.\n\n\
-         ## Edge AI Scene Analysis\n{scene_ctx}\n\n\
-         ## Enrolled/Assigned Persons\n{persons_ctx}\n\n\
-         Based on the image AND the scene analysis above:\n\
-         - Name any assigned persons you see\n\
-         - Count and describe any unidentified people (Person #1, #2, etc.)\n\
-         - Note spatial relationships (who is near whom)\n\
-         - Flag anything suspicious per the threat rules\n\
-         Be specific. Plain text, 3-6 sentences."
-    );
-
-    call_llm(&settings, &system, &user_msg, images, false).await
-}
 
 // ─── Disk space guard ─────────────────────────────────────────────────────────
 // (push_proactive_insights / push_situation_awareness stubs removed with their

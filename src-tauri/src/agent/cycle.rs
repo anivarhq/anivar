@@ -52,18 +52,6 @@ pub(super) async fn run_cycle(state: &Arc<AppState>, _settings: &Settings) {
 
 // ─── Public trigger (for immediate on-demand cycle) ──────────────────────────
 
-pub async fn run_now(state: &Arc<AppState>) {
-    let settings = state.settings.read().await.clone();
-    // Run whenever the agent is enabled — NOT gated on a specific provider's URL.
-    // Event processing (ALPR + face recognition + the detection-summary floor) is
-    // valuable even with no LLM; `analyze_event_clip` gates the VLM itself. (Was
-    // `&& !<provider url>.is_empty()`, which froze the cycle for cloud/no-LLM setups.)
-    if settings.agent_enabled {
-        run_cycle(state, &settings).await;
-        *state.agent_last_run.write().await = Some(Utc::now().to_rfc3339());
-    }
-}
-
 // ─── Escalation timer loop ────────────────────────────────────────────────────
 
 pub async fn run_escalation_loop(state: Arc<AppState>) {

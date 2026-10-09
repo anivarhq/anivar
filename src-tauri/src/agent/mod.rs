@@ -52,21 +52,12 @@ pub(crate) use clip::{categorise_labels, dominant_label};
 // `evaluate_alert_conditions` is NOT re-exported: it has exactly one caller,
 // `clip::analyze_event_clip`, and a second entry point is how it ended up
 // wired to a dead function in the first place.
-pub use conditions::{
-    create_alert_condition, day_chart_mermaid, day_chart_text, delete_alert_condition,
-    explore_events, list_alert_conditions,
-    query_events_nl, search_clips, toggle_alert_condition, AlertCondition,
-};
-pub use cycle::{run_agent_loop, run_now};
+pub use conditions::{day_chart_mermaid, day_chart_text};
+pub use cycle::run_agent_loop;
 pub use dispatch::run_telegram_loop;
 pub(crate) use dispatch::send_telegram;
-pub use llm::list_provider_models;
-pub use memory::{
-    append_to_memory, read_all_memory_files, read_memory, read_memory_file,
-    reinforce_memory, write_memory, write_memory_file,
-};
 pub use types::{AgentAlert, AgentStatus, EscalationState};
-pub use util::{analyze_snapshot, get_status};
+pub use util::get_status;
 
 /// THE evidence resolver — the only way out of the agent for a tagged reply.
 ///

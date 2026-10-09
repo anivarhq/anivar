@@ -48,29 +48,6 @@ pub struct KnownPerson {
     pub last_seen_at: Option<String>,
 }
 
-#[tauri::command]
-pub async fn enroll_person(
-    state: State<'_, Arc<AppState>>,
-    name: String,
-    role: String,
-    embedding: Vec<f32>,   // single 512-d ArcFace descriptor (same space as embed_face)
-    thumbnail: Option<String>,
-) -> Result<KnownPerson, String> {
-    let id = Uuid::new_v4().to_string();
-    let now = Utc::now().to_rfc3339();
-    // Embeddings stored as array of arrays — supports adding more later
-    let embeddings = serde_json::to_string(&vec![embedding]).map_err(|e| e.to_string())?;
-    sqlx::query(
-        "INSERT INTO known_persons(id, name, role, embeddings, thumbnail, created_at) VALUES(?,?,?,?,?,?)"
-    )
-    .bind(&id).bind(&name).bind(&role).bind(&embeddings)
-    .bind(&thumbnail).bind(&now)
-    .execute(&state.db).await.map_err(|e| e.to_string())?;
-
-    schedule_classifier_retrain(&state.db);
-    Ok(KnownPerson { id, name, role, embeddings, embedding_count: 1, thumbnail, created_at: now, last_seen_at: None })
-}
-
 /// Enroll a person from MULTIPLE captured angle embeddings at once (guided
 /// multi-angle capture). Every angle lands in the person's `embeddings` array so
 /// recognition matches them from any pose. Embeddings come from `embed_face`
@@ -391,23 +368,6 @@ pub async fn mark_person_seen(state: State<'_, Arc<AppState>>, id: String) -> Re
 
 // ─── Unknown-face training (standard "tag from recent events") ───────
 
-#[derive(Debug, Serialize)]
-pub struct UnknownFace {
-    pub id:             String,
-    pub thumbnail_b64:  String,        // 112×112 aligned JPEG
-    pub quality:        f32,
-    pub cam_id:         i64,
-    pub event_id:       Option<String>,
-    pub seen_at:        String,
-    /// Closest enrolled person (Train-tab "looks like {name}") when the near-miss
-    /// cosine is in [unknown_score, rec_threshold). None when nobody is close.
-    pub suggested_name:  Option<String>,
-    pub suggested_score: Option<f32>,
-    /// The suggested person's ID — the UI binds confirm actions to THIS, never
-    /// to the name string (renames / duplicate names mis-resolve by name).
-    pub suggested_person_id: Option<String>,
-}
-
 /// Load every enrolled person's (id, name, parsed embeddings) once so a listing
 /// can suggest candidates in-memory without re-querying per face.
 async fn load_known(db: &sqlx::SqlitePool) -> Vec<(String, String, Vec<Vec<f32>>)> {
@@ -436,63 +396,6 @@ fn best_suggestion(known: &[(String, String, Vec<Vec<f32>>)], emb: &[f32], floor
     if best.0 >= floor && !best.1.is_empty() {
         (Some(best.1), Some(best.2), Some(best.0))
     } else { (None, None, None) }
-}
-
-/// Returns the N most-recent face sightings that aren't linked to a known
-/// person yet — what the agent has seen but couldn't identify.
-/// `min_quality` filters out blurry frames (default 0.20 — keep the floor low
-/// because in practice most candid frames are below the laplacian sweet spot).
-#[tauri::command]
-pub async fn list_recent_unknown_faces(
-    state: State<'_, Arc<AppState>>,
-    limit: Option<i64>,
-    days: Option<i64>,
-    min_quality: Option<f32>,
-) -> Result<Vec<UnknownFace>, String> {
-    let limit = limit.unwrap_or(60).clamp(1, 500);
-    let days  = days.unwrap_or(14).clamp(1, 365);
-    let q_min = min_quality.unwrap_or(0.10);
-    let floor = state.settings.read().await.face_unknown_score;
-    let known = load_known(&state.db).await;
-    let rows: Vec<(String, Option<String>, f64, i64, Option<String>, String, Vec<u8>, i64)> = sqlx::query_as(
-        "SELECT id, thumbnail_b64, quality, cam_id, event_id, seen_at, descriptor, dim
-           FROM face_embeddings
-          WHERE person_id IS NULL
-            AND thumbnail_b64 IS NOT NULL
-            AND quality >= ?
-            AND seen_at > datetime('now', ?)
-          ORDER BY quality DESC, seen_at DESC
-          LIMIT ?"
-    )
-    .bind(q_min as f64)
-    .bind(format!("-{} days", days))
-    .bind(limit)
-    .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
-
-    // Descriptor decode + cosine over every enrolled gallery is CPU work (60 ×
-    // 30-shot loops), and the old inline blobstore::resolve was a blocking fs
-    // read per row on the async runtime — crops are now '@crop' markers served
-    // by GET /face/:id/crop instead.
-    tokio::task::spawn_blocking(move || {
-        rows.into_iter().filter_map(|(id, thumb, quality, cam_id, event_id, seen_at, blob, dim)| {
-            thumb.as_deref()?; // no stored crop → skip (matches old behavior)
-            let (suggested_person_id, suggested_name, suggested_score) = if blob.len() == dim as usize * 4 {
-                let v: Vec<f32> = blob.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
-                best_suggestion(&known, &v, floor)
-            } else { (None, None, None) };
-            Some(UnknownFace {
-                id,
-                thumbnail_b64: "@crop".into(),
-                quality: quality as f32,
-                cam_id,
-                event_id,
-                seen_at,
-                suggested_name,
-                suggested_score,
-                suggested_person_id,
-            })
-        }).collect()
-    }).await.map_err(|e| e.to_string())
 }
 
 /// One stored face crop for a person — used by the per-person detail gallery so
@@ -547,30 +450,6 @@ pub async fn delete_face_embedding(
     sqlx::query("DELETE FROM face_embeddings WHERE id = ?")
         .bind(&id).execute(&state.db).await.map_err(|e| e.to_string())?;
     Ok(())
-}
-
-/// Wipe ALL un-tagged (stranger) face crops — the Train backlog — in one tap.
-/// Enrolled people's linked faces (`person_id` set) are kept. Cameras re-capture
-/// clean bbox crops via the continuous-capture loop. Returns rows removed.
-#[tauri::command]
-pub async fn clear_unknown_faces(state: State<'_, Arc<AppState>>) -> Result<u64, String> {
-    // Collect the blob refs first, then delete the files off-thread (can be
-    // thousands) so we don't leave orphaned crops on disk.
-    let refs: Vec<(Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT thumbnail_b64, context_b64 FROM face_embeddings WHERE person_id IS NULL"
-    ).fetch_all(&state.db).await.unwrap_or_default();
-    if !refs.is_empty() {
-        let data_dir = state.data_dir.clone();
-        tokio::task::spawn_blocking(move || {
-            for (t, c) in &refs {
-                if let Some(t) = t { crate::blobstore::delete(&data_dir, t); }
-                if let Some(c) = c { crate::blobstore::delete(&data_dir, c); }
-            }
-        }).await.ok();
-    }
-    let res = sqlx::query("DELETE FROM face_embeddings WHERE person_id IS NULL")
-        .execute(&state.db).await.map_err(|e| e.to_string())?;
-    Ok(res.rows_affected())
 }
 
 /// Hourly retention for the per-person recognition LOG (`face_embeddings` rows
@@ -699,118 +578,6 @@ pub async fn get_face_context(
         "SELECT COALESCE(context_b64, thumbnail_b64) FROM face_embeddings WHERE id=?"
     ).bind(&face_id).fetch_optional(&state.db).await.map_err(|e| e.to_string())?;
     Ok(row.and_then(|(c,)| c).map(|c| crate::blobstore::resolve(&state.data_dir, &c)))
-}
-
-/// A recent recognition of a KNOWN person — the mature NVRs "Recent Recognitions"
-/// feed. Surfaces that face recognition is working + who's been around lately.
-#[derive(Debug, Serialize)]
-pub struct Recognition {
-    /// face_embeddings.id — needed so a WRONG recognition can be corrected.
-    pub id:            String,
-    pub person_id:     String,
-    pub name:          String,
-    pub role:          String,
-    pub thumbnail_b64: String,
-    pub quality:       f32,
-    pub cam_id:        i64,
-    pub seen_at:       String,
-    /// Naming provenance — WHICH recognizer, its score, runner-up margin, and the
-    /// event it came from. NULL on rows stored before traceability shipped.
-    pub match_method:  Option<String>,
-    pub match_score:   Option<f32>,
-    pub match_margin:  Option<f32>,
-    pub event_id:      Option<String>,
-}
-
-/// Most-recent recognitions of enrolled people across all cameras.
-#[tauri::command]
-pub async fn list_recent_recognitions(
-    state: State<'_, Arc<AppState>>,
-    limit: Option<i64>,
-    days: Option<i64>,
-) -> Result<Vec<Recognition>, String> {
-    let limit = limit.unwrap_or(40).clamp(1, 200);
-    let days  = days.unwrap_or(7).clamp(1, 365);
-    let rows: Vec<(String, String, String, String, Option<String>, f64, i64, String, Option<String>, Option<f64>, Option<f64>, Option<String>)> = sqlx::query_as(
-        "SELECT f.id, k.id, k.name, k.role, f.thumbnail_b64, f.quality, f.cam_id, f.seen_at,
-                f.match_method, f.match_score, f.match_margin, f.event_id
-           FROM face_embeddings f
-           JOIN known_persons k ON k.id = f.person_id
-          WHERE f.person_id IS NOT NULL
-            AND f.thumbnail_b64 IS NOT NULL
-            AND f.seen_at > datetime('now', ?)
-          ORDER BY f.seen_at DESC
-          LIMIT ?"
-    )
-    .bind(format!("-{} days", days)).bind(limit)
-    .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
-
-    Ok(rows.into_iter().filter_map(|(id, person_id, name, role, thumb, quality, cam_id, seen_at, match_method, match_score, match_margin, event_id)| {
-        Some(Recognition {
-            id, person_id, name, role,
-            thumbnail_b64: crate::blobstore::resolve(&state.data_dir, thumb.as_deref()?),
-            quality: quality as f32, cam_id, seen_at,
-            match_method,
-            match_score: match_score.map(|v| v as f32),
-            match_margin: match_margin.map(|v| v as f32),
-            event_id,
-        })
-    }).collect())
-}
-
-/// Attach an unmatched face embedding to an existing `known_persons` row.
-/// Copies the embedding vector into the person's JSON-encoded `embeddings`
-/// array so future matches improve, then marks the row as linked.
-#[tauri::command]
-pub async fn assign_face_to_person(
-    state: State<'_, Arc<AppState>>,
-    face_id:   String,
-    person_id: String,
-) -> Result<(), String> {
-    // Pull the embedding blob + capture quality.
-    let (descriptor, dim, quality): (Vec<u8>, i64, f64) = sqlx::query_as(
-        "SELECT descriptor, dim, quality FROM face_embeddings WHERE id=? AND person_id IS NULL"
-    ).bind(&face_id).fetch_one(&state.db).await
-        .map_err(|e| format!("face not found or already linked: {e}"))?;
-
-    if descriptor.len() != (dim as usize) * 4 {
-        return Err("descriptor blob size mismatch".into());
-    }
-    let vec: Vec<f32> = descriptor.chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
-
-    // QUALITY GATE: a blurry confirmation still TAGS the row (below) but must
-    // not become matcher input — soft shots dilute recognition for everyone.
-    let q_floor = state.settings.read().await.face_quality_floor;
-    let sharp_enough = quality as f32 >= q_floor;
-    if !sharp_enough {
-        tracing::info!("assign_face: tagged but not enrolled (quality {quality:.2} < floor {q_floor:.2})");
-    }
-
-    // Append to the person's embedding array (diversity gate + 30-shot cap —
-    // a near-duplicate shot tags the row below but doesn't grow the gallery).
-    let (mut embs_json,): (String,) = sqlx::query_as(
-        "SELECT embeddings FROM known_persons WHERE id=?"
-    ).bind(&person_id).fetch_one(&state.db).await
-        .map_err(|e| format!("person not found: {e}"))?;
-    let mut embs: Vec<Vec<f32>> = serde_json::from_str(&embs_json).unwrap_or_default();
-    if sharp_enough && push_enrolled_shot(&mut embs, vec) {
-        embs_json = serde_json::to_string(&embs).map_err(|e| e.to_string())?;
-        sqlx::query("UPDATE known_persons SET embeddings=?, last_seen_at=datetime('now') WHERE id=?")
-            .bind(&embs_json).bind(&person_id)
-            .execute(&state.db).await.map_err(|e| e.to_string())?;
-    } else {
-        sqlx::query("UPDATE known_persons SET last_seen_at=datetime('now') WHERE id=?")
-            .bind(&person_id)
-            .execute(&state.db).await.map_err(|e| e.to_string())?;
-    }
-
-    sqlx::query("UPDATE face_embeddings SET person_id=? WHERE id=?")
-        .bind(&person_id).bind(&face_id)
-        .execute(&state.db).await.map_err(|e| e.to_string())?;
-    schedule_classifier_retrain(&state.db);
-    Ok(())
 }
 
 /// CORRECT a recognition: re-tag a face that's ALREADY labelled (the pipeline or a
@@ -1463,49 +1230,6 @@ pub async fn get_person_stats(
 
     let mut out = aggregate_person_stats(rows, &roster);
     out.sort_by_key(|p| std::cmp::Reverse(p.sightings_30d));
-    Ok(out)
-}
-
-/// Per-sound pattern summary for the Audio tab (last 7 days): what's being heard,
-/// how often, and when — the difference between a raw event list and INSIGHT.
-#[derive(Debug, Serialize)]
-pub struct AudioStats {
-    pub sound:      String,
-    pub count_7d:   i64,
-    pub last_heard: String,
-    /// Local hour-of-day this sound peaks (0-23), None if too few events.
-    pub peak_hour:  Option<u8>,
-}
-
-#[tauri::command]
-pub async fn get_audio_stats(
-    state: State<'_, Arc<AppState>>,
-) -> Result<Vec<AudioStats>, String> {
-    let rows: Vec<(Option<String>, String)> = sqlx::query_as(
-        "SELECT dominant_label, started_at FROM motion_events
-          WHERE event_category='audio' AND started_at > strftime('%Y-%m-%dT%H:%M:%S','now','-7 days')
-          ORDER BY started_at DESC LIMIT 2000"
-    ).fetch_all(&state.db).await.map_err(|e| e.to_string())?;
-
-    use std::collections::HashMap;
-    struct Acc { n: i64, hours: [u32; 24], last: Option<String> }
-    let mut by: HashMap<String, Acc> = HashMap::new();
-    for (sound, at) in rows {
-        let key = sound.unwrap_or_else(|| "sound".into());
-        let a = by.entry(key).or_insert(Acc { n: 0, hours: [0; 24], last: None });
-        a.n += 1;
-        if a.last.is_none() { a.last = Some(at.clone()); }
-        if let Ok(t) = chrono::DateTime::parse_from_rfc3339(&at).map(|d| d.with_timezone(&chrono::Local)) {
-            a.hours[chrono::Timelike::hour(&t) as usize] += 1;
-        }
-    }
-    let mut out: Vec<AudioStats> = by.into_iter().map(|(sound, a)| AudioStats {
-        peak_hour: if a.n >= 3 { a.hours.iter().enumerate().max_by_key(|(_, c)| **c).map(|(h, _)| h as u8) } else { None },
-        last_heard: a.last.unwrap_or_default(),
-        count_7d: a.n,
-        sound,
-    }).collect();
-    out.sort_by_key(|p| std::cmp::Reverse(p.count_7d));
     Ok(out)
 }
 

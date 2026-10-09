@@ -846,43 +846,6 @@ fn empty_answer(resp: &serde_json::Value) -> anyhow::Error {
     anyhow::anyhow!("The AI service sent back an empty answer. Try asking again.")
 }
 
-/// Curated default models for the UI picker, per provider. These are sensible,
-/// vision-first picks for a security camera (the live `/models` list from
-/// `test_ai_provider` is the source of truth when reachable — these just give a
-/// clean starting set + offline fallback). `category: "vision"` drives the UI's
-/// "Vision" badge; only vision-capable models can analyse camera frames.
-pub async fn list_provider_models(settings: &Settings) -> Vec<serde_json::Value> {
-    match settings.ai_provider.as_str() {
-        "openai" => vec![
-            serde_json::json!({ "id": "gpt-4o", "name": "GPT-4o", "category": "vision" }),
-            serde_json::json!({ "id": "gpt-4o-mini", "name": "GPT-4o mini (cheap)", "category": "vision" }),
-            serde_json::json!({ "id": "gpt-4.1", "name": "GPT-4.1", "category": "vision" }),
-            serde_json::json!({ "id": "gpt-4.1-mini", "name": "GPT-4.1 mini", "category": "vision" }),
-        ],
-        "anthropic" => vec![
-            serde_json::json!({ "id": "claude-opus-4-7", "name": "Claude Opus 4.7", "category": "vision" }),
-            serde_json::json!({ "id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6", "category": "vision" }),
-            serde_json::json!({ "id": "claude-haiku-4-5-20251001", "name": "Claude Haiku 4.5 (cheap)", "category": "vision" }),
-        ],
-        "groq" => vec![
-            serde_json::json!({ "id": "meta-llama/llama-4-scout-17b-16e-instruct", "name": "Llama 4 Scout (vision)", "category": "vision" }),
-            serde_json::json!({ "id": "meta-llama/llama-4-maverick-17b-128e-instruct", "name": "Llama 4 Maverick (vision)", "category": "vision" }),
-            serde_json::json!({ "id": "llama-3.3-70b-versatile", "name": "Llama 3.3 70B (text)", "category": "text" }),
-        ],
-        "xai" => vec![
-            serde_json::json!({ "id": "grok-2-vision-1212", "name": "Grok 2 Vision", "category": "vision" }),
-            serde_json::json!({ "id": "grok-4", "name": "Grok 4", "category": "vision" }),
-        ],
-        "gemini" => vec![
-            serde_json::json!({ "id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash", "category": "vision" }),
-            serde_json::json!({ "id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "category": "vision" }),
-            serde_json::json!({ "id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash (cheap)", "category": "vision" }),
-        ],
-        // Ollama + local OpenAI-compatible: fetched live from the server.
-        _ => vec![],
-    }
-}
-
 
 #[cfg(test)]
 mod tool_wire_tests {

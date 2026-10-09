@@ -48,7 +48,6 @@ pub use auth_cmds::{
 mod hw;
 pub use hw::detect_hw_encoder;
 
-mod onvif;
 
 mod state;
 pub use state::*;
@@ -98,9 +97,8 @@ mod motion;
 mod motion_lifecycle;
 
 mod face;
-pub use face::{embed_face, recognize_frame, face_pipeline_status, face_debug};
+pub use face::{embed_face, recognize_frame, face_debug};
 mod face_classifier;
-pub use face_classifier::{retrain_face_classifier, face_classifier_status};
 mod liveness;
 mod alpr;
 
@@ -128,14 +126,13 @@ pub use inference_cmds::{stream_frame, process_frame, get_inference_status, get_
 pub(crate) use inference_cmds::process_frame_inner;
 
 mod frontend_cmds;
-pub use frontend_cmds::{update_scene_objects, read_clip_frames, save_clip_blob};
+pub use frontend_cmds::update_scene_objects;
 
 mod nvr_pipes;
 pub(crate) use nvr_pipes::{spawn_nvr_pipe, spawn_hls_pipe};
 
 mod nvr_stream;
 mod nvr_vod;
-mod nvr_preview;
 mod depth;
 mod go2rtc;
 #[cfg(windows)]
@@ -153,7 +150,7 @@ mod par;
 mod behaviour;
 mod people_search;
 pub use people_search::{search_people, find_similar_person, get_people_day};
-pub use reid::{list_tracked_persons, reid_backend_status, assign_tracked_to_known, list_tracked_clusters, name_tracked_group, unname_tracked_group, correct_track};
+pub use reid::assign_tracked_to_known;
 
 mod inference;
 pub use inference::run_inference_loop;
@@ -165,53 +162,49 @@ mod blobstore;
 mod db_backup;
 mod audio;
 mod audio_cmds;
-pub use audio_cmds::analyze_audio_window;
 mod tracking;
 mod timeline;
 pub use timeline::get_event_timeline;
 
 
 mod nvr_recording;
-pub use nvr_recording::{start_nvr, stop_nvr, get_nvr_segments, list_nvr_recordings, get_events_in_range, get_event_markers, list_recorded_days, search_events, find_similar_events, reindex_semantic_search, list_bookmarked_events};
+pub use nvr_recording::{list_nvr_recordings, get_events_in_range, get_event_markers, list_recorded_days, search_events, find_similar_events, reindex_semantic_search, list_bookmarked_events};
 
 mod rtsp;
 pub use rtsp::{start_rtsp_relay, stop_rtsp_relay, probe_stream};
 mod dshow;
-pub use dshow::{list_dshow_cameras, start_dshow_camera};
+pub use dshow::start_dshow_camera;
 
 mod cam_config;
 pub use cam_config::{get_camera_configs, set_camera_config, CameraConfig};
 
 mod native_cam_cmds;
-pub use native_cam_cmds::{get_active_cameras, get_camera_telemetry, get_camera_inventory, report_browser_cameras, list_native_cameras, start_native_camera, stop_native_camera, stop_all_native_cameras};
+pub use native_cam_cmds::{get_active_cameras, get_camera_telemetry, report_browser_cameras, list_native_cameras, start_native_camera, stop_native_camera};
 
 mod events_cmds;
-pub use events_cmds::{get_storage_info, get_settings, unreadable_secrets, save_settings, get_motion_events, keep_alive_event, store_detections, store_ai_summary};
+pub use events_cmds::{get_storage_info, get_settings, unreadable_secrets, save_settings, keep_alive_event, store_detections};
 
 mod agent_cmds;
-pub use agent_cmds::{get_agent_alerts, delete_agent_alert, clear_all_agent_alerts, set_alert_feedback, get_reflection_prompt, report_behavior_events, get_agent_memory, set_agent_memory, list_agent_memory, delete_agent_memory, get_agent_status, analyze_snapshot, chat_app, get_chat_log, clear_chat_log, trigger_agent_now, query_events, explore_events};
+pub use agent_cmds::{report_behavior_events, get_agent_status, chat_app, get_chat_log, clear_chat_log};
 
 mod agent_data_cmds;
-pub use agent_data_cmds::{search_clips, list_alert_conditions, create_alert_condition, delete_alert_condition, toggle_alert_condition, read_memory_file, write_memory_file, read_all_memory_files, delete_motion_event, delete_events, clear_nvr_recordings, clear_all_events, purge_orphaned_clips, delete_footage_in_range};
+pub use agent_data_cmds::{delete_events, clear_nvr_recordings, clear_all_events, purge_orphaned_clips, delete_footage_in_range};
 
 mod persons;
-pub use persons::{enroll_person, enroll_person_multi, add_person_embedding, list_known_persons, delete_person,
-            forget_person, rename_person, mark_person_seen, list_recent_unknown_faces, assign_face_to_person, create_person_from_face, list_person_faces, delete_face_embedding, list_recent_recognitions, list_unknown_clusters, get_person_sightings, get_person_events, list_vehicles, list_audio_events, get_person_stats, get_audio_stats, assign_faces_to_person, clear_unknown_faces, delete_unknown_faces, get_face_context, correct_face};
+pub use persons::{enroll_person_multi, add_person_embedding, list_known_persons, delete_person, forget_person, rename_person, mark_person_seen, create_person_from_face, list_person_faces, delete_face_embedding, list_unknown_clusters, get_person_sightings, get_person_events, list_vehicles, list_audio_events, get_person_stats, assign_faces_to_person, delete_unknown_faces, get_face_context, correct_face};
 mod correlation;
 pub use correlation::record_face_sighting;
 
 mod agent_tools;
-pub use agent_tools::{get_person_history, search_similar_events, trigger_alarm, send_telegram_test, telegram_connect};
+pub use agent_tools::{send_telegram_test, telegram_connect};
 
 mod system_cmds;
-pub use system_cmds::{GpuInfo, list_gpus, set_preferred_gpu, revoke_token, disconnect_client, get_local_ip, DiscoveredCamera, discover_cameras, recommend_face_model, list_installed_skills, SystemMetrics, get_system_metrics};
+pub use system_cmds::{GpuInfo, DiscoveredCamera, discover_cameras, recommend_face_model, list_installed_skills, SystemMetrics, get_system_metrics};
 
 mod ai_provider;
-pub use ai_provider::{list_provider_models, test_ai_provider};
+pub use ai_provider::test_ai_provider;
 
 
-mod hw_onvif;
-pub use hw_onvif::{get_hw_encoder, fix_firewall, discover_onvif, get_onvif_streams, get_onvif_device_info, discover_and_configure_onvif};
 
 /// User-downloadable AI models. Moved out of `hw_onvif` (a camera-discovery
 /// file) — nothing about installing a model relates to ONVIF.
@@ -220,7 +213,6 @@ pub use skills::{check_skill_installed, download_skill, remove_skill};
 
 mod review_segments;
 pub use review_segments::{get_review_segments, set_review_segment_reviewed};
-pub use nvr_preview::list_previews;
 
 mod bookmarks;
 pub use bookmarks::{add_bookmark, remove_bookmark, list_bookmark_ids};
@@ -494,7 +486,6 @@ pub fn run() {
             system_cmds::accel_report,
             system_cmds::install_trtx_pack,
             system_cmds::import_trtx_sdk,
-            system_cmds::benchmark_inference,
             system_cmds::nvr_disk_projection,
             check_skill_installed,
             download_skill,
@@ -514,24 +505,14 @@ pub fn run() {
             get_settings,
             unreadable_secrets,
             save_settings,
-            get_motion_events,
-            delete_motion_event,
             delete_events,
             clear_all_events,
             purge_orphaned_clips,
             delete_footage_in_range,
-            revoke_token,
-            disconnect_client,
-            get_local_ip,
             get_storage_info,
             discover_cameras,
             get_system_metrics,
             list_native_cameras,
-            read_clip_frames,
-            save_clip_blob,
-            start_nvr,
-            stop_nvr,
-            get_nvr_segments,
             list_nvr_recordings,
             list_recorded_days,
             get_events_in_range,
@@ -539,14 +520,7 @@ pub fn run() {
             search_events,
             find_similar_events,
             reindex_semantic_search,
-            list_tracked_persons,
-            list_tracked_clusters,
-            name_tracked_group,
-            unname_tracked_group,
-            correct_track,
-            reid_backend_status,
             assign_tracked_to_known,
-            analyze_audio_window,
             get_event_timeline,
             clear_nvr_recordings,
             get_active_cameras,
@@ -555,74 +529,40 @@ pub fn run() {
             set_camera_config,
             start_rtsp_relay,
             probe_stream,
-            list_dshow_cameras,
             start_dshow_camera,
             stop_rtsp_relay,
-            get_camera_inventory,
             report_browser_cameras,
             update_scene_objects,
             start_native_camera,
             stop_native_camera,
-            stop_all_native_cameras,
             store_detections,
-            store_ai_summary,
             keep_alive_event,
-            get_agent_alerts,
-            delete_agent_alert,
-            clear_all_agent_alerts,
-            set_alert_feedback,
-            get_reflection_prompt,
             report_behavior_events,
-            get_agent_memory,
-            set_agent_memory,
-            list_agent_memory,
-            delete_agent_memory,
             get_agent_status,
-            trigger_agent_now,
             chat_app,
             get_chat_log,
             clear_chat_log,
-            query_events,
-            explore_events,
-            search_clips,
-            list_alert_conditions,
-            create_alert_condition,
-            delete_alert_condition,
-            toggle_alert_condition,
-            read_memory_file,
-            write_memory_file,
-            read_all_memory_files,
-            analyze_snapshot,
-            enroll_person,
             enroll_person_multi,
             embed_face,
             recognize_frame,
-            face_pipeline_status,
             face_debug,
-            retrain_face_classifier,
-            face_classifier_status,
             add_person_embedding,
             list_known_persons,
             delete_person,
             forget_person,
             rename_person,
             mark_person_seen,
-            list_recent_unknown_faces,
-            assign_face_to_person,
             list_unknown_clusters,
             get_person_sightings,
             get_person_events,
             list_vehicles,
             list_audio_events,
             get_person_stats,
-            get_audio_stats,
             assign_faces_to_person,
             list_person_faces,
             delete_face_embedding,
-            clear_unknown_faces,
             delete_unknown_faces,
             get_face_context,
-            list_recent_recognitions,
             create_person_from_face,
             correct_face,
             search_people,
@@ -645,24 +585,11 @@ pub fn run() {
             logout,
             request_recovery,
             recovery_reset,
-            list_gpus,
-            set_preferred_gpu,
             recommend_face_model,
             list_installed_skills,
-            get_person_history,
-            search_similar_events,
-            trigger_alarm,
             record_face_sighting,
-            list_provider_models,
             test_ai_provider,
-            get_hw_encoder,
-            fix_firewall,
-            discover_onvif,
-            get_onvif_streams,
-            get_onvif_device_info,
-            discover_and_configure_onvif,
             get_review_segments,
-            list_previews,
             set_review_segment_reviewed,
             add_bookmark,
             remove_bookmark,

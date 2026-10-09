@@ -2,108 +2,10 @@
 
 use std::sync::Arc;
 
-use serde::Deserialize;
 use tauri::State;
 
 use crate::AppState;
 
-
-#[tauri::command]
-pub async fn get_agent_alerts(
-    state: State<'_, Arc<AppState>>,
-    limit: Option<u32>,
-) -> Result<Vec<crate::AgentAlert>, String> {
-    let n = limit.unwrap_or(50) as i64;
-    let rows: Vec<(String, String, String, String, String, bool, Option<String>, String)> =
-        sqlx::query_as(
-            "SELECT id,event_id,risk_level,threat_type,summary,is_false_positive,actions_taken,created_at
-             FROM agent_alerts ORDER BY created_at DESC LIMIT ?",
-        )
-        .bind(n)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(rows.into_iter().map(|(id, event_id, risk_level, threat_type, summary, is_false_positive, actions_taken, created_at)| {
-        crate::AgentAlert { id, event_id, risk_level, threat_type, summary, is_false_positive, actions_taken, created_at }
-    }).collect())
-}
-
-#[tauri::command]
-pub async fn delete_agent_alert(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-) -> Result<(), String> {
-    // Before deleting, write the dismissed alert's pattern to false-positive memory
-    // so the agent learns not to repeat-alert on the same pattern (assistant behaviour).
-    let row: Option<(String, String)> = sqlx::query_as(
-        "SELECT threat_type, summary FROM agent_alerts WHERE id = ?"
-    ).bind(&id).fetch_optional(&state.db).await.ok().flatten();
-
-    if let Some((ttype, summary)) = row {
-        let entry = format!("{ttype}: {}", summary.chars().take(100).collect::<String>());
-        crate::agent::reinforce_memory(
-            &state.db, &format!("fp_dismiss_{}", &id[..8]), &entry, "manual"
-        ).await;
-        // Also append to the known_false_positives memory that the analysis prompt reads
-        crate::agent::append_to_memory(
-            &state.db, "known_false_positives", &entry
-        ).await;
-    }
-
-    sqlx::query("DELETE FROM agent_alerts WHERE id = ?")
-        .bind(&id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn clear_all_agent_alerts(
-    state: State<'_, Arc<AppState>>,
-) -> Result<(), String> {
-    sqlx::query("DELETE FROM agent_alerts")
-        .execute(&state.db)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn set_alert_feedback(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-    feedback: String,
-) -> Result<(), String> {
-    sqlx::query("UPDATE agent_alerts SET feedback=? WHERE id=?")
-        .bind(&feedback)
-        .bind(&id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn get_reflection_prompt(
-    state: State<'_, Arc<AppState>>,
-) -> Result<String, String> {
-    let rows: Vec<(String, String, String, i32, Option<String>)> = sqlx::query_as(
-        "SELECT risk_level, threat_type, summary, is_false_positive, feedback FROM agent_alerts ORDER BY created_at DESC LIMIT 50"
-    )
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| e.to_string())?;
-    serde_json::to_string(&rows.iter().map(|(risk, ttype, summary, is_fp, feedback)| {
-        serde_json::json!({
-            "risk_level": risk,
-            "threat_type": ttype,
-            "summary": summary,
-            "is_false_positive": is_fp,
-            "feedback": feedback,
-        })
-    }).collect::<Vec<_>>()).map_err(|e| e.to_string())
-}
 
 #[tauri::command]
 pub async fn report_behavior_events(
@@ -115,72 +17,12 @@ pub async fn report_behavior_events(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn get_agent_memory(
-    state: State<'_, Arc<AppState>>,
-    key: String,
-) -> Result<String, String> {
-    Ok(crate::agent::read_memory(&state.db, &key).await.unwrap_or_default())
-}
-
-
-#[tauri::command]
-pub async fn set_agent_memory(
-    state: State<'_, Arc<AppState>>,
-    key: String,
-    value: String,
-) -> Result<(), String> {
-    crate::agent::write_memory(&state.db, &key, &value).await;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn list_agent_memory(
-    state: State<'_, Arc<AppState>>,
-) -> Result<Vec<(String, String, String)>, String> {
-    let rows: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT key, value, updated_at FROM agent_memory ORDER BY updated_at DESC"
-    ).fetch_all(&state.db).await.map_err(|e| e.to_string())?;
-    Ok(rows)
-}
-
-#[tauri::command]
-pub async fn delete_agent_memory(
-    state: State<'_, Arc<AppState>>,
-    key: String,
-) -> Result<(), String> {
-    sqlx::query("DELETE FROM agent_memory WHERE key=?")
-        .bind(&key).execute(&state.db).await.map_err(|e| e.to_string())?;
-    Ok(())
-}
 
 #[tauri::command]
 pub async fn get_agent_status(
     state: State<'_, Arc<AppState>>,
 ) -> Result<crate::AgentStatus, String> {
     Ok(crate::agent::get_status(&state).await)
-}
-
-#[derive(Deserialize)]
-pub struct DetectionInput { label: String, score: f32 }
-
-#[tauri::command]
-pub async fn analyze_snapshot(
-    state: State<'_, Arc<AppState>>,
-    image_b64: String,
-    detections: Vec<DetectionInput>,
-    scene_context: Option<String>,
-) -> Result<String, String> {
-    let mut det_strs: Vec<String> = detections.iter()
-        .map(|d| format!("{} ({:.0}%)", d.label, d.score * 100.0))
-        .collect();
-    // Prepend rich scene context if provided (built by the frontend's buildSceneContext)
-    if let Some(ctx) = scene_context {
-        det_strs.insert(0, ctx);
-    }
-    crate::agent::analyze_snapshot(&state, image_b64, det_strs)
-        .await
-        .map_err(|e| e.to_string())
 }
 
 // The raw-string `chat_with_agent` command was DELETED: it returned the reply
@@ -388,41 +230,3 @@ pub async fn clear_chat_log(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn trigger_agent_now(
-    state: State<'_, Arc<AppState>>,
-) -> Result<(), String> {
-    let state_clone = Arc::clone(&*state);
-    tauri::async_runtime::spawn(async move {
-        crate::agent::run_now(&state_clone).await;
-    });
-    Ok(())
-}
-
-/// Assistant: natural-language event query — "What happened at the door today?"
-#[tauri::command]
-pub async fn query_events(
-    state: State<'_, Arc<AppState>>,
-    question: String,
-    history: Option<Vec<crate::agent::ChatMessage>>,
-) -> Result<String, String> {
-    // Build question with conversation history prepended so contextual phrases
-    // like "show me those" and "that person" resolve against prior messages
-    let full_question = match history {
-        Some(h) if !h.is_empty() => {
-            let hist = h.iter().take(6).map(|m| format!("[{}]: {}", m.role.to_uppercase(), m.content)).collect::<Vec<_>>().join("\n");
-            format!("CONVERSATION CONTEXT:\n{hist}\n\nCURRENT QUESTION: {question}")
-        }
-        _ => question,
-    };
-    Ok(crate::agent::query_events_nl(&state, &full_question).await)
-}
-
-/// Structured event explorer — returns event cards the frontend renders inline in chat.
-#[tauri::command]
-pub async fn explore_events(
-    state: State<'_, Arc<AppState>>,
-    filter: String,
-) -> Result<Vec<serde_json::Value>, String> {
-    Ok(crate::agent::explore_events(&state, &filter).await)
-}
