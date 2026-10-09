@@ -236,7 +236,7 @@ fn compute_body_descriptors_deep(data_dir: &Path, b: &ReidBackbone, jpeg: &[u8],
     if !valid.iter().any(|v| *v) { return Some(vec![None; n]); }
 
     let tensor = Tensor::<f32>::from_array(([n, 3, h, w], data)).ok()?;
-    let outputs = { let _t = crate::inference::infer_timer("reid");
+    let outputs = { let _t = crate::inference::infer_timer_per("reid", n as u32);
         session.run(ort::inputs![input_name.as_str() => tensor]).ok()? };
     let (_, raw) = outputs[0].try_extract_tensor::<f32>().ok()?;
     let dim = raw.len() / n;
