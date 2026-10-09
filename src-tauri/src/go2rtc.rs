@@ -175,16 +175,13 @@ pub(crate) async fn ensure_running(data_dir: &Path) -> anyhow::Result<()> {
             .output().await;
     }
 
-    // Minimal config: authed-proxy-only API on loopback, WebRTC media port,
-    // go2rtc's own RTSP/SRTP servers disabled (we only need WHEP out).
-    let cfg = format!(
-        "api:\n  listen: \"{API_ADDR}\"\nrtsp:\n  listen: \"\"\nsrtp:\n  listen: \"\"\nwebrtc:\n  listen: \":{WEBRTC_PORT}\"\nlog:\n  level: warn\n"
-    );
-    let cfg_path = data_dir.join("go2rtc").join("go2rtc.yaml");
-    tokio::fs::write(&cfg_path, cfg).await?;
+    // Passed inline, not as a file: go2rtc writes every stream registered through
+    // its API into its config file, camera passwords included. With no file it
+    // keeps them in memory. Removes the file older versions wrote.
+    let _ = tokio::fs::remove_file(data_dir.join("go2rtc").join("go2rtc.yaml")).await;
 
     let child = crate::proc::tokio_cmd(&exe)
-        .args(["-config", &cfg_path.to_string_lossy()])
+        .args(["-config", &inline_config()])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true)
@@ -192,6 +189,15 @@ pub(crate) async fn ensure_running(data_dir: &Path) -> anyhow::Result<()> {
     *guard = Some(child);
     tracing::info!("go2rtc started (api {API_ADDR}, webrtc :{WEBRTC_PORT})");
     Ok(())
+}
+
+/// Minimal config: authed-proxy-only API on loopback, WebRTC media port,
+/// go2rtc's own RTSP/SRTP servers disabled (we only need WHEP out). go2rtc reads
+/// `-config` as inline config only when it starts with `{`; anything else is a
+/// file path, and a path that doesn't open leaves go2rtc on its defaults (API and
+/// RTSP server on every interface).
+fn inline_config() -> String {
+    format!(r#"{{"api":{{"listen":"{API_ADDR}"}},"rtsp":{{"listen":""}},"srtp":{{"listen":""}},"webrtc":{{"listen":":{WEBRTC_PORT}"}},"log":{{"level":"warn"}}}}"#)
 }
 
 /// Register (or refresh) a camera's RTSP source as go2rtc stream `cam<N>`.
@@ -204,13 +210,20 @@ pub(crate) async fn register_stream(cam_id: u8, rtsp_url: &str) {
     );
     for attempt in 0..2u8 {
         match client.put(&api).timeout(std::time::Duration::from_secs(5)).send().await {
-            Ok(r) if r.status().is_success() => {
-                tracing::info!("go2rtc: registered cam{cam_id} for WebRTC live view");
+            Ok(r) => {
+                // With no config file go2rtc registers the stream, then answers 400
+                // "config file disabled" because it can't save it (see ensure_running).
+                let status = r.status();
+                let body = r.text().await.unwrap_or_default();
+                if status.is_success() || body.trim().eq_ignore_ascii_case("config file disabled") {
+                    tracing::info!("go2rtc: registered cam{cam_id} for WebRTC live view");
+                } else {
+                    tracing::warn!("go2rtc: register cam{cam_id} → HTTP {status}");
+                }
                 return;
             }
-            Ok(r) => { tracing::warn!("go2rtc: register cam{cam_id} → HTTP {}", r.status()); return; }
             Err(_) if attempt == 0 => tokio::time::sleep(std::time::Duration::from_millis(700)).await,
-            Err(e) => tracing::info!("go2rtc unavailable ({e}) — cam{cam_id} stays on HLS live view"),
+            Err(e) => tracing::info!("go2rtc unavailable ({}) — cam{cam_id} stays on HLS live view", e.without_url()),
         }
     }
 }
@@ -233,4 +246,15 @@ pub(crate) async fn whep_exchange(cam_id: u8, offer_sdp: String) -> anyhow::Resu
         anyhow::bail!("go2rtc WHEP HTTP {}", resp.status());
     }
     Ok(resp.text().await?)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_inline_config_is_json_go2rtc_reads_as_config() {
+        let cfg = super::inline_config();
+        let v: serde_json::Value = serde_json::from_str(&cfg).expect("go2rtc reads anything but {…} as a file path");
+        assert_eq!(v["api"]["listen"], super::API_ADDR);
+        assert_eq!(v["rtsp"]["listen"], "");
+    }
 }

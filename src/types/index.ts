@@ -41,7 +41,6 @@ export interface Settings {
   github_repo: string;
   device_name: string;
   auth_username: string;
-  auth_password_hash: string;
   // AI Provider
   ai_provider: string;
   openai_api_key: string;

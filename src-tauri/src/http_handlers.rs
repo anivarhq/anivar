@@ -109,18 +109,28 @@ pub(crate) async fn cam_proxy(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
-    let cam_url = match params.get("url") {
-        Some(u) if !u.is_empty() => u.clone(),
-        _ => return (StatusCode::BAD_REQUEST, "Missing url parameter").into_response(),
+    // The camera's saved URL, looked up by slot: its login never travels in a
+    // query string or sits in the webview's storage.
+    let Some(cam) = params.get("cam").and_then(|c| c.parse::<u8>().ok()).filter(|c| *c < 16) else {
+        return (StatusCode::BAD_REQUEST, "Missing cam parameter").into_response();
     };
+    let Some(app_state) = s.app_handle.try_state::<Arc<AppState>>() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let stored: String = sqlx::query_scalar("SELECT source_url FROM camera_configs WHERE cam_id=?")
+        .bind(cam as i64).fetch_optional(&s.db).await.ok().flatten().unwrap_or_default();
+    let saved = crate::cam_config::open_url(&app_state.master_key, &stored);
+    if saved.is_empty() {
+        return (StatusCode::NOT_FOUND, "No camera in this slot").into_response();
+    }
+    // The saved URL can be the camera's base address; find its stream as Live does.
+    let cam_url = crate::db::probe_mjpeg_url(saved.clone()).await.unwrap_or(saved);
     // SSRF guard — LAN cameras only (see cam_url_is_local).
     if !cam_url_is_local(&cam_url).await {
         return (StatusCode::FORBIDDEN,
             "cam-proxy only reaches local-network cameras (private IPs, localhost, or .local names)"
         ).into_response();
     }
-    let cam_user = params.get("user").cloned().unwrap_or_default();
-    let cam_pass = params.get("pass").cloned().unwrap_or_default();
 
     // Fetch the remote MJPEG stream and pipe it through.
     // Use connect_timeout only — NOT a read/response timeout.
@@ -132,12 +142,8 @@ pub(crate) async fn cam_proxy(
         .build()
         .unwrap_or_default();
 
-    let mut req = client.get(&cam_url);
-    if !cam_user.is_empty() {
-        req = req.basic_auth(&cam_user, if cam_pass.is_empty() { None } else { Some(&cam_pass) });
-    }
-
-    match req.send().await {
+    // A login in the URL is sent as Basic auth.
+    match client.get(&cam_url).send().await {
         Ok(resp) => {
             let status = resp.status();
             let ct     = resp.headers().get(reqwest::header::CONTENT_TYPE)
@@ -157,7 +163,7 @@ pub(crate) async fn cam_proxy(
                 .body(body)
                 .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
-        Err(e) => (StatusCode::BAD_GATEWAY, format!("Cannot connect to camera: {e}")).into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, format!("Cannot connect to camera: {}", e.without_url())).into_response(),
     }
 }
 

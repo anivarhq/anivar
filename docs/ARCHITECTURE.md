@@ -257,7 +257,7 @@ Per-user data is written to Tauri's `app_data_dir()`:
 | `blobs/` | Face and display crops kept out of the database |
 | `logs/` | Size-capped rolling application log |
 | `ffmpeg(.exe)`, `ffprobe(.exe)`, `ffmpeg.pin` | The pinned ffmpeg pair, when the machine has none of its own |
-| `.master_key` | Local key that AES-GCM-encrypts secret settings fields (Telegram tokens, API keys) |
+| `.master_key` | Local key that AES-GCM-encrypts secret settings fields (Telegram tokens, API keys) and saved camera URLs |
 
 Removing a model in Arsenal deletes only `skills/<id>/`; footage,
 events and enrolled people stay. **Nothing in the source tree should ever

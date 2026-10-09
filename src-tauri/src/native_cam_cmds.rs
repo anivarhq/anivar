@@ -111,7 +111,7 @@ pub async fn get_camera_telemetry(
 
     Ok(CameraTelemetry {
         cam_id, name, brand, source_type,
-        source_url_masked: mask_stream_url(&source_url),
+        source_url_masked: mask_stream_url(&crate::cam_config::open_url(&state.master_key, &source_url)),
         device_id, transport,
         online, last_frame_secs,
         nvr_enabled, recording: nvr_enabled && online,

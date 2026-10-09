@@ -147,8 +147,6 @@ pub struct Settings {
     pub device_name: String,         // friendly name shown during discovery, e.g. "Living Room PC"
     #[serde(default)]
     pub auth_username: String,       // username for mobile login (empty = token-only mode)
-    #[serde(default)]
-    pub auth_password_hash: String,  // remote login: legacy SHA-256 hex (HTTP /login)
     // ── Desktop login gate (optional) — Argon2id + Telegram recovery/2FA ──────
     #[serde(default)]
     pub login_required: bool,             // master toggle for the desktop lock screen
@@ -497,7 +495,6 @@ impl Default for Settings {
             github_repo: String::new(),
             device_name: String::new(),
             auth_username: String::new(),
-            auth_password_hash: String::new(),
             login_required: false,
             login_password_hash: String::new(),
             auth_2fa_enabled: false,

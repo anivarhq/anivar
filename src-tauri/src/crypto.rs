@@ -73,7 +73,7 @@ pub(crate) fn encrypt_secret(key: &[u8; 32], plaintext: &str) -> String {
 /// `Err` when the value IS encrypted but can't be decrypted with this key. A
 /// failure used to return the ciphertext itself, which was then sent to OpenAI
 /// or Telegram as if it were the key.
-fn try_decrypt(key: &[u8; 32], stored: &str) -> Result<String, ()> {
+pub(crate) fn try_decrypt(key: &[u8; 32], stored: &str) -> Result<String, ()> {
     if stored.is_empty() || !stored.starts_with("enc:") { return Ok(stored.to_string()); }
     let rest = &stored[4..];
     let colon = rest.find(':').ok_or(())?;

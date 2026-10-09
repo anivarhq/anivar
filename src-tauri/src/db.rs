@@ -772,7 +772,7 @@ pub(crate) fn migrate_settings(s: &mut Settings) {
 /// Tries common paths (server-side so no CSP issues).
 /// Returns the working stream URL or the original if none found.
 #[tauri::command]
-pub async fn probe_mjpeg_url(base_url: String, user: Option<String>, pass: Option<String>) -> Result<String, String> {
+pub async fn probe_mjpeg_url(base_url: String) -> Result<String, String> {
     const PATHS: &[&str] = &[
         "",
         "/video",
@@ -800,13 +800,8 @@ pub async fn probe_mjpeg_url(base_url: String, user: Option<String>, pass: Optio
 
     for path in PATHS {
         let candidate = format!("{}{}", base, path);
-        let mut req = client.get(&candidate);
-        if let (Some(u), _) = (&user, &pass) {
-            if !u.is_empty() {
-                req = req.basic_auth(u, pass.as_deref().filter(|p| !p.is_empty()));
-            }
-        }
-        if let Ok(resp) = req.send().await {
+        // A login in the URL (`http://user:pass@…`) is sent as Basic auth.
+        if let Ok(resp) = client.get(&candidate).send().await {
             if resp.status().is_success() {
                 let ct = resp.headers()
                     .get(reqwest::header::CONTENT_TYPE)
@@ -815,7 +810,7 @@ pub async fn probe_mjpeg_url(base_url: String, user: Option<String>, pass: Optio
                     .to_lowercase();
                 // Valid MJPEG stream returns multipart or image content
                 if ct.contains("multipart") || ct.contains("mjpeg") || ct.contains("jpeg") || ct.contains("image") {
-                    tracing::info!("MJPEG probe found stream at: {}", candidate);
+                    tracing::info!("MJPEG probe found stream at: {}", crate::native_cam_cmds::mask_stream_url(&candidate));
                     return Ok(candidate);
                 }
             }
