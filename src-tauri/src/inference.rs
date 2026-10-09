@@ -1487,13 +1487,47 @@ static INFER_STATS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashM
     std::sync::OnceLock::new();
 
 /// RAII timer: created before the gpu guard, records on drop (after run).
-pub(crate) struct InferTimer { model: &'static str, start: std::time::Instant }
+/// Every `session.run` site creates one first, which also makes it THE place to
+/// set the calling thread's float mode (`ftz_on_this_thread`).
+pub(crate) struct InferTimer { model: &'static str, start: std::time::Instant, items: u32 }
 pub(crate) fn infer_timer(model: &'static str) -> InferTimer {
-    InferTimer { model, start: std::time::Instant::now() }
+    infer_timer_per(model, 1)
 }
+/// For a batched run: records the time per item (Re-ID runs a batch of crops),
+/// so the stats line compares like with like whatever the batch size.
+pub(crate) fn infer_timer_per(model: &'static str, items: u32) -> InferTimer {
+    ftz_on_this_thread(model);
+    InferTimer { model, start: std::time::Instant::now(), items: items.max(1) }
+}
+
+/// Flush-to-zero + denormals-are-zero on the CALLING thread, once per thread.
+///
+/// ORT's `with_flush_to_zero` sets it on the session's pool threads, but on a
+/// calling thread only for whichever thread builds the process's FIRST session,
+/// and the calling thread runs part of every inference itself. 16% of the Re-ID
+/// model's weights are subnormal, so whether Re-ID ran at ~46 ms or ~485 ms
+/// (2 s p95) depended on which model loaded first: YAMNet loads on another thread
+/// at the first loud sound. Logs the first time a thread had it off.
+#[cfg(target_arch = "x86_64")]
+fn ftz_on_this_thread(model: &'static str) {
+    thread_local!(static DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
+    if DONE.with(|d| d.replace(true)) { return; }
+    const FTZ_DAZ: u32 = (1 << 15) | (1 << 6);
+    let mut csr: u32 = 0;
+    // SAFETY: reads and writes only this thread's MXCSR; FTZ/DAZ change nothing
+    // but how subnormal floats are treated (flushed to zero).
+    unsafe { std::arch::asm!("stmxcsr [{}]", in(reg) &mut csr as *mut u32, options(nostack, preserves_flags)); }
+    if csr & FTZ_DAZ == FTZ_DAZ { return; }
+    tracing::info!("flush-to-zero was off on this inference thread (first model: {model}) — turning it on");
+    let on = csr | FTZ_DAZ;
+    unsafe { std::arch::asm!("ldmxcsr [{}]", in(reg) &on as *const u32, options(nostack, preserves_flags, readonly)); }
+}
+#[cfg(not(target_arch = "x86_64"))]
+fn ftz_on_this_thread(_model: &'static str) {}
+
 impl Drop for InferTimer {
     fn drop(&mut self) {
-        let ms = self.start.elapsed().as_secs_f64() * 1000.0;
+        let ms = self.start.elapsed().as_secs_f64() * 1000.0 / self.items as f64;
         let mut g = INFER_STATS.get_or_init(Default::default)
             .lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let acc = g.entry(self.model).or_insert_with(|| InferAcc {
@@ -1815,16 +1849,25 @@ fn build_ort_session_at(model_path: &std::path::Path, force_cpu: bool) -> anyhow
     tracing::info!("ORT accelerator: {ep_label}  (model {:?})",
         model_path.file_name().unwrap_or_default());
 
-    let session = builder
+    let mut builder = builder
         .with_optimization_level(GraphOptimizationLevel::Level3)
         .map_err(|e| anyhow::anyhow!("ORT opt-level: {e}"))?
         .with_intra_threads(4)
         .map_err(|e| anyhow::anyhow!("ORT threads: {e}"))?
         // Subnormal floats trap into slow x86 microcode. 16% of the NVIDIA Re-ID
         // model's weights are subnormal: one CPU crop took 3.3 s without this and
-        // 21 ms with it, with the same embedding (cosine 1.0).
+        // 21 ms with it, with the same embedding (cosine 1.0). This covers ORT's
+        // pool threads; `ftz_on_this_thread` covers the thread calling run().
         .with_flush_to_zero()
-        .map_err(|e| anyhow::anyhow!("ORT flush-to-zero: {e}"))?
+        .map_err(|e| anyhow::anyhow!("ORT flush-to-zero: {e}"))?;
+    if force_cpu {
+        // About ten CPU-only background models (face, plates, audio, search, …),
+        // each with 4 intra-op threads that spin between runs by default: idle
+        // cores burnt waiting for work that comes a few times a second at most.
+        builder = builder.with_intra_op_spinning(false)
+            .map_err(|e| anyhow::anyhow!("ORT spinning: {e}"))?;
+    }
+    let session = builder
         .commit_from_file(model_path)
         .map_err(|e| anyhow::anyhow!("ORT load model: {e}"))?;
     Ok(session)
@@ -1855,3 +1898,16 @@ pub(crate) fn preprocess_jpeg_for_yolo(jpeg: &[u8]) -> anyhow::Result<(Vec<f32>,
     Ok((data, w, h))
 }
 
+
+#[cfg(all(test, target_arch = "x86_64"))]
+mod flush_to_zero_tests {
+    #[test]
+    fn the_first_inference_on_a_thread_flushes_subnormals() {
+        std::thread::spawn(|| {
+            let tiny = std::hint::black_box(f32::MIN_POSITIVE / 4.0); // subnormal
+            assert_ne!(std::hint::black_box(tiny) * 1.0, 0.0, "a fresh thread keeps subnormals");
+            drop(super::infer_timer("ftz-test"));
+            assert_eq!(std::hint::black_box(tiny) * 1.0, 0.0, "after its first timer, they flush to zero");
+        }).join().unwrap();
+    }
+}
