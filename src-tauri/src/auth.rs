@@ -14,7 +14,9 @@
 //!   sends are **throttled** so an attacker can't spam the owner's Telegram.
 //! - Brute force: failed unlocks trigger an **exponential-backoff lockout** (never
 //!   permanent — Telegram recovery always works).
-//! - The `unlocked` state lives in the backend (not a frontend-only flag).
+//! - The `unlocked` state lives in the backend, but only the UI checks it (via
+//!   `auth_status`): the gate hides the window; commands and the local server
+//!   don't consult it.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};

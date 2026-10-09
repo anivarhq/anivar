@@ -45,7 +45,7 @@ This is a small project without a paid security team. There is **no bug bounty**
   setting is a privacy guarantee, and a leak defeats it
 - **Anything that recovers or exfiltrates biometric data** (face descriptors,
   body-appearance vectors) — see [PRIVACY.md](PRIVACY.md)
-- Recovery of encrypted secrets (API keys, bot tokens) from disk
+- Recovery of encrypted secrets (API keys, bot tokens, camera logins) from disk
 - SSRF via the camera proxy or ONVIF discovery
 - Command injection through camera URLs, filenames, or agent input
 - **Prompt injection that makes the agent act rather than answer** — the agent
@@ -58,6 +58,8 @@ This is a small project without a paid security team. There is **no bug bounty**
 
 - Attacks needing physical access to an unlocked machine. Local admin is game
   over on any desktop application
+- Reaching data past the login screen by calling the backend directly. The gate
+  guards the window only, as documented above
 - **An unencrypted database on an unencrypted disk.** Known and documented —
   SQLite is plaintext apart from secrets; full-disk encryption is the answer, and
   PRIVACY.md says so. A *new* way to read it remotely is very much in scope
@@ -99,7 +101,9 @@ Useful context if you are looking for something:
   your network can reach it. Remote viewing does not depend on it — Tailscale
   Funnel proxies to loopback. Either way requests carry a token, compared in
   constant time and rate-limited per IP, and paths are validated. The camera
-  proxy is restricted to private ranges with DNS-rebinding blocked
+  proxy fetches only a camera you configured (looked up by slot, never a URL
+  from the request), only when every address its name resolves to is private,
+  and it connects to the addresses it checked, so DNS rebinding can't redirect it
 - **Footage wipes deliberately exclude face data**, so a retention purge cannot
   silently destroy enrolments
 - **Downloaded binaries are pinned, not bundled.** ffmpeg, ffprobe and go2rtc
@@ -107,8 +111,10 @@ Useful context if you are looking for something:
   value compiled into the app; GPU runtime packages are checked against the
   digest PyPI publishes. Everything is staged and proven to run before it
   replaces what is installed, so a half-finished download never executes
-- Secrets are AES-GCM encrypted at rest; the login gate is Argon2id with
-  constant-time comparison
+- Secrets, camera addresses included, are AES-GCM encrypted at rest
+- The optional login gate is Argon2id with constant-time comparison, plus an
+  optional six-digit code sent over Telegram. The app's interface enforces it:
+  it guards the window, not the backend or the data on disk
 - CI runs `cargo audit` on every push and fails on any known vulnerability, and
   `npm audit` against production dependencies, failing on high severity
 

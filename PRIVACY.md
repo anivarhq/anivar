@@ -155,8 +155,11 @@ Recordings, the SQLite database, blobs and model weights are all under it.
   carry the camera's login) — are encrypted at rest with AES-GCM, keyed per
   install. Database backups written by 0.1.7 and earlier hold camera addresses
   unencrypted.
-- **Login**, if enabled, uses Argon2id with constant-time comparison, and
-  optional TOTP 2FA.
+- **The login screen**, if enabled, checks an Argon2id password (constant-time
+  comparison), with an optional second step: a six-digit code sent over
+  Telegram. It locks the app's window, not the data: the backend and the files
+  on disk don't check it, so it stops someone opening the app at your desk, not
+  someone who can run programs as you.
 - **The database itself is not encrypted.** Face descriptors, event metadata and
   crops sit in a plain SQLite file. Anyone with access to the folder — or to a
   backup of it, or to the disk — can read them. **If the machine holds
