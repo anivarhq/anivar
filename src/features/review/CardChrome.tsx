@@ -28,7 +28,7 @@
  * on all three card types.
  */
 import { useId, useState, type ReactNode } from "react";
-import { Trash2, Bookmark, Sparkles, Download, Info, X, MapPin, Clock, Film } from "lucide-react";
+import { Trash2, Bookmark, Sparkles, Download, Info, X, MapPin, Clock, Film, Share2 } from "lucide-react";
 import styles from "./ReviewFeed.module.css";
 import { Modal } from "../../components/ui/Modal";
 
@@ -79,11 +79,12 @@ function ActionBtn({ title, onClick, active, danger, pinned, children }: {
  * the card's real capabilities.
  */
 export function CardActions({
-  saved, onBookmark, onSimilar, onDownload, onDelete, deleteTitle, bookmarkTitle,
+  saved, onBookmark, onSimilar, onShare, onDownload, onDelete, deleteTitle, bookmarkTitle,
 }: {
   saved?: boolean;
   onBookmark?: () => void;
   onSimilar?: () => void;
+  onShare?: () => void;
   onDownload?: () => void;
   onDelete?: () => void;
   deleteTitle?: string;
@@ -104,6 +105,11 @@ export function CardActions({
       {onSimilar && (
         <ActionBtn title="Find visually similar events" onClick={onSimilar}>
           <Sparkles size={10} />
+        </ActionBtn>
+      )}
+      {onShare && (
+        <ActionBtn title="Share a link to this clip" onClick={onShare}>
+          <Share2 size={10} />
         </ActionBtn>
       )}
       {onDownload && (

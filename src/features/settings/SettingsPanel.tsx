@@ -1,4 +1,5 @@
-﻿import { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo } from "react";
+﻿import { SHARE_EXPIRY } from "../../components/ui/ShareDialog";
+import { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { applyTheme, loadSurface, type AppSurface } from "../../App";
 import { useStore } from "../../store";
@@ -1523,11 +1524,9 @@ export function SettingsPanel() {
               // 0 is a real choice ("Until app restart"), so never `|| 30`.
               onChange={e => { const v = parseInt(e.target.value, 10); patch("live_share_default_minutes", Number.isNaN(v) ? 30 : v); }}
               className={styles.numInput} style={{ width: 180 }}>
-              <option value={15}>15 minutes</option>
-              <option value={30}>30 minutes (default)</option>
-              <option value={60}>1 hour</option>
-              <option value={1440}>24 hours</option>
-              <option value={0}>Until app restart</option>
+              {SHARE_EXPIRY.map(o => (
+                <option key={o.mins} value={o.mins}>{o.label}{o.mins === 30 ? " (default)" : ""}</option>
+              ))}
             </select>
           </Field>
 
