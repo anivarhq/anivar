@@ -391,7 +391,6 @@ const DEFAULT: Settings = {
   github_repo: "",
   device_name: "",
   auth_username: "",
-  auth_password_hash: "",
   nvr_enabled: true,
   nvr_segment_mins: 1,
   nvr_max_gb: 50,

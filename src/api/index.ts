@@ -312,8 +312,7 @@ export const api = {
   requestRecovery: () => invoke<string>("request_recovery"),
   recoveryReset: (challenge: string, code: string, newPassword: string, remember: boolean) =>
     invoke<LoginResult>("recovery_reset", { challenge, code, newPassword, remember }),
-  probeMjpegUrl: (baseUrl: string, user?: string, pass?: string) =>
-    invoke<string>("probe_mjpeg_url", { baseUrl, user: user ?? null, pass: pass ?? null }),
+  probeMjpegUrl: (baseUrl: string) => invoke<string>("probe_mjpeg_url", { baseUrl }),
   updateCheck:   () => invoke<UpdateInfo>("update_check"),
   /** Downloads, verifies and installs; the app then exits into the installer
    *  (Windows) or restarts (macOS/Linux), so a resolved promise is rare. */

@@ -151,8 +151,10 @@ Recordings, the SQLite database, blobs and model weights are all under it.
 
 ## Security of what is stored
 
-- **Secrets** — API keys, bot tokens, passwords — are encrypted at rest with
-  AES-GCM, keyed per install.
+- **Secrets** — API keys, bot tokens, passwords, and camera addresses (which
+  carry the camera's login) — are encrypted at rest with AES-GCM, keyed per
+  install. Database backups written by 0.1.7 and earlier hold camera addresses
+  unencrypted.
 - **Login**, if enabled, uses Argon2id with constant-time comparison, and
   optional TOTP 2FA.
 - **The database itself is not encrypted.** Face descriptors, event metadata and

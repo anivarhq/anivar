@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { useStore } from "../../store";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../../api";
-import { writeCamSource } from "../../lib/camSource";
+import { writeCamSource, withUrlCredentials } from "../../lib/camSource";
 import { Wifi, Search, Camera, Monitor, CheckCircle2, Loader, RefreshCw, Link, X } from "lucide-react";
 import styles from "./LivePanel.module.css";
 
@@ -165,7 +165,15 @@ export function AddCameraModal({ nextSlotId, onClose, onAdded, initialTab }: {
 
   // ── Save helpers ─────────────────────────────────────────────────────────────
   const buildUrl = () => {
-    if (!brand?.urlTemplate) return draft.url;
+    if (!brand?.urlTemplate) {
+      // A typed login goes into the URL, which is what's saved (encrypted) and
+      // what ffmpeg reads; it used to be dropped for every typed URL. The RTSP
+      // username field defaults to "admin", so it only counts with a password.
+      const mjpeg = brand?.type === "mjpeg";
+      const user = mjpeg ? draft.mjpegUser : draft.user;
+      const pass = mjpeg ? draft.mjpegPass : draft.pass;
+      return pass || mjpeg ? withUrlCredentials(draft.url, user, pass) : draft.url;
+    }
     return brand.urlTemplate
       .replace("{user}", encodeURIComponent(draft.user))
       .replace("{pass}", encodeURIComponent(draft.pass))
@@ -211,16 +219,8 @@ export function AddCameraModal({ nextSlotId, onClose, onAdded, initialTab }: {
         brand:       overrides?.brand ?? resolvedBrand,
       };
       await api.setCameraConfig(cfg);
-      // Auto-start via localStorage (SSOT mapping in lib/camSource). MJPEG cameras
-      // also stash Basic-Auth creds, which only exist at add time (not in the config).
-      const extra: Record<string, unknown> = {};
-      if (cfg.source_type === "mjpeg") {
-        const authUser = tab === "ip" && brand?.type === "mjpeg" ? draft.mjpegUser : draft.user;
-        const authPass = tab === "ip" && brand?.type === "mjpeg" ? draft.mjpegPass : draft.pass;
-        if (authUser) extra.authUser = authUser;
-        if (authPass) extra.authPass = authPass;
-      }
-      writeCamSource(nextSlotId, cfg, extra);
+      // Auto-start via localStorage (SSOT mapping in lib/camSource).
+      writeCamSource(nextSlotId, cfg);
       showToast(`${cfg.name} added`, "success");
       onAdded(cfg); onClose();
     } catch (e: any) { showToast(e.message ?? "Failed to add camera", "error"); }

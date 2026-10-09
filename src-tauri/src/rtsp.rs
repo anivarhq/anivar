@@ -48,6 +48,7 @@ async fn cam_detect_url(state: &AppState, cam: u8) -> Option<String> {
         .bind(cam as i64)
         .fetch_optional(&state.db).await
         .ok().flatten()
+        .map(|u| crate::cam_config::open_url(&state.master_key, &u))
         .filter(|u| !u.trim().is_empty())
 }
 

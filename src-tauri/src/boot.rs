@@ -563,6 +563,7 @@ pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::
             // A slot left marked "anonymized" by a camera since removed (or replaced
             // by a network camera) mustn't claim protection it doesn't have.
             crate::cam_config::drop_stale_anonymize(&state2).await;
+            crate::cam_config::seal_plain_urls(&state2).await;
             // (HLS dir is wiped synchronously at setup start — before the
             // frontend can race a capture spawn. Never wipe it here: a capture
             // may already be writing the fresh playlist.)
@@ -585,6 +586,7 @@ pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::
             let mut network: Vec<(u8, String)> = Vec::new();
             let mut legacy:  Vec<u8> = Vec::new();
             for (cam, ty, url, dev) in &rows {
+                let url = &crate::cam_config::open_url(&state2.master_key, url);
                 if ty == "native" {
                     let device = if !url.is_empty() { url.clone() } else { dev.clone() };
                     if device.is_empty() { legacy.push(*cam as u8); }

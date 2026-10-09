@@ -8,6 +8,7 @@ import { HlsFeed } from "./HlsFeed";
 import { WebRtcFeed } from "./WebRtcFeed";
 import { anonymizeTooltip } from "./anonTooltip";
 import { BOX_COLOR } from "../../lib/palette";
+import { storeCamSource, withUrlCredentials, hideUrlLogin } from "../../lib/camSource";
 
 import styles from "./CameraView.module.css";
 import {
@@ -130,37 +131,28 @@ const PRESENCE_LABELS = new Set([
 
 type CameraSource =
   | { kind: "native"; nativeIndex: number; deviceId?: string; label: string }
-  | { kind: "mjpeg";  url: string; label: string; authUser?: string; authPass?: string }
-  | { kind: "rtsp";   url: string; label: string; authUser?: string; authPass?: string };
+  | { kind: "mjpeg";  url: string; label: string }
+  | { kind: "rtsp";   url: string; label: string };
 
 /**
  * Probe a camera base URL server-side to find the actual MJPEG stream endpoint.
  * Uses the Rust probe_mjpeg_url command which bypasses browser CSP.
  */
-async function resolveMjpegUrl(url: string, authUser?: string, authPass?: string): Promise<string> {
+async function resolveMjpegUrl(url: string): Promise<string> {
   if (!url) return url;
   try {
-    const resolved = await api.probeMjpegUrl(url, authUser, authPass);
+    const resolved = await api.probeMjpegUrl(url);
     return resolved || url;
   } catch { return url; }
 }
 
 /**
- * Build a proxied URL for an MJPEG camera stream.
- * Routes through localhost:PORT/cam-proxy to bypass Tauri CSP restrictions.
- * Includes optional Basic Auth credentials so the proxy can authenticate with the camera.
+ * Proxied URL for a camera's MJPEG stream, through localhost:PORT/cam-proxy
+ * (bypasses Tauri CSP). The server looks the camera's URL and login up by slot.
  */
-function buildProxyUrl(
-  streamUrl: string,
-  streamInfo: { port: number; auth_token: string } | null,
-  authUser?: string,
-  authPass?: string,
-): string {
-  if (!streamInfo || !streamUrl) return streamUrl;
-  let url = `http://localhost:${streamInfo.port}/cam-proxy?url=${encodeURIComponent(streamUrl)}&token=${streamInfo.auth_token}`;
-  if (authUser) url += `&user=${encodeURIComponent(authUser)}`;
-  if (authPass) url += `&pass=${encodeURIComponent(authPass)}`;
-  return url;
+function buildProxyUrl(camId: number, streamInfo: { port: number; auth_token: string } | null): string | undefined {
+  if (!streamInfo) return undefined;
+  return `http://localhost:${streamInfo.port}/cam-proxy?cam=${camId}&token=${streamInfo.auth_token}`;
 }
 
 interface BrowserCamera { deviceId: string; label: string }
@@ -640,19 +632,36 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
       } catch { localStorage.removeItem(key); return; }
 
       // Slot removed/disabled in the DB ⇒ drop the stale entry, start nothing.
+      let cfg: Awaited<ReturnType<typeof api.getCameraConfigs>>[number] | undefined;
       try {
-        const cfgs = await api.getCameraConfigs();
-        const cfg = cfgs.find(c => c.cam_id === camId);
+        cfg = (await api.getCameraConfigs()).find(c => c.cam_id === camId);
         if (cfg && !cfg.enabled) { localStorage.removeItem(key); return; }
       } catch { /* config unreadable — fall through; backend still guards */ }
       if (cancelled) return;
+
+      // A network camera's URL (and its login) comes from its config, which the
+      // DB keeps encrypted. Older versions also kept it here, with MJPEG logins
+      // in separate fields: those move into the saved URL, then the copy goes.
+      if (raw?.kind === "rtsp" || raw?.kind === "mjpeg") {
+        if (raw.url || raw.authUser || raw.authPass) {
+          if (cfg?.source_url && (raw.authUser || raw.authPass)) {
+            const source_url = withUrlCredentials(cfg.source_url, raw.authUser ?? "", raw.authPass ?? "");
+            if (source_url !== cfg.source_url) {
+              try { await api.setCameraConfig({ ...cfg, source_url }); cfg = { ...cfg, source_url }; } catch { /* keep the old copy */ return; }
+            }
+          }
+          storeCamSource(camId, raw);
+        }
+        if (!cfg?.source_url) return;
+        raw = { kind: raw.kind, label: raw.label, url: cfg.source_url };
+      }
 
       // MIGRATION: the browser getUserMedia camera (kind "usb") is gone — USB cameras
       // are now captured SERVER-SIDE (cross-platform ffmpeg). Convert any persisted
       // "usb" source to "native" so it runs through the server path + /stream display.
       if (raw?.kind === "usb") {
         raw = { kind: "native", nativeIndex: 0, label: raw.label || "USB Camera", deviceId: raw.deviceId };
-        try { localStorage.setItem(key, JSON.stringify(raw)); } catch { /* quota */ }
+        storeCamSource(camId, raw);
       }
       const src: CameraSource = raw;
       setSource(src);
@@ -818,15 +827,12 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
     setError(null);
 
     if (chosen.kind === "mjpeg") {
-      const authUser = (chosen as any).authUser as string | undefined;
-      const authPass = (chosen as any).authPass as string | undefined;
       // Resolve the actual MJPEG stream URL if only a base URL was saved
-      const resolvedUrl = await resolveMjpegUrl((chosen as any).url ?? "", authUser, authPass);
-      if (resolvedUrl !== (chosen as any).url) {
-        const updated = { ...chosen, url: resolvedUrl, authUser, authPass };
+      const resolvedUrl = await resolveMjpegUrl(chosen.url ?? "");
+      if (resolvedUrl !== chosen.url) {
+        const updated = { ...chosen, url: resolvedUrl };
         setSource(updated);
-        try { localStorage.setItem(`cam_source_${camId}`, JSON.stringify(updated)); } catch { }
-        selectSource(updated as any);
+        selectSource(updated);
       }
       setIsActive(true);
       if (camId === 0) { setCameraActive(true); }
@@ -849,10 +855,7 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
       // http:// or https:// URLs are MJPEG, not RTSP — never need ffmpeg relay
       if (url.startsWith("http://") || url.startsWith("https://")) {
         const resolvedUrl = await resolveMjpegUrl(url);
-        const authUser2 = (chosen as any).authUser as string | undefined;
-        const authPass2 = (chosen as any).authPass as string | undefined;
-        const resolvedUrl2 = await resolveMjpegUrl(url, authUser2, authPass2);
-        const mjpegSrc = { kind: "mjpeg" as const, url: resolvedUrl2, label: (chosen as any).label ?? url, authUser: authUser2, authPass: authPass2 };
+        const mjpegSrc = { kind: "mjpeg" as const, url: resolvedUrl, label: chosen.label ?? url };
         // Re-route through the mjpeg branch via selectSource — it starts the
         // SERVER relay (detection + recording) and only falls back to the
         // browser capture loop if the relay can't start. The old code here
@@ -860,7 +863,6 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
         // pushed frames through process_frame for the same camera (double
         // motion/IPC work per frame).
         setSource(mjpegSrc);
-        try { localStorage.setItem(`cam_source_${camId}`, JSON.stringify(mjpegSrc)); } catch { }
         selectSource(mjpegSrc);
         return;
       }
@@ -871,7 +873,7 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
         setIsActive(true);
         if (camId === 0) { setCameraActive(true); }
       } catch (e: any) {
-        setError(e?.message ?? `RTSP relay failed. Make sure ffmpeg is installed.\nFallback: Open in VLC: ${url}`);
+        setError(e?.message ?? `RTSP relay failed. Make sure ffmpeg is installed.\nFallback: Open in VLC: ${hideUrlLogin(url)}`);
       }
       return;
     }
@@ -917,7 +919,7 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
 
   const selectSource = (src: CameraSource) => {
     setSource(src);
-    try { localStorage.setItem(`cam_source_${camId}`, JSON.stringify(src)); } catch { }
+    storeCamSource(camId, src);
     startCamera(src);
   };
 
@@ -1158,7 +1160,7 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
             <img
               aria-hidden
               crossOrigin="anonymous"
-              src={buildProxyUrl((source as any).url, streamInfo, (source as any).authUser, (source as any).authPass)}
+              src={buildProxyUrl(camId, streamInfo)}
               className={styles.videoBlurBg}
               alt=""
             />
@@ -1167,11 +1169,11 @@ export function CameraView({ camId = 0, onRemove, cornered }: {
             <img
               ref={mjpegImgRef}
               crossOrigin="anonymous"
-              src={buildProxyUrl((source as any).url, streamInfo, (source as any).authUser, (source as any).authPass)}
+              src={buildProxyUrl(camId, streamInfo)}
               className={styles.video}
               alt="MJPEG stream"
               onError={() => setError(
-                `Cannot connect to camera at ${(source as any).url}\n\nMake sure the camera is on and reachable at that address.`
+                `Cannot connect to camera at ${hideUrlLogin(source.url)}\n\nMake sure the camera is on and reachable at that address.`
               )}
             />
           )}

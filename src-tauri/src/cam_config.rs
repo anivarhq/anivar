@@ -82,6 +82,36 @@ fn keep_usb_flags(flags: &serde_json::Map<String, serde_json::Value>, usb: &[i64
         .collect()
 }
 
+/// Camera URLs carry the camera's login (`rtsp://user:pass@host/…`), so they're
+/// stored encrypted with the app's `.master_key`; every reader opens them here.
+/// A value this key can't open (the key file was replaced) is returned as it is:
+/// saving the camera again keeps it, and restoring the key file brings it back.
+pub(crate) fn open_url(key: &[u8; 32], stored: &str) -> String {
+    crate::crypto::try_decrypt(key, stored).unwrap_or_else(|_| stored.to_string())
+}
+
+/// Encrypts camera URLs saved before they were encrypted. Runs at boot;
+/// `encrypt_secret` leaves an already-encrypted value alone.
+pub(crate) async fn seal_plain_urls(state: &AppState) {
+    let rows: Vec<(i64, String, String)> = sqlx::query_as(
+        "SELECT cam_id, source_url, detect_url FROM camera_configs
+         WHERE (source_url <> '' AND source_url NOT LIKE 'enc:%')
+            OR (detect_url <> '' AND detect_url NOT LIKE 'enc:%')"
+    ).fetch_all(&state.db).await.unwrap_or_default();
+    if rows.is_empty() { return; }
+    let Ok(mut conn) = state.db.acquire().await else { return };
+    // Zeroes the plaintext's old bytes instead of leaving them in the file's free space.
+    let _ = sqlx::query("PRAGMA secure_delete=ON").execute(&mut *conn).await;
+    for (cam, url, det) in &rows {
+        let _ = sqlx::query("UPDATE camera_configs SET source_url=?, detect_url=? WHERE cam_id=?")
+            .bind(crate::crypto::encrypt_secret(&state.master_key, url))
+            .bind(crate::crypto::encrypt_secret(&state.master_key, det))
+            .bind(cam).execute(&mut *conn).await;
+    }
+    let _ = sqlx::query("PRAGMA secure_delete=OFF").execute(&mut *conn).await;
+    tracing::info!("encrypted the saved URLs of {} camera(s)", rows.len());
+}
+
 /// Return configurations for all 16 camera slots.
 #[tauri::command]
 pub async fn get_camera_configs(state: State<'_, Arc<AppState>>) -> Result<Vec<CameraConfig>, String> {
@@ -89,11 +119,11 @@ pub async fn get_camera_configs(state: State<'_, Arc<AppState>>) -> Result<Vec<C
         sqlx::query_as("SELECT cam_id,name,source_type,source_url,device_id,enabled,transport,brand,detect_url FROM camera_configs ORDER BY cam_id ASC")
             .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
     let mut configs: Vec<CameraConfig> = rows.into_iter().map(|(id, name, st, url, dev, en, tr, brand, det)| CameraConfig {
-        cam_id: id as u8, name, source_type: st, source_url: url,
+        cam_id: id as u8, name, source_type: st, source_url: open_url(&state.master_key, &url),
         device_id: dev, enabled: en != 0,
         transport: if tr.is_empty() { "tcp".into() } else { tr },
         brand,
-        detect_url: det,
+        detect_url: open_url(&state.master_key, &det),
     }).collect();
     // Fill in defaults for any slots not yet in DB
     for id in 0u8..16 {
@@ -126,9 +156,9 @@ pub async fn set_camera_config(
         "INSERT OR REPLACE INTO camera_configs(cam_id,name,source_type,source_url,device_id,enabled,transport,brand,detect_url)
          VALUES(?,?,?,?,?,?,?,?,?)"
     ).bind(config.cam_id as i64).bind(&config.name)
-     .bind(&config.source_type).bind(&config.source_url)
+     .bind(&config.source_type).bind(crate::crypto::encrypt_secret(&state.master_key, &config.source_url))
      .bind(&config.device_id).bind(config.enabled as i64).bind(transport).bind(&config.brand)
-     .bind(&config.detect_url)
+     .bind(crate::crypto::encrypt_secret(&state.master_key, &config.detect_url))
      .execute(&state.db).await.map_err(|e| e.to_string())?;
 
     // A camera that's been DISABLED/REMOVED must stop capturing NOW. Writing
@@ -158,5 +188,16 @@ mod tests {
         // Slot 0 now holds a network camera; slot 1 is still the USB camera.
         let kept = super::keep_usb_flags(&flags, &[1]);
         assert_eq!(serde_json::Value::Object(kept).to_string(), r#"{"1":true}"#);
+    }
+
+    #[test]
+    fn a_camera_url_is_stored_encrypted_and_reads_back() {
+        let key = [7u8; 32];
+        let url = "rtsp://admin:s3cret@192.168.1.20:554/stream1";
+        let stored = crate::crypto::encrypt_secret(&key, url);
+        assert!(!stored.contains("s3cret"));
+        assert_eq!(super::open_url(&key, &stored), url);
+        assert_eq!(super::open_url(&key, url), url, "a URL saved before encryption still reads");
+        assert_eq!(super::open_url(&[8u8; 32], &stored), stored, "a key that can't open it leaves it as stored");
     }
 }
