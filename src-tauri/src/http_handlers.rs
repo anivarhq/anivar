@@ -46,35 +46,26 @@ fn is_private_ip(ip: std::net::IpAddr) -> bool {
 /// SSRF guard for cam-proxy: the endpoint exists to relay LAN camera streams,
 /// so the destination must be http(s) to a PRIVATE address (or localhost /
 /// `.local` mDNS). Hostnames are resolved and EVERY resolved address must be
-/// private — a name with any public A/AAAA record is rejected (blocks
-/// DNS-rebinding a "camera" hostname to the public internet). Without this, a
-/// leaked token + the public Funnel turned the NVR into an open proxy.
-async fn cam_url_is_local(raw: &str) -> bool {
-    let Ok(parsed) = reqwest::Url::parse(raw) else { return false };
-    if !matches!(parsed.scheme(), "http" | "https") { return false; }
+/// private — a name with any public A/AAAA record is rejected.
+///
+/// Returns the host and the addresses it checked, so the request connects to
+/// exactly those instead of resolving the name again (a second lookup could
+/// answer with a public address: DNS rebinding). The list is empty for an IP
+/// literal, localhost or a `.local` name, where there is nothing to pin.
+async fn local_cam_addrs(raw: &str) -> Option<(String, Vec<std::net::SocketAddr>)> {
+    let parsed = reqwest::Url::parse(raw).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") { return None; }
     // Own the host string so no borrow of `parsed` crosses the resolver await.
-    let bare: String = match parsed.host_str() {
-        Some(h) => h.trim_start_matches('[').trim_end_matches(']').to_string(),
-        None => return false,
-    };
+    let bare = parsed.host_str()?.trim_start_matches('[').trim_end_matches(']').to_string();
     if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
-        return is_private_ip(ip);
+        return is_private_ip(ip).then_some((bare, Vec::new()));
     }
     let hl = bare.to_ascii_lowercase();
-    if hl == "localhost" || hl.ends_with(".local") { return true; } // mDNS = LAN by construction
+    if hl == "localhost" || hl.ends_with(".local") { return Some((bare, Vec::new())); } // mDNS = LAN by construction
     let port = parsed.port_or_known_default().unwrap_or(80);
     // Owned (String, u16): the resolver future must not borrow locals.
-    match tokio::net::lookup_host((bare.clone(), port)).await {
-        Ok(addrs) => {
-            let mut any = false;
-            for a in addrs {
-                any = true;
-                if !is_private_ip(a.ip()) { return false; }
-            }
-            any
-        }
-        Err(_) => false,
-    }
+    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((bare.clone(), port)).await.ok()?.collect();
+    (!addrs.is_empty() && addrs.iter().all(|a| is_private_ip(a.ip()))).then_some((bare, addrs))
 }
 
 /// Downscale + recompress a broadcast JPEG for the SHARED live link. The source
@@ -123,24 +114,25 @@ pub(crate) async fn cam_proxy(
     if saved.is_empty() {
         return (StatusCode::NOT_FOUND, "No camera in this slot").into_response();
     }
-    // The saved URL can be the camera's base address; find its stream as Live does.
-    let cam_url = crate::db::probe_mjpeg_url(saved.clone()).await.unwrap_or(saved);
-    // SSRF guard — LAN cameras only (see cam_url_is_local).
-    if !cam_url_is_local(&cam_url).await {
+    // SSRF guard — LAN cameras only (see local_cam_addrs).
+    let Some((host, addrs)) = local_cam_addrs(&saved).await else {
         return (StatusCode::FORBIDDEN,
             "cam-proxy only reaches local-network cameras (private IPs, localhost, or .local names)"
         ).into_response();
-    }
+    };
+    // The saved URL can be the camera's base address; find its stream (same host) as Live does.
+    let cam_url = crate::db::probe_mjpeg_url(saved.clone()).await.unwrap_or(saved);
 
     // Fetch the remote MJPEG stream and pipe it through.
     // Use connect_timeout only — NOT a read/response timeout.
     // MJPEG streams are long-lived multipart HTTP responses; any response
     // timeout would kill the stream after N seconds.
-    let client = reqwest::Client::builder()
+    let mut client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
-        .pool_idle_timeout(None)
-        .build()
-        .unwrap_or_default();
+        .pool_idle_timeout(None);
+    // Connect to the addresses just checked, never a fresh lookup of the name.
+    if !addrs.is_empty() { client = client.resolve_to_addrs(&host, &addrs); }
+    let client = client.build().unwrap_or_default();
 
     // A login in the URL is sent as Basic auth.
     match client.get(&cam_url).send().await {
@@ -707,6 +699,8 @@ mod ssrf_tests {
         }
     }
 
+    async fn cam_url_is_local(raw: &str) -> bool { local_cam_addrs(raw).await.is_some() }
+
     #[tokio::test]
     async fn cam_url_guard_literal_and_scheme() {
         assert!(cam_url_is_local("http://192.168.1.44/video.mjpg").await);
@@ -718,5 +712,7 @@ mod ssrf_tests {
         assert!(!cam_url_is_local("ftp://192.168.1.44/x").await);        // scheme
         assert!(!cam_url_is_local("file:///etc/passwd").await);          // scheme
         assert!(!cam_url_is_local("not a url").await);
+        // Nothing to pin for a literal address; a hostname comes back with the addresses it checked.
+        assert_eq!(local_cam_addrs("http://192.168.1.44/v").await, Some(("192.168.1.44".into(), vec![])));
     }
 }

@@ -81,6 +81,7 @@ works, for anyone who wants to check before trusting it with their cameras.
   assistant. Traffic goes device to device.
 - **Optional login gate** — Argon2id password, with recovery and an optional
   six-digit code both sent over Telegram (so the gate needs Telegram set up).
+  It locks the app's window, not the data on disk.
 
 ## Two design rules
 
