@@ -70,11 +70,11 @@ pub async fn stream_frame(
     let idx = cam as usize;
     let jpeg = Arc::new(B64.decode(frame_b64.trim()).unwrap_or_default());
 
-    // Store latest frame for Telegram snapshot requests
-    state.latest_frames.write().await.insert(cam, jpeg.as_ref().clone());
-
-    // Broadcast live frame to mobile WebSocket viewers
-    let _ = state.frame_txs[idx].send(Arc::clone(&jpeg));
+    // Snapshot store + live stream; never raw for an anonymized slot.
+    if !crate::depth::is_anonymized(cam) {
+        state.latest_frames.write().await.insert(cam, jpeg.as_ref().clone());
+        let _ = state.frame_txs[idx].send(Arc::clone(&jpeg));
+    }
 
     // v12: pre-motion ring buffer + clip_txs sink removed. Event clips are
     // now virtual slices of the continuous NVR recording.
@@ -92,6 +92,13 @@ pub async fn stream_frame(
 /// which is exactly mature NVRs' split between the recording and detection pipelines.
 pub(crate) async fn fan_out_frame(state: &Arc<AppState>, cam: u8, jpeg_arc: &Arc<Vec<u8>>) {
     if jpeg_arc.is_empty() { return; }
+    // FAIL CLOSED: an anonymized slot's raw frame reaches analysis in memory and
+    // nothing else (no snapshot store, recording or HLS). Only the depth worker
+    // publishes for it. A slot can be marked while a non-USB path feeds it.
+    if crate::depth::is_anonymized(cam) {
+        state.infer_queue.push(cam, Arc::clone(jpeg_arc));
+        return;
+    }
     // `latest_frames` is the snapshot store the agent / HTTP snapshot / People preview
     // read from — they only ever want a RECENT frame, not every one. Storing every
     // capture frame here deep-clones a full JPEG into the map at the camera's full

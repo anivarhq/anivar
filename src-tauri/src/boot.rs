@@ -560,6 +560,9 @@ pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::
             // in incoming/) and discards what it couldn't; it otherwise starts
             // only with a capture, and may never.
             crate::nvr_pipes::ensure_postprocessor(&state2.data_dir, state2.app_handle.clone(), state2.db.clone()).await;
+            // A slot left marked "anonymized" by a camera since removed (or replaced
+            // by a network camera) mustn't claim protection it doesn't have.
+            crate::cam_config::drop_stale_anonymize(&state2).await;
             // (HLS dir is wiped synchronously at setup start — before the
             // frontend can race a capture spawn. Never wipe it here: a capture
             // may already be writing the fresh playlist.)

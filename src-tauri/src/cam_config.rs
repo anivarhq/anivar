@@ -54,6 +54,34 @@ pub(crate) async fn camera_start_allowed(db: &sqlx::SqlitePool, cam_id: u8) -> b
         .unwrap_or(true)
 }
 
+/// Depth anonymization belongs to a USB camera, not to its slot. A removed
+/// camera's flag stayed on the slot, and the next camera added there (often a
+/// network camera, which can't be anonymized) showed "Anonymized" while its live
+/// view, snapshots and share links were raw. Keeps flags only for enabled USB
+/// cameras; runs on every camera save and at boot.
+pub(crate) async fn drop_stale_anonymize(state: &Arc<AppState>) {
+    let usb: Vec<i64> = sqlx::query_scalar(
+        "SELECT cam_id FROM camera_configs WHERE enabled=1 AND source_type='native'"
+    ).fetch_all(&state.db).await.unwrap_or_default();
+    let mut s = state.settings.read().await.clone();
+    let flags: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&s.depth_anonymize).unwrap_or_default();
+    let kept = keep_usb_flags(&flags, &usb);
+    if kept.len() == flags.len() { return; }
+    tracing::info!("depth anonymization: cleared {} slot(s) with no USB camera", flags.len() - kept.len());
+    s.depth_anonymize = serde_json::Value::Object(kept).to_string();
+    crate::events_cmds::apply_settings_update(state, s).await;
+}
+
+fn keep_usb_flags(flags: &serde_json::Map<String, serde_json::Value>, usb: &[i64])
+    -> serde_json::Map<String, serde_json::Value>
+{
+    flags.iter()
+        .filter(|(cam, on)| on.as_bool() == Some(true) && cam.parse::<i64>().is_ok_and(|c| usb.contains(&c)))
+        .map(|(cam, on)| (cam.clone(), on.clone()))
+        .collect()
+}
+
 /// Return configurations for all 16 camera slots.
 #[tauri::command]
 pub async fn get_camera_configs(state: State<'_, Arc<AppState>>) -> Result<Vec<CameraConfig>, String> {
@@ -111,6 +139,7 @@ pub async fn set_camera_config(
     if !config.enabled {
         crate::rtsp::stop_capture_for_cam(state.inner(), config.cam_id.min(15)).await;
     }
+    drop_stale_anonymize(state.inner()).await;
 
     state.app_handle.emit("cameras:updated", ()).ok();
     // Home Assistant learns cameras from MQTT discovery, sent on connect:
@@ -118,4 +147,16 @@ pub async fn set_camera_config(
     let st = state.inner().clone();
     tokio::spawn(async move { crate::mqtt::restart(&st).await; });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn only_an_enabled_usb_camera_keeps_its_anonymize_flag() {
+        let flags: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(r#"{"0": true, "1": true, "2": false, "x": true}"#).unwrap();
+        // Slot 0 now holds a network camera; slot 1 is still the USB camera.
+        let kept = super::keep_usb_flags(&flags, &[1]);
+        assert_eq!(serde_json::Value::Object(kept).to_string(), r#"{"1":true}"#);
+    }
 }

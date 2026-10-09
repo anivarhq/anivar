@@ -215,8 +215,10 @@ pub(crate) async fn run_capture_loop(
             Err(e) => { tracing::warn!("JPEG encode: {}", e); continue; }
         };
 
-        // 1. Broadcast to all WebSocket viewers for this camera slot
-        let _ = state.frame_txs[cam_id as usize].send(Arc::clone(&jpeg));
+        // 1. The live stream for this camera slot; never raw for an anonymized slot.
+        if !crate::depth::is_anonymized(cam_id) {
+            let _ = state.frame_txs[cam_id as usize].send(Arc::clone(&jpeg));
+        }
 
         // 1b. Feed YOLO26 inference loop (same as browser camera path)
         state.infer_queue.push(cam_id, Arc::clone(&jpeg));
