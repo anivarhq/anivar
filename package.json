@@ -29,15 +29,15 @@
     "mermaid": "^11.16.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "zustand": "^5.0.15"
+    "zustand": "^5.0.16"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^6.1.1",
+    "@vitejs/plugin-react": "^6.1.2",
     "typescript": "^5.5.3",
-    "vite": "^8.3.0",
-    "vitest": "^5.0.1"
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
   }
 }
